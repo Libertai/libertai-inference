@@ -15,7 +15,7 @@ class HoldPostSubscribeBody(BaseModel):
     def valid_signature(cls, signature, values):
         if "account" in values:
             address = get_address_from_signature("Placeholder", signature)
-            if address != values["account"].address:
+            if address.upper() != values["account"].address.upper():
                 raise ValueError("Signature doesn't match the address in account.address")
         return signature
 

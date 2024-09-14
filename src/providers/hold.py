@@ -1,5 +1,7 @@
+from http import HTTPStatus
+
 from aleph.sdk import AlephHttpClient
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from src.config import config
 from src.interfaces.hold import HoldPostSubscribeBody, HoldAggregateData
@@ -9,8 +11,17 @@ router = APIRouter(tags=["Hold provider"])
 
 @router.post("/hold/subscribe")
 async def subscribe(body: HoldPostSubscribeBody):
-    aggregates = await fetch_hold_balances()
-    return aggregates
+    all_balances = await fetch_hold_balances()
+    address = body.account.address.upper()
+    balance = all_balances.get(address, None)
+    if balance is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Address {body.account.address} not found in holders list"
+        )
+
+    # TODO: check if existing subscriptions with hold tier that would reduce available amounts
+
+    return balance
 
 
 async def fetch_hold_balances() -> dict[str, int]:
@@ -19,4 +30,4 @@ async def fetch_hold_balances() -> dict[str, int]:
             address=config.LTAI_BALANCES_AGGREGATE_SENDER, keys=[config.LTAI_BALANCES_AGGREGATE_KEY]
         )
     balances = HoldAggregateData(tokens=result[config.LTAI_BALANCES_AGGREGATE_KEY])
-    return balances.tokens
+    return {k.upper(): v for k, v in balances.tokens.items()}

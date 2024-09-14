@@ -8,7 +8,7 @@ class SubscriptionProvider(str, Enum):
 
 
 class SubscriptionType(str, Enum):
-    basic = "basic"
+    standard = "standard"
 
 
 class SubscriptionChain(str, Enum):
@@ -35,6 +35,3 @@ class SubscriptionDefinition(BaseModel):
     type: SubscriptionType
     providers: list[SubscriptionProvider]
     multiple: bool
-
-
-type SubscriptionGroup = list[SubscriptionDefinition]
