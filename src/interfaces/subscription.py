@@ -4,17 +4,37 @@ from pydantic import BaseModel
 
 
 class SubscriptionProvider(str, Enum):
-    hold = 'hold'
+    hold = "hold"
 
 
 class SubscriptionType(str, Enum):
-    basic = 'basic'
+    basic = "basic"
+
+
+class SubscriptionChain(str, Enum):
+    base = "base"
+
+
+class SubscriptionAccount(BaseModel):
+    address: str
+    chain: SubscriptionChain
 
 
 class Subscription(BaseModel):
     id: str
-    provider: SubscriptionProvider
     type: SubscriptionType
+    provider: SubscriptionProvider
+    account: SubscriptionAccount
     started_at: int
     ended_at: int | None
     is_active: bool
+    tags: list[str]
+
+
+class SubscriptionDefinition(BaseModel):
+    type: SubscriptionType
+    providers: list[SubscriptionProvider]
+    multiple: bool
+
+
+type SubscriptionGroup = list[SubscriptionDefinition]
