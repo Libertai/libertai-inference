@@ -20,10 +20,10 @@ async def fetch_user_subscriptions(user_account: SubscriptionAccount) -> list[Fe
                 channels=[config.SUBSCRIPTION_POST_CHANNEL],
             )
         )
-    return [FetchedSubscription(**post.content, hash=post.item_hash) for post in result.posts]
+    return [FetchedSubscription(**post.content, post_hash=post.item_hash) for post in result.posts]
 
 
-def find_subscription_group(subscription_type: SubscriptionType) -> list[SubscriptionDefinition] | None:
+def __find_subscription_group(subscription_type: SubscriptionType) -> list[SubscriptionDefinition] | None:
     for group in config.subscription_plans:
         found = any(plan for plan in group if plan.type == subscription_type)
         if found:
@@ -38,7 +38,7 @@ def is_subscription_authorized(
 ) -> tuple[bool, str | None]:
     """Check if adding this subscription is authorized with the ones already active"""
 
-    sub_group_definitions = find_subscription_group(subscription_type)
+    sub_group_definitions = __find_subscription_group(subscription_type)
     if sub_group_definitions is None:
         return False, "Subscription group definition not found"
 

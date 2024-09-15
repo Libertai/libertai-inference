@@ -32,7 +32,7 @@ class Subscription(BaseModel):
 
 
 class FetchedSubscription(Subscription):
-    hash: str
+    post_hash: str
 
 
 class SubscriptionDefinition(BaseModel):
