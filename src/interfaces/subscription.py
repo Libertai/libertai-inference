@@ -34,6 +34,10 @@ class Subscription(BaseModel):
     tags: list[str]
 
 
+class FetchedSubscription(Subscription):
+    hash: str
+
+
 class SubscriptionDefinition(BaseModel):
     type: SubscriptionType
     providers: list[SubscriptionProvider]

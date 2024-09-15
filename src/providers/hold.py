@@ -2,9 +2,7 @@ import time
 from http import HTTPStatus
 from uuid import uuid4
 
-from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
-from aleph.sdk.chains.ethereum import ETHAccount
-from aleph.sdk.query.filters import PostFilter
+from aleph.sdk import AlephHttpClient
 from fastapi import APIRouter, HTTPException
 
 from src.config import config
@@ -16,6 +14,7 @@ from src.interfaces.subscription import (
     SubscriptionProvider,
     SubscriptionAccount,
 )
+from src.utils.subscription import is_subscription_authorized, fetch_user_subscriptions
 
 router = APIRouter(tags=["Hold provider"])
 
@@ -40,6 +39,10 @@ async def subscribe(body: HoldPostSubscribeBody):
     active_hold_subscriptions = [sub for sub in active_subscriptions if sub.provider == SubscriptionProvider.hold]
     current_needed_holdings = sum([ltai_hold_prices.get(sub.type, 0) for sub in active_hold_subscriptions])
 
+    is_authorized, error = is_subscription_authorized(body.type, SubscriptionProvider.hold, active_subscriptions)
+    if not is_authorized:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=error)
+
     if required_hold_amount is None or (balance - current_needed_holdings) < required_hold_amount:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
@@ -60,22 +63,6 @@ async def fetch_hold_balances() -> dict[str, int]:
         )
     balances = HoldAggregateData(tokens=result[config.LTAI_BALANCES_AGGREGATE_KEY])
     return {k.upper(): v for k, v in balances.tokens.items()}
-
-
-async def fetch_user_subscriptions(user_account: SubscriptionAccount) -> list[Subscription]:
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
-    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
-        result = await client.get_posts(
-            post_filter=PostFilter(
-                addresses=[config.SUBSCRIPTION_POST_SENDER],
-                tags=[user_account.address],
-                channels=[config.SUBSCRIPTION_POST_CHANNEL],
-            )
-        )
-        # TODO: add migrations here in case we change the stored format
-        print(result)
-    # TODO: return real subscriptions
-    return []
 
 
 async def create_hold_subscription(subscription_type: SubscriptionType, account: SubscriptionAccount) -> Subscription:
