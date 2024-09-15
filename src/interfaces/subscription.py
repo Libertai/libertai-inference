@@ -2,6 +2,8 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+SUBSCRIPTION_VERSION = 0
+
 
 class SubscriptionProvider(str, Enum):
     hold = "hold"
@@ -21,6 +23,7 @@ class SubscriptionAccount(BaseModel):
 
 
 class Subscription(BaseModel):
+    version: int
     id: str
     type: SubscriptionType
     provider: SubscriptionProvider
