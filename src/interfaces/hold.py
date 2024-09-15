@@ -43,5 +43,9 @@ class HoldDeleteSubscriptionResponse(BaseModel):
     success: bool
 
 
+class HoldPostRefreshSubscriptionsResponse(BaseModel):
+    cancelled_subscriptions: list[str]
+
+
 class HoldAggregateData(BaseModel):
     tokens: dict[str, int]

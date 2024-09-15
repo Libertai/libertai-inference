@@ -6,17 +6,16 @@ from src.interfaces.subscription import (
     SubscriptionType,
     SubscriptionDefinition,
     SubscriptionProvider,
-    SubscriptionAccount,
     FetchedSubscription,
 )
 
 
-async def fetch_user_subscriptions(user_account: SubscriptionAccount) -> list[FetchedSubscription]:
+async def fetch_subscriptions(addresses: list[str] | None = None) -> list[FetchedSubscription]:
     async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
         result = await client.get_posts(
             post_filter=PostFilter(
                 addresses=[config.SUBSCRIPTION_POST_SENDER],
-                tags=[user_account.address],
+                tags=addresses,
                 channels=[config.SUBSCRIPTION_POST_CHANNEL],
             )
         )
