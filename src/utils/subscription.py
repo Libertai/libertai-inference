@@ -1,5 +1,4 @@
-from aleph.sdk import AuthenticatedAlephHttpClient
-from aleph.sdk.chains.ethereum import ETHAccount
+from aleph.sdk import AlephHttpClient
 from aleph.sdk.query.filters import PostFilter
 
 from src.config import config
@@ -13,8 +12,7 @@ from src.interfaces.subscription import (
 
 
 async def fetch_user_subscriptions(user_account: SubscriptionAccount) -> list[FetchedSubscription]:
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
-    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
+    async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
         result = await client.get_posts(
             post_filter=PostFilter(
                 addresses=[config.SUBSCRIPTION_POST_SENDER],
@@ -22,10 +20,7 @@ async def fetch_user_subscriptions(user_account: SubscriptionAccount) -> list[Fe
                 channels=[config.SUBSCRIPTION_POST_CHANNEL],
             )
         )
-        # TODO: add migrations here in case we change the stored format
-        print(result)
-    # TODO: return real subscriptions
-    return []
+    return [FetchedSubscription(**post.content, hash=post.item_hash) for post in result.posts]
 
 
 def find_subscription_group(subscription_type: SubscriptionType) -> list[SubscriptionDefinition] | None:

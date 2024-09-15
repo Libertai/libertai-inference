@@ -2,15 +2,15 @@ import time
 from http import HTTPStatus
 from uuid import uuid4
 
-from aleph.sdk import AlephHttpClient
+from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
+from aleph.sdk.chains.ethereum import ETHAccount
 from fastapi import APIRouter, HTTPException
 
 from src.config import config
-from src.interfaces.hold import HoldPostSubscribeBody, HoldAggregateData
+from src.interfaces.hold import HoldPostSubscribeBody, HoldAggregateData, HoldPostSubscribeResponse
 from src.interfaces.subscription import (
     SubscriptionType,
     Subscription,
-    SUBSCRIPTION_VERSION,
     SubscriptionProvider,
     SubscriptionAccount,
 )
@@ -23,7 +23,7 @@ ltai_hold_prices: dict[SubscriptionType, int] = {SubscriptionType.standard: 1000
 
 
 @router.post("/hold/subscribe")
-async def subscribe(body: HoldPostSubscribeBody):
+async def subscribe(body: HoldPostSubscribeBody) -> HoldPostSubscribeResponse:
     all_balances = await fetch_hold_balances()
     address = body.account.address.upper()
     balance = all_balances.get(address, None)
@@ -46,10 +46,19 @@ async def subscribe(body: HoldPostSubscribeBody):
     if required_hold_amount is None or (balance - current_needed_holdings) < required_hold_amount:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail=f"Not enough tokens held (balance {balance}, locked for existing subscriptions {current_needed_holdings}, available balance {balance - current_needed_holdings}. required {required_hold_amount})",
+            detail=f"Not enough tokens held (balance {balance}, locked for existing subscriptions {current_needed_holdings}, available balance {balance - current_needed_holdings}, required {required_hold_amount})",
         )
 
-    return balance
+    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
+    subscription = create_hold_subscription(body.type, body.account)
+    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
+        post_message, _status = await client.create_post(
+            post_content=subscription.dict(),
+            post_type=config.SUBSCRIPTION_POST_TYPE,
+            channel=config.SUBSCRIPTION_POST_CHANNEL,
+        )
+
+    return HoldPostSubscribeResponse(post_hash=post_message.item_hash, subscription_id=subscription.id)
 
 
 # TODO: CRON job to check active subscriptions and cancel them if not enough hold tokens
@@ -65,15 +74,15 @@ async def fetch_hold_balances() -> dict[str, int]:
     return {k.upper(): v for k, v in balances.tokens.items()}
 
 
-async def create_hold_subscription(subscription_type: SubscriptionType, account: SubscriptionAccount) -> Subscription:
+def create_hold_subscription(subscription_type: SubscriptionType, account: SubscriptionAccount) -> Subscription:
+    subscription_id = str(uuid4())
     return Subscription(
-        version=SUBSCRIPTION_VERSION,
-        id=str(uuid4()),
+        id=subscription_id,
         type=subscription_type,
         provider=SubscriptionProvider.hold,
         account=account,
         started_at=int(time.time()),
         ended_at=None,
         is_active=True,
-        tags=[account.address],
+        tags=[account.address, subscription_id],
     )
