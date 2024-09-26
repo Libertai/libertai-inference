@@ -11,3 +11,7 @@ def get_address_from_signature(message: str, signature: str) -> str:
         encoded_message,
         signature=HexBytes(signature),
     )
+
+
+def format_eth_address(address: str) -> str:
+    return address.lower()

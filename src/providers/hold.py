@@ -2,8 +2,7 @@ import time
 from http import HTTPStatus
 from uuid import uuid4
 
-from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
-from aleph.sdk.chains.ethereum import ETHAccount
+from aleph.sdk import AlephHttpClient
 from fastapi import APIRouter, HTTPException
 
 from src.config import config
@@ -22,15 +21,17 @@ from src.interfaces.subscription import (
     SubscriptionAccount,
     FetchedSubscription,
 )
-from src.utils.subscription import is_subscription_authorized, fetch_subscriptions
+from src.utils.ethereum import format_eth_address
+from src.utils.subscription import is_subscription_authorized, fetch_subscriptions, cancel_subscription, \
+    create_subscription
 
-router = APIRouter(tags=["Hold provider"])
+router = APIRouter(prefix="/hold", tags=["Hold provider"])
 
 # TODO: update these placeholder prices
 ltai_hold_prices: dict[SubscriptionType, int] = {SubscriptionType.standard: 1000}
 
 
-@router.post("/hold/subscription")
+@router.post("/subscription")
 async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionResponse:
     all_balances = await __fetch_hold_balances()
     balance = all_balances.get(body.account.address, None)
@@ -59,19 +60,12 @@ async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionRespo
         )
 
     # All good, creating the subscription
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
     subscription = __create_hold_subscription(body.type, body.account)
-    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
-        post_message, _status = await client.create_post(
-            post_content=subscription.dict(),
-            post_type=config.SUBSCRIPTION_POST_TYPE,
-            channel=config.SUBSCRIPTION_POST_CHANNEL,
-        )
-
+    post_message = await create_subscription(subscription)
     return HoldPostSubscriptionResponse(post_hash=post_message.item_hash, subscription_id=subscription.id)
 
 
-@router.delete("/hold/subscription")
+@router.delete("/subscription")
 async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptionResponse:
     existing_subscriptions = await fetch_subscriptions([body.account.address])
     active_hold_subscriptions = [
@@ -85,12 +79,12 @@ async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptio
             detail=f"Subscription with ID {body.subscription_id} not found or not active",
         )
 
-    await __cancel_subscription(subscription)
+    await cancel_subscription(subscription)
     return HoldDeleteSubscriptionResponse(success=True)
 
 
 # TODO: transform into a CRON job if needed
-@router.post("/hold/refresh")
+@router.post("/refresh")
 async def refresh_active_hold_subscriptions() -> HoldPostRefreshSubscriptionsResponse:
     all_balances = await __fetch_hold_balances()
     all_subscriptions = await fetch_subscriptions()
@@ -109,11 +103,11 @@ async def refresh_active_hold_subscriptions() -> HoldPostRefreshSubscriptionsRes
         balance = all_balances.get(address, 0)
         required_hold_amount = sum([ltai_hold_prices.get(sub.type, 0) for sub in subscriptions])
 
-        # Cancelling subscriptions until the balance is high enough for the subscriptions left (if any
+        # Cancelling subscriptions until the balance is high enough for the subscriptions left (if any)
         i = 0
         while balance < required_hold_amount:
             subscription_to_cancel = subscriptions[i]
-            await __cancel_subscription(subscription_to_cancel)
+            await cancel_subscription(subscription_to_cancel)
             cancelled_subscriptions.append(subscription_to_cancel.id)
             required_hold_amount -= ltai_hold_prices.get(subscription_to_cancel.type, 0)
             i += 1
@@ -128,7 +122,7 @@ async def __fetch_hold_balances() -> dict[str, int]:
             address=config.LTAI_BALANCES_AGGREGATE_SENDER, keys=[config.LTAI_BALANCES_AGGREGATE_KEY]
         )
     balances = HoldAggregateData(tokens=result[config.LTAI_BALANCES_AGGREGATE_KEY])
-    return {k.lower(): v for k, v in balances.tokens.items()}
+    return {format_eth_address(k): v for k, v in balances.tokens.items()}
 
 
 def __create_hold_subscription(subscription_type: SubscriptionType, account: SubscriptionAccount) -> Subscription:
@@ -137,23 +131,10 @@ def __create_hold_subscription(subscription_type: SubscriptionType, account: Sub
         id=subscription_id,
         type=subscription_type,
         provider=SubscriptionProvider.hold,
+        provider_data={},
         account=account,
         started_at=int(time.time()),
         ended_at=None,
         is_active=True,
         tags=[account.address, subscription_id],
     )
-
-
-async def __cancel_subscription(subscription: FetchedSubscription):
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
-    stopped_subscription = Subscription(
-        **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=int(time.time()), is_active=False
-    )
-    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
-        await client.create_post(
-            post_content=stopped_subscription.dict(),
-            post_type="amend",
-            ref=subscription.post_hash,
-            channel=config.SUBSCRIPTION_POST_CHANNEL,
-        )

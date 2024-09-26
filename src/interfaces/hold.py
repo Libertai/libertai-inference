@@ -2,7 +2,7 @@ from pydantic import validator
 from pydantic.main import BaseModel
 
 from src.interfaces.subscription import SubscriptionType, SubscriptionAccount
-from src.utils.ethereum import get_address_from_signature
+from src.utils.ethereum import get_address_from_signature, format_eth_address
 
 
 class BaseHoldSubscriptionBody(BaseModel):
@@ -15,15 +15,15 @@ class BaseHoldSubscriptionBody(BaseModel):
         if "account" in values:
             # TODO: change this message, and maybe move validation elsewhere
             address = get_address_from_signature("Placeholder", signature)
-            if address.lower() != values["account"].address.lower():
+            if format_eth_address(address) != format_eth_address(values["account"].address):
                 raise ValueError("Signature doesn't match the address in account.address")
         return signature
 
     # noinspection PyMethodParameters
     @validator("account")
-    def lower_address(cls, account: SubscriptionAccount):
+    def format_address(cls, account: SubscriptionAccount):
         # Convert address to be able to compare it with others
-        return SubscriptionAccount(address=account.address.lower(), chain=account.chain)
+        return SubscriptionAccount(address=format_eth_address(account.address), chain=account.chain)
 
 
 class HoldPostSubscriptionBody(BaseHoldSubscriptionBody):

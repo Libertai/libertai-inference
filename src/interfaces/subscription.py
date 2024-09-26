@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class SubscriptionProvider(str, Enum):
     hold = "hold"
+    subs = "subs"
 
 
 class SubscriptionType(str, Enum):
@@ -24,6 +25,7 @@ class Subscription(BaseModel):
     id: str
     type: SubscriptionType
     provider: SubscriptionProvider
+    provider_data: dict
     account: SubscriptionAccount
     started_at: int
     ended_at: int | None

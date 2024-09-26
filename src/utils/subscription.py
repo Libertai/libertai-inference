@@ -1,5 +1,9 @@
-from aleph.sdk import AlephHttpClient
+import time
+
+from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
+from aleph.sdk.chains.ethereum import ETHAccount
 from aleph.sdk.query.filters import PostFilter
+from aleph_message.models import PostMessage
 
 from src.config import config
 from src.interfaces.subscription import (
@@ -7,6 +11,7 @@ from src.interfaces.subscription import (
     SubscriptionDefinition,
     SubscriptionProvider,
     FetchedSubscription,
+    Subscription,
 )
 
 
@@ -31,9 +36,9 @@ def __find_subscription_group(subscription_type: SubscriptionType) -> list[Subsc
 
 
 def is_subscription_authorized(
-    subscription_type: SubscriptionType,
-    provider: SubscriptionProvider,
-    active_subscriptions: list[FetchedSubscription],
+        subscription_type: SubscriptionType,
+        provider: SubscriptionProvider,
+        active_subscriptions: list[FetchedSubscription],
 ) -> tuple[bool, str | None]:
     """Check if adding this subscription is authorized with the ones already active"""
 
@@ -66,3 +71,29 @@ def is_subscription_authorized(
         return False, "You can only have one subscription of this type"
 
     return True, None
+
+
+async def create_subscription(subscription: Subscription) -> PostMessage:
+    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
+    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
+        post_message, _status = await client.create_post(
+            post_content=subscription.dict(),
+            post_type=config.SUBSCRIPTION_POST_TYPE,
+            channel=config.SUBSCRIPTION_POST_CHANNEL,
+        )
+
+    return post_message
+
+
+async def cancel_subscription(subscription: FetchedSubscription):
+    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
+    stopped_subscription = Subscription(
+        **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=int(time.time()), is_active=False
+    )
+    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
+        await client.create_post(
+            post_content=stopped_subscription.dict(),
+            post_type="amend",
+            ref=subscription.post_hash,
+            channel=config.SUBSCRIPTION_POST_CHANNEL,
+        )
