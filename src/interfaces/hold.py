@@ -1,23 +1,15 @@
 from pydantic import validator
 from pydantic.main import BaseModel
 
-from src.interfaces.subscription import SubscriptionType, SubscriptionAccount
+from src.interfaces.subscription import SubscriptionType, SubscriptionAccount, SubscriptionProvider
 from src.utils.ethereum import get_address_from_signature, format_eth_address
+from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 
 
 class BaseHoldSubscriptionBody(BaseModel):
     account: SubscriptionAccount
     signature: str
-
-    # noinspection PyMethodParameters
-    @validator("signature")
-    def valid_signature(cls, signature, values):
-        if "account" in values:
-            # TODO: change this message, and maybe move validation elsewhere
-            address = get_address_from_signature("Placeholder", signature)
-            if format_eth_address(address) != format_eth_address(values["account"].address):
-                raise ValueError("Signature doesn't match the address in account.address")
-        return signature
+    type: SubscriptionType
 
     # noinspection PyMethodParameters
     @validator("account")
@@ -27,11 +19,27 @@ class BaseHoldSubscriptionBody(BaseModel):
 
 
 class HoldPostSubscriptionBody(BaseHoldSubscriptionBody):
-    type: SubscriptionType
+    # noinspection PyMethodParameters
+    @validator("signature")
+    def valid_signature(cls, signature, values):
+        address = get_address_from_signature(
+            get_subscribe_message(values["type"], SubscriptionProvider.hold), signature
+        )
+        if format_eth_address(address) != format_eth_address(values["account"].address):
+            raise ValueError("Signature doesn't match the address in account.address")
 
 
 class HoldDeleteSubscriptionBody(BaseHoldSubscriptionBody):
     subscription_id: str
+
+    # noinspection PyMethodParameters
+    @validator("signature")
+    def valid_signature(cls, signature, values):
+        address = get_address_from_signature(
+            get_unsubscribe_message(values["type"], SubscriptionProvider.hold), signature
+        )
+        if format_eth_address(address) != format_eth_address(values["account"].address):
+            raise ValueError("Signature doesn't match the address in account.address")
 
 
 class HoldPostSubscriptionResponse(BaseModel):
@@ -49,3 +57,8 @@ class HoldPostRefreshSubscriptionsResponse(BaseModel):
 
 class HoldAggregateData(BaseModel):
     tokens: dict[str, int]
+
+
+class HoldGetMessagesResponse(BaseModel):
+    subscribe_message: str
+    unsubscribe_message: str

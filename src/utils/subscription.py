@@ -36,9 +36,9 @@ def __find_subscription_group(subscription_type: SubscriptionType) -> list[Subsc
 
 
 def is_subscription_authorized(
-        subscription_type: SubscriptionType,
-        provider: SubscriptionProvider,
-        active_subscriptions: list[FetchedSubscription],
+    subscription_type: SubscriptionType,
+    provider: SubscriptionProvider,
+    active_subscriptions: list[FetchedSubscription],
 ) -> tuple[bool, str | None]:
     """Check if adding this subscription is authorized with the ones already active"""
 

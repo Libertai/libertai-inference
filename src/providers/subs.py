@@ -11,8 +11,13 @@ from src.interfaces.subs import (
     SubsAPIGetSubscriptionsResponse,
     SubscriptionSubsProviderData,
 )
-from src.interfaces.subscription import SubscriptionProvider, SubscriptionType, SubscriptionAccount, Subscription, \
-    SubscriptionChain
+from src.interfaces.subscription import (
+    SubscriptionProvider,
+    SubscriptionType,
+    SubscriptionAccount,
+    Subscription,
+    SubscriptionChain,
+)
 from src.utils.ethereum import format_eth_address
 from src.utils.subscription import fetch_subscriptions, cancel_subscription, create_subscription
 
@@ -24,18 +29,18 @@ async def subscribe() -> SubsPostRefreshSubscriptionsResponse:
     """Cancel existing unpaid subscriptions and creating newly paid ones"""
     async with aiohttp.ClientSession() as session:
         async with session.get(
-                url=f"{config.SUBS_PROVIDER_CONFIG.api_url}/creator/subs",
-                params={
-                    "appId": config.SUBS_PROVIDER_CONFIG.app_id,
-                    "chain": config.SUBS_PROVIDER_CONFIG.chain.value,
-                    "rpc": config.SUBS_PROVIDER_CONFIG.chain_rpc,
-                },
-                headers={"x-api-key": config.SUBS_PROVIDER_CONFIG.api_key},
+            url=f"{config.SUBS_PROVIDER_CONFIG.api_url}/creator/subs",
+            params={
+                "appId": config.SUBS_PROVIDER_CONFIG.app_id,
+                "chain": config.SUBS_PROVIDER_CONFIG.chain.value,
+                "rpc": config.SUBS_PROVIDER_CONFIG.chain_rpc,
+            },
+            headers={"x-api-key": config.SUBS_PROVIDER_CONFIG.api_key},
         ) as response:
             if response.status != HTTPStatus.OK:
                 raise HTTPException(
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                    detail=f"Subs API returned a non-200 code: {response.json()}"
+                    detail=f"Subs API returned a non-200 code: {response.json()}",
                 )
             data = await response.json()
             subs_subscriptions_data = [SubsAPIGetSubscriptionsResponse(**subscription) for subscription in data]
@@ -60,8 +65,14 @@ async def subscribe() -> SubsPostRefreshSubscriptionsResponse:
     # Create new subscriptions if marked as active in Subs but not by us
     subs_active_subscriptions_data = [sub for sub in subs_subscriptions_data if sub.active]
     for subs_active_subscription_data in subs_active_subscriptions_data:
-        existing_subscription = next((sub for sub in active_subs_subscriptions if SubscriptionSubsProviderData(
-            **sub.provider_data).subsId == subs_active_subscription_data.subsId), None)
+        existing_subscription = next(
+            (
+                sub
+                for sub in active_subs_subscriptions
+                if SubscriptionSubsProviderData(**sub.provider_data).subsId == subs_active_subscription_data.subsId
+            ),
+            None,
+        )
         if existing_subscription is not None:
             # Subscription already exist as active, nothing to do
             continue
@@ -84,7 +95,9 @@ def __create_subs_subscription(subs_data: SubsAPIGetSubscriptionsResponse) -> Su
         id=subscription_id,
         type=subscription_type,
         provider=SubscriptionProvider.subs,
-        provider_data=SubscriptionSubsProviderData(subsId=subs_data.subsId, tokenAddress=subs_data.tokenAddress).dict(),
+        provider_data=SubscriptionSubsProviderData(
+            subsId=subs_data.subsId, tokenAddress=format_eth_address(subs_data.tokenAddress)
+        ).dict(),
         account=account,
         started_at=int(time.time()),
         ended_at=None,

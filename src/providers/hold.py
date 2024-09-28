@@ -13,6 +13,7 @@ from src.interfaces.hold import (
     HoldDeleteSubscriptionBody,
     HoldDeleteSubscriptionResponse,
     HoldPostRefreshSubscriptionsResponse,
+    HoldGetMessagesResponse,
 )
 from src.interfaces.subscription import (
     SubscriptionType,
@@ -22,8 +23,13 @@ from src.interfaces.subscription import (
     FetchedSubscription,
 )
 from src.utils.ethereum import format_eth_address
-from src.utils.subscription import is_subscription_authorized, fetch_subscriptions, cancel_subscription, \
-    create_subscription
+from src.utils.signature import get_subscribe_message, get_unsubscribe_message
+from src.utils.subscription import (
+    is_subscription_authorized,
+    fetch_subscriptions,
+    cancel_subscription,
+    create_subscription,
+)
 
 router = APIRouter(prefix="/hold", tags=["Hold provider"])
 
@@ -115,8 +121,16 @@ async def refresh_active_hold_subscriptions() -> HoldPostRefreshSubscriptionsRes
     return HoldPostRefreshSubscriptionsResponse(cancelled_subscriptions=cancelled_subscriptions)
 
 
+@router.get("/message")
+def hold_subscription_messages(subscription_type: SubscriptionType) -> HoldGetMessagesResponse:
+    """Returns the messages to sign to authenticate other actions"""
+    return HoldGetMessagesResponse(
+        subscribe_message=get_subscribe_message(subscription_type, SubscriptionProvider.hold),
+        unsubscribe_message=get_unsubscribe_message(subscription_type, SubscriptionProvider.hold),
+    )
+
+
 async def __fetch_hold_balances() -> dict[str, int]:
-    # TODO: use env server to fetch here
     async with AlephHttpClient() as client:
         result = await client.fetch_aggregates(
             address=config.LTAI_BALANCES_AGGREGATE_SENDER, keys=[config.LTAI_BALANCES_AGGREGATE_KEY]
