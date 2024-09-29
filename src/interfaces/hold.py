@@ -1,4 +1,4 @@
-from pydantic import validator
+from pydantic import validator, root_validator
 from pydantic.main import BaseModel
 
 from src.interfaces.subscription import SubscriptionType, SubscriptionAccount, SubscriptionProvider
@@ -20,13 +20,14 @@ class BaseHoldSubscriptionBody(BaseModel):
 
 class HoldPostSubscriptionBody(BaseHoldSubscriptionBody):
     # noinspection PyMethodParameters
-    @validator("signature")
-    def valid_signature(cls, signature, values):
+    @root_validator
+    def valid_signature(cls, values):
         address = get_address_from_signature(
-            get_subscribe_message(values["type"], SubscriptionProvider.hold), signature
+            get_subscribe_message(values["type"], SubscriptionProvider.hold), values["signature"]
         )
         if format_eth_address(address) != format_eth_address(values["account"].address):
             raise ValueError("Signature doesn't match the address in account.address")
+        return values
 
 
 class HoldDeleteSubscriptionBody(BaseHoldSubscriptionBody):
