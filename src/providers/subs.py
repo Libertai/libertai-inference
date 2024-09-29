@@ -25,7 +25,7 @@ router = APIRouter(prefix="/subs", tags=["Subs provider"])
 
 
 @router.post("/refresh")
-async def subscribe() -> SubsPostRefreshSubscriptionsResponse:
+async def refresh() -> SubsPostRefreshSubscriptionsResponse:
     """Cancel existing unpaid subscriptions and creating newly paid ones"""
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -61,6 +61,7 @@ async def subscribe() -> SubsPostRefreshSubscriptionsResponse:
         if subs_subscription_data is None or not subs_subscription_data.active:
             # Subscription not found in Subs data or not active anymore
             await cancel_subscription(subscription)
+            cancelled_subscriptions.append(subscription.id)
 
     # Create new subscriptions if marked as active in Subs but not by us
     subs_active_subscriptions_data = [sub for sub in subs_subscriptions_data if sub.active]
@@ -79,6 +80,7 @@ async def subscribe() -> SubsPostRefreshSubscriptionsResponse:
 
         new_subscription = __create_subs_subscription(subs_active_subscription_data)
         await create_subscription(new_subscription)
+        created_subscriptions.append(new_subscription.id)
 
     return SubsPostRefreshSubscriptionsResponse(
         created_subscriptions=created_subscriptions, cancelled_subscriptions=cancelled_subscriptions

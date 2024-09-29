@@ -21,20 +21,27 @@ class SubscriptionAccount(BaseModel):
     chain: SubscriptionChain
 
 
-class Subscription(BaseModel):
+class BaseSubscription(BaseModel):
     id: str
     type: SubscriptionType
     provider: SubscriptionProvider
-    provider_data: dict
-    account: SubscriptionAccount
     started_at: int
     ended_at: int | None
     is_active: bool
+
+
+class Subscription(BaseSubscription):
+    provider_data: dict
+    account: SubscriptionAccount
     tags: list[str]
 
 
 class FetchedSubscription(Subscription):
     post_hash: str
+
+
+class GetUserSubscriptionsResponse(BaseModel):
+    subscriptions: list[BaseSubscription]
 
 
 class SubscriptionDefinition(BaseModel):
