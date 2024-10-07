@@ -37,12 +37,16 @@ async def refresh() -> SubsPostRefreshSubscriptionsResponse:
             },
             headers={"x-api-key": config.SUBS_PROVIDER_CONFIG.api_key},
         ) as response:
+            data = await response.json()
             if response.status != HTTPStatus.OK:
                 raise HTTPException(
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                    detail=f"Subs API returned a non-200 code: {response.json()}",
+                    detail=f"Subs API returned a non-200 code: {data}",
                 )
-            data = await response.json()
+            if len(data) == 0:
+                raise HTTPException(
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Subs API returned no data: {data}"
+                )
             subs_subscriptions_data = [SubsAPIGetSubscriptionsResponse(**subscription) for subscription in data]
 
     all_subscriptions = await fetch_subscriptions()
