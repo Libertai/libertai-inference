@@ -1,3 +1,4 @@
+import json
 import os
 
 from dotenv import load_dotenv
@@ -10,9 +11,12 @@ class _Config:
     ALEPH_API_URL: str | None
     LTAI_BALANCES_AGGREGATE_SENDER: str
     LTAI_BALANCES_AGGREGATE_KEY: str
+
     SUBSCRIPTION_POST_SENDER: str
     SUBSCRIPTION_POST_SENDER_PK: bytes
     SUBSCRIPTION_POST_CHANNEL: str
+
+    VOUCHERS_PASSWORDS: list[str]
 
     SUBS_PROVIDER_CONFIG: SubsConfig
 
@@ -29,6 +33,8 @@ class _Config:
         self.SUBSCRIPTION_POST_CHANNEL = os.getenv("SUBSCRIPTION_POST_CHANNEL", "libertai")
         self.SUBSCRIPTION_POST_TYPE = os.getenv("SUBSCRIPTION_POST_TYPE", "libertai-subscription")
 
+        self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
+
         self.SUBS_PROVIDER_CONFIG = SubsConfig(
             api_url=os.getenv("SUBS_API_URL", "https://api.subsprotocol.com"),
             api_key=os.getenv("SUBS_API_KEY"),
@@ -40,8 +46,15 @@ class _Config:
         self.subscription_plans = [
             [
                 SubscriptionDefinition(
-                    type=SubscriptionType.standard, providers=[SubscriptionProvider.hold], multiple=False
-                )
+                    type=SubscriptionType.pro,
+                    providers=[SubscriptionProvider.hold, SubscriptionProvider.subs, SubscriptionProvider.vouchers],
+                    multiple=False,
+                ),
+                SubscriptionDefinition(
+                    type=SubscriptionType.advanced,
+                    providers=[SubscriptionProvider.hold, SubscriptionProvider.subs, SubscriptionProvider.vouchers],
+                    multiple=False,
+                ),
             ]
         ]
 

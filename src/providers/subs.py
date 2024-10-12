@@ -1,4 +1,3 @@
-import time
 from http import HTTPStatus
 from uuid import uuid4
 
@@ -19,6 +18,7 @@ from src.interfaces.subscription import (
     SubscriptionChain,
 )
 from src.utils.ethereum import format_eth_address
+from src.utils.general import get_current_time
 from src.utils.subscription import fetch_subscriptions, cancel_subscription, create_subscription
 
 router = APIRouter(prefix="/subs", tags=["Subs provider"])
@@ -93,7 +93,7 @@ async def refresh() -> SubsPostRefreshSubscriptionsResponse:
 
 def __create_subs_subscription(subs_data: SubsAPIGetSubscriptionsResponse) -> Subscription:
     # TODO: find out from subs data the type of subscription
-    subscription_type = SubscriptionType.standard
+    subscription_type = SubscriptionType.pro
     account = SubscriptionAccount(address=format_eth_address(subs_data.payeeAddress), chain=SubscriptionChain.base)
     subscription_id = str(uuid4())
 
@@ -105,7 +105,7 @@ def __create_subs_subscription(subs_data: SubsAPIGetSubscriptionsResponse) -> Su
             subsId=subs_data.subsId, tokenAddress=format_eth_address(subs_data.tokenAddress)
         ).dict(),
         account=account,
-        started_at=int(time.time()),
+        started_at=get_current_time(),
         ended_at=None,
         is_active=True,
         tags=[account.address, subscription_id],

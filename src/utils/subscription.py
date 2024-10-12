@@ -1,5 +1,3 @@
-import time
-
 from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
 from aleph.sdk.chains.ethereum import ETHAccount
 from aleph.sdk.query.filters import PostFilter
@@ -13,6 +11,7 @@ from src.interfaces.subscription import (
     FetchedSubscription,
     Subscription,
 )
+from src.utils.general import get_current_time
 
 
 async def fetch_subscriptions(addresses: list[str] | None = None) -> list[FetchedSubscription]:
@@ -56,7 +55,7 @@ def is_subscription_authorized(
         # The user already has a subscription of another type within the same group
         return (
             False,
-            f"You can only have one active subscription at the same time between the following types: {[s.type for s in sub_group_definitions]}",
+            f"You can only have one active subscription at the same time between the following types: {[s.type.value for s in sub_group_definitions]}",
         )
 
     definition = next((sub_def for sub_def in sub_group_definitions if sub_def.type == subscription_type), None)
@@ -64,11 +63,14 @@ def is_subscription_authorized(
         return False, "Subscription definition not found"
 
     if provider not in definition.providers:
-        return False, f"This subscription is only possible with providers {definition.providers}"
+        return (
+            False,
+            f"This subscription ({subscription_type.value}) is only possible with providers {definition.providers}",
+        )
 
     same_existing_subscriptions = [sub for sub in active_subscriptions if sub.type == subscription_type]
     if len(same_existing_subscriptions) > 0 and not definition.multiple:
-        return False, "You can only have one subscription of this type"
+        return False, f"You can only have one subscription of this type ({subscription_type.value})"
 
     return True, None
 
@@ -88,7 +90,7 @@ async def create_subscription(subscription: Subscription) -> PostMessage:
 async def cancel_subscription(subscription: FetchedSubscription):
     aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
     stopped_subscription = Subscription(
-        **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=int(time.time()), is_active=False
+        **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=get_current_time(), is_active=False
     )
     async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
         await client.create_post(

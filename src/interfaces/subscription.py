@@ -6,10 +6,12 @@ from pydantic import BaseModel
 class SubscriptionProvider(str, Enum):
     hold = "hold"
     subs = "subs"
+    vouchers = "vouchers"
 
 
 class SubscriptionType(str, Enum):
-    standard = "standard"
+    pro = "pro"
+    advanced = "advanced"
 
 
 class SubscriptionChain(str, Enum):

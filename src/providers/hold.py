@@ -1,4 +1,3 @@
-import time
 from http import HTTPStatus
 from uuid import uuid4
 
@@ -23,6 +22,7 @@ from src.interfaces.subscription import (
     FetchedSubscription,
 )
 from src.utils.ethereum import format_eth_address
+from src.utils.general import get_current_time
 from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 from src.utils.subscription import (
     is_subscription_authorized,
@@ -34,10 +34,10 @@ from src.utils.subscription import (
 router = APIRouter(prefix="/hold", tags=["Hold provider"])
 
 # TODO: update these placeholder prices
-ltai_hold_prices: dict[SubscriptionType, int] = {SubscriptionType.standard: 1000}
+ltai_hold_prices: dict[SubscriptionType, int] = {SubscriptionType.pro: 1000, SubscriptionType.advanced: 2000}
 
 
-@router.post("/subscription")
+@router.post("/subscription", description="Subscribe to a plan")
 async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionResponse:
     all_balances = await __fetch_hold_balances()
     balance = all_balances.get(body.account.address, None)
@@ -71,7 +71,7 @@ async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionRespo
     return HoldPostSubscriptionResponse(post_hash=post_message.item_hash, subscription_id=subscription.id)
 
 
-@router.delete("/subscription")
+@router.delete("/subscription", description="Unsubscribe of an existing subscription")
 async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptionResponse:
     existing_subscriptions = await fetch_subscriptions([body.account.address])
     active_hold_subscriptions = [
@@ -90,16 +90,20 @@ async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptio
 
 
 # TODO: transform into a CRON job if needed
-@router.post("/refresh")
+@router.post(
+    "/refresh", description="Delete existing active hold subscriptions if not enough tokens held in the wallet"
+)
 async def refresh_active_hold_subscriptions() -> HoldPostRefreshSubscriptionsResponse:
     all_balances = await __fetch_hold_balances()
     all_subscriptions = await fetch_subscriptions()
-    active_subscriptions = [sub for sub in all_subscriptions if sub.is_active]
+    active_hold_subscriptions = [
+        sub for sub in all_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.hold
+    ]
     cancelled_subscriptions: list[str] = []
 
     # Grouping active subscription per address (aka user)
     subscriptions_per_address: dict[str, list[FetchedSubscription]] = {}
-    for subscription in active_subscriptions:
+    for subscription in active_hold_subscriptions:
         user_subscriptions = subscriptions_per_address.get(subscription.account.address, [])
         user_subscriptions.append(subscription)
         subscriptions_per_address[subscription.account.address] = user_subscriptions
@@ -121,9 +125,8 @@ async def refresh_active_hold_subscriptions() -> HoldPostRefreshSubscriptionsRes
     return HoldPostRefreshSubscriptionsResponse(cancelled_subscriptions=cancelled_subscriptions)
 
 
-@router.get("/message")
+@router.get("/message", description="Returns the messages to sign to authenticate other actions")
 def hold_subscription_messages(subscription_type: SubscriptionType) -> HoldGetMessagesResponse:
-    """Returns the messages to sign to authenticate other actions"""
     return HoldGetMessagesResponse(
         subscribe_message=get_subscribe_message(subscription_type, SubscriptionProvider.hold),
         unsubscribe_message=get_unsubscribe_message(subscription_type, SubscriptionProvider.hold),
@@ -147,7 +150,7 @@ def __create_hold_subscription(subscription_type: SubscriptionType, account: Sub
         provider=SubscriptionProvider.hold,
         provider_data={},
         account=account,
-        started_at=int(time.time()),
+        started_at=get_current_time(),
         ended_at=None,
         is_active=True,
         tags=[account.address, subscription_id],
