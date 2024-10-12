@@ -22,6 +22,9 @@ class SubscriptionAccount(BaseModel):
     address: str
     chain: SubscriptionChain
 
+    class Config:
+        schema_extra = {"example": {"address": "0x0000000000000000000000000000000000000000"}}
+
 
 class BaseSubscription(BaseModel):
     id: str
