@@ -30,6 +30,10 @@ class VouchersPostSubscribeBody(BaseModel):
             raise ValueError("Given password isn't in the list of allowed passwords.")
 
 
+class VouchersDeleteSubscribeBody(BaseModel):
+    subscription_ids: list[str]
+
+
 class VouchersCreatedSubscription(VouchersSubscription):
     post_hash: str
     subscription_id: str
@@ -41,3 +45,7 @@ class VouchersPostSubscriptionResponse(BaseModel):
 
 class VouchersPostRefreshSubscriptionsResponse(BaseModel):
     cancelled_subscriptions: list[str]
+
+
+class VouchersDeleteSubscriptionResponse(VouchersPostRefreshSubscriptionsResponse):
+    not_found_subscriptions: list[str]

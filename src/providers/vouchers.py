@@ -9,6 +9,8 @@ from src.interfaces.vouchers import (
     VouchersPostSubscribeBody,
     VouchersPostSubscriptionResponse,
     VouchersCreatedSubscription,
+    VouchersDeleteSubscribeBody,
+    VouchersDeleteSubscriptionResponse,
 )
 from src.utils.general import get_current_time
 from src.utils.subscription import (
@@ -58,10 +60,30 @@ async def subscribe(body: VouchersPostSubscribeBody) -> VouchersPostSubscription
     return VouchersPostSubscriptionResponse(created_subscriptions=created_subscriptions)
 
 
-# TODO: endpoint to cancel early one or multiple subscriptions
+@router.delete("/subscription", description="Stop some vouchers subscriptions")
+async def cancel_vouchers_subscriptions(body: VouchersDeleteSubscribeBody) -> VouchersDeleteSubscriptionResponse:
+    all_subscriptions = await fetch_subscriptions()
+    active_vouchers_subscriptions = [
+        sub for sub in all_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.vouchers
+    ]
+
+    not_found_subscriptions: list[str] = []
+    cancelled_subscriptions: list[str] = []
+
+    for subscription_id in body.subscription_ids:
+        subscription = next((sub for sub in active_vouchers_subscriptions if sub.id == subscription_id), None)
+        if subscription is None:
+            not_found_subscriptions.append(subscription_id)
+            continue
+        await cancel_subscription(subscription)
+        cancelled_subscriptions.append(subscription_id)
+
+    return VouchersDeleteSubscriptionResponse(
+        not_found_subscriptions=not_found_subscriptions, cancelled_subscriptions=cancelled_subscriptions
+    )
 
 
-@router.post("/refresh", description="Stop existing vouchers subscriptions if the end_date is passed")
+@router.post("/refresh", description="Check existing vouchers subscriptions to stop if the end_date is passed")
 async def refresh_active_vouchers_subscriptions() -> VouchersPostRefreshSubscriptionsResponse:
     all_subscriptions = await fetch_subscriptions()
     active_vouchers_subscriptions = [
