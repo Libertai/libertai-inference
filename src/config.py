@@ -13,8 +13,9 @@ class _Config:
     LTAI_BALANCES_AGGREGATE_KEY: str
 
     SUBSCRIPTION_POST_SENDER: str
-    SUBSCRIPTION_POST_SENDER_PK: bytes
+    SUBSCRIPTION_POST_SENDER_SK: bytes
     SUBSCRIPTION_POST_CHANNEL: str
+    SUBSCRIPTION_POST_TYPE: str
 
     VOUCHERS_PASSWORDS: list[str]
 
@@ -29,7 +30,7 @@ class _Config:
         self.LTAI_BALANCES_AGGREGATE_SENDER = os.getenv("LTAI_BALANCES_AGGREGATE_SENDER")
         self.LTAI_BALANCES_AGGREGATE_KEY = os.getenv("LTAI_BALANCES_AGGREGATE_KEY")
         self.SUBSCRIPTION_POST_SENDER = os.getenv("SUBSCRIPTION_POST_SENDER")
-        self.SUBSCRIPTION_POST_SENDER_PK = os.getenv("SUBSCRIPTION_POST_SENDER_PK")  # type: ignore
+        self.SUBSCRIPTION_POST_SENDER_SK = os.getenv("SUBSCRIPTION_POST_SENDER_SK")  # type: ignore
         self.SUBSCRIPTION_POST_CHANNEL = os.getenv("SUBSCRIPTION_POST_CHANNEL", "libertai")
         self.SUBSCRIPTION_POST_TYPE = os.getenv("SUBSCRIPTION_POST_TYPE", "libertai-subscription")
 
@@ -48,14 +49,17 @@ class _Config:
                 SubscriptionDefinition(
                     type=SubscriptionType.pro,
                     providers=[SubscriptionProvider.hold, SubscriptionProvider.subs, SubscriptionProvider.vouchers],
-                    multiple=False,
                 ),
                 SubscriptionDefinition(
                     type=SubscriptionType.advanced,
                     providers=[SubscriptionProvider.hold, SubscriptionProvider.subs, SubscriptionProvider.vouchers],
-                    multiple=False,
                 ),
-            ]
+            ],
+            [
+                SubscriptionDefinition(
+                    type=SubscriptionType.agent, providers=[SubscriptionProvider.vouchers], multiple=True
+                )
+            ],
         ]
 
 

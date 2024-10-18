@@ -76,7 +76,7 @@ def is_subscription_authorized(
 
 
 async def create_subscription(subscription: Subscription) -> PostMessage:
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
+    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_SK)
     async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
         post_message, _status = await client.create_post(
             post_content=subscription.dict(),
@@ -88,7 +88,7 @@ async def create_subscription(subscription: Subscription) -> PostMessage:
 
 
 async def cancel_subscription(subscription: FetchedSubscription):
-    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_PK)
+    aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_SK)
     stopped_subscription = Subscription(
         **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=get_current_time(), is_active=False
     )

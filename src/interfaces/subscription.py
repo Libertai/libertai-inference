@@ -12,6 +12,7 @@ class SubscriptionProvider(str, Enum):
 class SubscriptionType(str, Enum):
     pro = "pro"
     advanced = "advanced"
+    agent = "agent"
 
 
 class SubscriptionChain(str, Enum):
@@ -52,4 +53,4 @@ class GetUserSubscriptionsResponse(BaseModel):
 class SubscriptionDefinition(BaseModel):
     type: SubscriptionType
     providers: list[SubscriptionProvider]
-    multiple: bool
+    multiple: bool = False
