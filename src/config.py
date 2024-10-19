@@ -19,6 +19,9 @@ class _Config:
 
     VOUCHERS_PASSWORDS: list[str]
 
+    AGENTS_BACKEND_URL: str
+    AGENTS_BACKEND_PASSWORD: str
+
     SUBS_PROVIDER_CONFIG: SubsConfig
 
     subscription_plans: list[list[SubscriptionDefinition]]
@@ -35,6 +38,9 @@ class _Config:
         self.SUBSCRIPTION_POST_TYPE = os.getenv("SUBSCRIPTION_POST_TYPE", "libertai-subscription")
 
         self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
+
+        self.AGENTS_BACKEND_URL = os.getenv("AGENTS_BACKEND_URL")
+        self.AGENTS_BACKEND_PASSWORD = os.getenv("AGENTS_BACKEND_PASSWORD")
 
         self.SUBS_PROVIDER_CONFIG = SubsConfig(
             api_url=os.getenv("SUBS_API_URL", "https://api.subsprotocol.com"),

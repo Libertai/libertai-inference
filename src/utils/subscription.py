@@ -1,9 +1,13 @@
+from http import HTTPStatus
+
+import aiohttp
 from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
 from aleph.sdk.chains.ethereum import ETHAccount
 from aleph.sdk.query.filters import PostFilter
 from aleph_message.models import PostMessage
 
 from src.config import config
+from src.interfaces.agent import SetupAgentBody, DeleteAgentBody
 from src.interfaces.subscription import (
     SubscriptionType,
     SubscriptionDefinition,
@@ -18,6 +22,7 @@ async def fetch_subscriptions(addresses: list[str] | None = None) -> list[Fetche
     async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
         result = await client.get_posts(
             post_filter=PostFilter(
+                types=[config.SUBSCRIPTION_POST_TYPE],
                 addresses=[config.SUBSCRIPTION_POST_SENDER],
                 tags=addresses,
                 channels=[config.SUBSCRIPTION_POST_CHANNEL],
@@ -84,10 +89,25 @@ async def create_subscription(subscription: Subscription) -> PostMessage:
             channel=config.SUBSCRIPTION_POST_CHANNEL,
         )
 
+    if subscription.type == SubscriptionType.agent:
+        # Launch the agent setup
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url=config.AGENTS_BACKEND_URL,
+                data=SetupAgentBody(
+                    subscription_id=subscription.id,
+                    account=subscription.account,
+                    password=config.AGENTS_BACKEND_PASSWORD,
+                ).dict(),
+            ) as response:
+                if response.status != HTTPStatus.OK:
+                    # TODO: handle the error in some way
+                    pass
+
     return post_message
 
 
-async def cancel_subscription(subscription: FetchedSubscription):
+async def cancel_subscription(subscription: FetchedSubscription) -> None:
     aleph_account = ETHAccount(config.SUBSCRIPTION_POST_SENDER_SK)
     stopped_subscription = Subscription(
         **subscription.dict(exclude={"ended_at", "is_active"}), ended_at=get_current_time(), is_active=False
@@ -99,3 +119,14 @@ async def cancel_subscription(subscription: FetchedSubscription):
             ref=subscription.post_hash,
             channel=config.SUBSCRIPTION_POST_CHANNEL,
         )
+
+    if subscription.type == SubscriptionType.agent:
+        # Launch the agent removal
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                url=config.AGENTS_BACKEND_URL,
+                data=DeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
+            ) as response:
+                if response.status != HTTPStatus.OK:
+                    # TODO: handle the error in some way
+                    pass
