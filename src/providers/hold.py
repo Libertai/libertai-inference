@@ -3,32 +3,31 @@ from uuid import uuid4
 
 from aleph.sdk import AlephHttpClient
 from fastapi import APIRouter, HTTPException
-
 from src.config import config
 from src.interfaces.hold import (
-    HoldPostSubscriptionBody,
     HoldAggregateData,
-    HoldPostSubscriptionResponse,
     HoldDeleteSubscriptionBody,
     HoldDeleteSubscriptionResponse,
-    HoldPostRefreshSubscriptionsResponse,
     HoldGetMessagesResponse,
+    HoldPostRefreshSubscriptionsResponse,
+    HoldPostSubscriptionBody,
+    HoldPostSubscriptionResponse,
 )
 from src.interfaces.subscription import (
-    SubscriptionType,
-    Subscription,
-    SubscriptionProvider,
-    SubscriptionAccount,
     FetchedSubscription,
+    Subscription,
+    SubscriptionAccount,
+    SubscriptionProvider,
+    SubscriptionType,
 )
 from src.utils.ethereum import format_eth_address
 from src.utils.general import get_current_time
 from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 from src.utils.subscription import (
-    is_subscription_authorized,
-    fetch_subscriptions,
     cancel_subscription,
     create_subscription,
+    fetch_subscriptions,
+    is_subscription_authorized,
 )
 
 router = APIRouter(prefix="/hold", tags=["Hold provider"])
@@ -134,7 +133,7 @@ def hold_subscription_messages(subscription_type: SubscriptionType) -> HoldGetMe
 
 
 async def __fetch_hold_balances() -> dict[str, int]:
-    async with AlephHttpClient() as client:
+    async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
         result = await client.fetch_aggregates(
             address=config.LTAI_BALANCES_AGGREGATE_SENDER, keys=[config.LTAI_BALANCES_AGGREGATE_KEY]
         )
