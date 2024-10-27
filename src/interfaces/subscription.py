@@ -17,6 +17,7 @@ class SubscriptionType(str, Enum):
 
 class SubscriptionChain(str, Enum):
     base = "base"
+    solana = "solana"
 
 
 class SubscriptionAccount(BaseModel):

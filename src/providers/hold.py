@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from aleph.sdk import AlephHttpClient
 from fastapi import APIRouter, HTTPException
+
 from src.config import config
 from src.interfaces.hold import (
     HoldAggregateData,
@@ -20,7 +21,7 @@ from src.interfaces.subscription import (
     SubscriptionProvider,
     SubscriptionType,
 )
-from src.utils.ethereum import format_eth_address
+from src.utils.blockchains.ethereum import format_eth_address
 from src.utils.general import get_current_time
 from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 from src.utils.subscription import (

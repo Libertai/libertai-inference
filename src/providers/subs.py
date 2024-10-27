@@ -17,7 +17,7 @@ from src.interfaces.subscription import (
     Subscription,
     SubscriptionChain,
 )
-from src.utils.ethereum import format_eth_address
+from src.utils.blockchains.ethereum import format_eth_address
 from src.utils.general import get_current_time
 from src.utils.subscription import fetch_subscriptions, cancel_subscription, create_subscription
 

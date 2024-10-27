@@ -5,7 +5,7 @@ from src.interfaces.subscription import GetUserSubscriptionsResponse, BaseSubscr
 from src.providers.hold import router as hold_router
 from src.providers.subs import router as subs_router
 from src.providers.vouchers import router as vouchers_router
-from src.utils.ethereum import format_eth_address
+from src.utils.blockchains.ethereum import format_eth_address
 from src.utils.subscription import fetch_subscriptions
 
 app = FastAPI(title="LibertAI subscriptions")
