@@ -94,7 +94,7 @@ async def create_subscription(subscription: Subscription) -> PostMessage:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url=config.AGENTS_BACKEND_URL,
-                data=SetupAgentBody(
+                json=SetupAgentBody(
                     subscription_id=subscription.id,
                     account=subscription.account,
                     password=config.AGENTS_BACKEND_PASSWORD,
@@ -125,7 +125,7 @@ async def cancel_subscription(subscription: FetchedSubscription) -> None:
         async with aiohttp.ClientSession() as session:
             async with session.delete(
                 url=config.AGENTS_BACKEND_URL,
-                data=DeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
+                json=DeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
             ) as response:
                 if response.status != HTTPStatus.OK:
                     # TODO: handle the error in some way
