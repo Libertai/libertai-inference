@@ -2,9 +2,9 @@ import json
 import os
 
 from dotenv import load_dotenv
+from libertai_utils.interfaces.subscription import SubscriptionDefinition, SubscriptionType, SubscriptionProvider
 
 from src.interfaces.subs import SubsConfig, SubsChain
-from src.interfaces.subscription import SubscriptionDefinition, SubscriptionType, SubscriptionProvider
 
 
 class _Config:
