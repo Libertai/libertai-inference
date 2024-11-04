@@ -3,6 +3,14 @@ from uuid import uuid4
 
 import aiohttp
 from fastapi import APIRouter, HTTPException
+from libertai_utils.chains.ethereum import format_eth_address
+from libertai_utils.interfaces.subscription import (
+    SubscriptionProvider,
+    SubscriptionType,
+    SubscriptionAccount,
+    Subscription,
+    SubscriptionChain,
+)
 
 from src.config import config
 from src.interfaces.subs import (
@@ -10,14 +18,6 @@ from src.interfaces.subs import (
     SubsAPIGetSubscriptionsResponse,
     SubscriptionSubsProviderData,
 )
-from src.interfaces.subscription import (
-    SubscriptionProvider,
-    SubscriptionType,
-    SubscriptionAccount,
-    Subscription,
-    SubscriptionChain,
-)
-from src.utils.blockchains.ethereum import format_eth_address
 from src.utils.general import get_current_time
 from src.utils.subscription import fetch_subscriptions, cancel_subscription, create_subscription
 

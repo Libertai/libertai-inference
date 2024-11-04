@@ -5,16 +5,16 @@ from aleph.sdk import AlephHttpClient, AuthenticatedAlephHttpClient
 from aleph.sdk.chains.ethereum import ETHAccount
 from aleph.sdk.query.filters import PostFilter
 from aleph_message.models import PostMessage
-
-from src.config import config
-from src.interfaces.agent import SetupAgentBody, DeleteAgentBody
-from src.interfaces.subscription import (
+from libertai_utils.interfaces.agent import BaseSetupAgentBody, BaseDeleteAgentBody
+from libertai_utils.interfaces.subscription import (
     SubscriptionType,
     SubscriptionDefinition,
     SubscriptionProvider,
     FetchedSubscription,
     Subscription,
 )
+
+from src.config import config
 from src.utils.general import get_current_time
 
 
@@ -94,7 +94,7 @@ async def create_subscription(subscription: Subscription) -> PostMessage:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url=config.AGENTS_BACKEND_URL,
-                json=SetupAgentBody(
+                json=BaseSetupAgentBody(
                     subscription_id=subscription.id,
                     account=subscription.account,
                     password=config.AGENTS_BACKEND_PASSWORD,
@@ -125,7 +125,7 @@ async def cancel_subscription(subscription: FetchedSubscription) -> None:
         async with aiohttp.ClientSession() as session:
             async with session.delete(
                 url=config.AGENTS_BACKEND_URL,
-                json=DeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
+                json=BaseDeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
             ) as response:
                 if response.status != HTTPStatus.OK:
                     # TODO: handle the error in some way

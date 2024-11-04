@@ -1,7 +1,7 @@
+from libertai_utils.interfaces.subscription import SubscriptionType, SubscriptionAccount
 from pydantic import BaseModel, validator
 
 from src.config import config
-from src.interfaces.subscription import SubscriptionType, SubscriptionAccount
 from src.utils.general import get_current_time
 
 

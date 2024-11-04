@@ -1,9 +1,14 @@
+from libertai_utils.chains.ethereum import format_eth_address
+from libertai_utils.chains.index import is_signature_valid
+from libertai_utils.interfaces.subscription import (
+    SubscriptionType,
+    SubscriptionAccount,
+    SubscriptionProvider,
+    SubscriptionChain,
+)
 from pydantic import validator, root_validator
 from pydantic.main import BaseModel
 
-from src.interfaces.subscription import SubscriptionType, SubscriptionAccount, SubscriptionProvider, SubscriptionChain
-from src.utils.blockchains.ethereum import format_eth_address
-from src.utils.blockchains.index import is_signature_valid
 from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 
 

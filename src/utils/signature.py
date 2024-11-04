@@ -1,6 +1,6 @@
 from datetime import date
 
-from src.interfaces.subscription import SubscriptionType, SubscriptionProvider
+from libertai_utils.interfaces.subscription import SubscriptionType, SubscriptionProvider
 
 
 def get_subscribe_message(subscription_type: SubscriptionType, provider: SubscriptionProvider) -> str:

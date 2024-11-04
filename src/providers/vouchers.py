@@ -2,8 +2,13 @@ from http import HTTPStatus
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from libertai_utils.interfaces.subscription import (
+    SubscriptionProvider,
+    SubscriptionType,
+    SubscriptionAccount,
+    Subscription,
+)
 
-from src.interfaces.subscription import SubscriptionProvider, SubscriptionType, SubscriptionAccount, Subscription
 from src.interfaces.vouchers import (
     VouchersPostRefreshSubscriptionsResponse,
     VouchersPostSubscribeBody,

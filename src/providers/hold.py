@@ -3,6 +3,14 @@ from uuid import uuid4
 
 from aleph.sdk import AlephHttpClient
 from fastapi import APIRouter, HTTPException
+from libertai_utils.chains.ethereum import format_eth_address
+from libertai_utils.interfaces.subscription import (
+    FetchedSubscription,
+    Subscription,
+    SubscriptionAccount,
+    SubscriptionProvider,
+    SubscriptionType,
+)
 
 from src.config import config
 from src.interfaces.hold import (
@@ -14,14 +22,6 @@ from src.interfaces.hold import (
     HoldPostSubscriptionBody,
     HoldPostSubscriptionResponse,
 )
-from src.interfaces.subscription import (
-    FetchedSubscription,
-    Subscription,
-    SubscriptionAccount,
-    SubscriptionProvider,
-    SubscriptionType,
-)
-from src.utils.blockchains.ethereum import format_eth_address
 from src.utils.general import get_current_time
 from src.utils.signature import get_subscribe_message, get_unsubscribe_message
 from src.utils.subscription import (

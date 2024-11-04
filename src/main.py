@@ -1,11 +1,11 @@
 from fastapi import FastAPI
+from libertai_utils.chains.index import format_address
+from libertai_utils.interfaces.subscription import GetUserSubscriptionsResponse, BaseSubscription, SubscriptionChain
 from starlette.middleware.cors import CORSMiddleware
 
-from src.interfaces.subscription import GetUserSubscriptionsResponse, BaseSubscription, SubscriptionChain
 from src.providers.hold import router as hold_router
 from src.providers.subs import router as subs_router
 from src.providers.vouchers import router as vouchers_router
-from src.utils.blockchains.index import format_address
 from src.utils.subscription import fetch_subscriptions
 
 app = FastAPI(title="LibertAI subscriptions")
