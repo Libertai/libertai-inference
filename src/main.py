@@ -1,6 +1,13 @@
-from fastapi import FastAPI
+from http import HTTPStatus
+
+from fastapi import FastAPI, HTTPException
 from libertai_utils.chains.index import format_address
-from libertai_utils.interfaces.subscription import GetUserSubscriptionsResponse, BaseSubscription, SubscriptionChain
+from libertai_utils.interfaces.subscription import (
+    GetUserSubscriptionsResponse,
+    BaseSubscription,
+    SubscriptionChain,
+    Subscription,
+)
 from starlette.middleware.cors import CORSMiddleware
 
 from src.providers.hold import router as hold_router
@@ -26,9 +33,24 @@ app.add_middleware(
 @app.get("/subscriptions", tags=["General"])
 async def get_user_subscriptions(address: str, chain: SubscriptionChain) -> GetUserSubscriptionsResponse:
     formatted_address = format_address(address, chain)
-    subscriptions = await fetch_subscriptions([formatted_address])
+    subscriptions = await fetch_subscriptions(addresses=[formatted_address])
 
     return GetUserSubscriptionsResponse(subscriptions=[BaseSubscription(**sub.dict()) for sub in subscriptions])
+
+
+@app.get("/subscriptions/{subscription_id}", tags=["General"])
+async def get_subscription(subscription_id: str) -> Subscription:
+    """Get a single subscription data by its ID"""
+    subscriptions = await fetch_subscriptions(subscription_ids=[subscription_id])
+
+    if len(subscriptions) != 1:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=f"Subscription with ID {subscription_id} not found.",
+        )
+    subscription = subscriptions[0]
+
+    return Subscription(**subscription.dict())
 
 
 app.include_router(hold_router)

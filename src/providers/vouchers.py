@@ -32,7 +32,7 @@ router = APIRouter(prefix="/vouchers", tags=["Vouchers provider"])
 async def subscribe(body: VouchersPostSubscribeBody) -> VouchersPostSubscriptionResponse:
     for subscription in body.subscriptions:
         # Looping to make all verifications before creating all the subscriptions at once
-        existing_subscriptions = await fetch_subscriptions([subscription.account.address])
+        existing_subscriptions = await fetch_subscriptions(addresses=[subscription.account.address])
         active_subscriptions = [sub for sub in existing_subscriptions if sub.is_active]
 
         # Checking if having this new subscription is possible with this provider and is compatible with the already active ones

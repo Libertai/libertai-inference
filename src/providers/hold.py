@@ -48,7 +48,7 @@ async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionRespo
             status_code=HTTPStatus.NOT_FOUND, detail=f"Address {body.account.address} not found in holders list"
         )
 
-    existing_subscriptions = await fetch_subscriptions([body.account.address])
+    existing_subscriptions = await fetch_subscriptions(addresses=[body.account.address])
     active_subscriptions = [sub for sub in existing_subscriptions if sub.is_active]
     active_hold_subscriptions = [sub for sub in active_subscriptions if sub.provider == SubscriptionProvider.hold]
     current_needed_holdings = sum([ltai_hold_prices.get(sub.type, 0) for sub in active_hold_subscriptions])
@@ -73,7 +73,7 @@ async def subscribe(body: HoldPostSubscriptionBody) -> HoldPostSubscriptionRespo
 
 @router.delete("/subscription", description="Unsubscribe of an existing subscription")
 async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptionResponse:
-    existing_subscriptions = await fetch_subscriptions([body.account.address])
+    existing_subscriptions = await fetch_subscriptions(addresses=[body.account.address])
     active_hold_subscriptions = [
         sub for sub in existing_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.hold
     ]

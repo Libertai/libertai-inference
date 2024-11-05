@@ -1,10 +1,8 @@
-from libertai_utils.chains.ethereum import format_eth_address
-from libertai_utils.chains.index import is_signature_valid
+from libertai_utils.chains.index import is_signature_valid, format_address
 from libertai_utils.interfaces.subscription import (
     SubscriptionType,
     SubscriptionAccount,
     SubscriptionProvider,
-    SubscriptionChain,
 )
 from pydantic import validator, root_validator
 from pydantic.main import BaseModel
@@ -21,9 +19,7 @@ class BaseHoldSubscriptionBody(BaseModel):
     @validator("account")
     def format_address(cls, account: SubscriptionAccount):
         """Convert address to be able to compare it with others"""
-        if account.chain == SubscriptionChain.base:
-            return SubscriptionAccount(address=format_eth_address(account.address), chain=account.chain)
-        return account
+        return SubscriptionAccount(address=format_address(account.address, account.chain), chain=account.chain)
 
 
 class HoldPostSubscriptionBody(BaseHoldSubscriptionBody):

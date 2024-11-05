@@ -8,4 +8,4 @@ def get_subscribe_message(subscription_type: SubscriptionType, provider: Subscri
 
 
 def get_unsubscribe_message(subscription_type: SubscriptionType, provider: SubscriptionProvider) -> str:
-    return f"I confirm that I want to stop my subscription to LibertAI's {subscription_type.value} plan, using the '{provider.value}', on the day ({date.today()})."
+    return f"I confirm that I want to stop my subscription to LibertAI's {subscription_type.value} plan, using the '{provider.value}', on this day ({date.today()})."

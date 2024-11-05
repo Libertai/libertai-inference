@@ -18,13 +18,19 @@ from src.config import config
 from src.utils.general import get_current_time
 
 
-async def fetch_subscriptions(addresses: list[str] | None = None) -> list[FetchedSubscription]:
+async def fetch_subscriptions(
+    addresses: list[str] | None = None, subscription_ids: list[str] | None = None
+) -> list[FetchedSubscription]:
+    tags: list[str] | None = None
+    if addresses is not None or subscription_ids is not None:
+        tags = ([] if addresses is None else addresses) + ([] if subscription_ids is None else subscription_ids)
+
     async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
         result = await client.get_posts(
             post_filter=PostFilter(
                 types=[config.SUBSCRIPTION_POST_TYPE],
                 addresses=[config.SUBSCRIPTION_POST_SENDER],
-                tags=addresses,
+                tags=tags,
                 channels=[config.SUBSCRIPTION_POST_CHANNEL],
             )
         )

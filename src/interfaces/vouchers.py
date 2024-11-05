@@ -1,3 +1,4 @@
+from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.subscription import SubscriptionType, SubscriptionAccount
 from pydantic import BaseModel, validator
 
@@ -17,6 +18,12 @@ class VouchersSubscription(BaseModel):
         if end_time <= current_time:
             raise ValueError("end_time can't be in the past")
         return end_time
+
+    # noinspection PyMethodParameters
+    @validator("account")
+    def format_address(cls, account: SubscriptionAccount):
+        """Convert address to be able to compare it with others"""
+        return SubscriptionAccount(address=format_address(account.address, account.chain), chain=account.chain)
 
 
 class VouchersPostSubscribeBody(BaseModel):
