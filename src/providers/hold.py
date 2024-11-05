@@ -89,7 +89,7 @@ async def unsubscribe(body: HoldDeleteSubscriptionBody) -> HoldDeleteSubscriptio
     return HoldDeleteSubscriptionResponse(success=True)
 
 
-# TODO: transform into a CRON job if needed
+# TODO: add cron job when live
 @router.post(
     "/refresh", description="Delete existing active hold subscriptions if not enough tokens held in the wallet"
 )

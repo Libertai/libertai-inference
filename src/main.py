@@ -1,6 +1,7 @@
 from http import HTTPStatus
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi import HTTPException
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.subscription import (
     GetUserSubscriptionsResponse,
@@ -13,9 +14,10 @@ from starlette.middleware.cors import CORSMiddleware
 from src.providers.hold import router as hold_router
 from src.providers.subs import router as subs_router
 from src.providers.vouchers import router as vouchers_router
+from src.utils.cron import lifespan
 from src.utils.subscription import fetch_subscriptions
 
-app = FastAPI(title="LibertAI subscriptions")
+app = FastAPI(title="LibertAI subscriptions", lifespan=lifespan)
 
 origins = [
     "https://chat.libertai.io",

@@ -24,6 +24,7 @@ from src.utils.subscription import fetch_subscriptions, cancel_subscription, cre
 router = APIRouter(prefix="/subs", tags=["Subs provider"])
 
 
+# TODO: add cron job when live
 @router.post("/refresh")
 async def refresh() -> SubsPostRefreshSubscriptionsResponse:
     """Cancel existing unpaid subscriptions and creating newly paid ones"""

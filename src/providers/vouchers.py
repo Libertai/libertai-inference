@@ -17,6 +17,7 @@ from src.interfaces.vouchers import (
     VouchersDeleteSubscribeBody,
     VouchersDeleteSubscriptionResponse,
 )
+from src.utils.cron import scheduler
 from src.utils.general import get_current_time
 from src.utils.subscription import (
     fetch_subscriptions,
@@ -88,6 +89,7 @@ async def cancel_vouchers_subscriptions(body: VouchersDeleteSubscribeBody) -> Vo
     )
 
 
+@scheduler.scheduled_job("interval", hours=1)
 @router.post("/refresh", description="Check existing vouchers subscriptions to stop if the end_date is passed")
 async def refresh_active_vouchers_subscriptions() -> VouchersPostRefreshSubscriptionsResponse:
     all_subscriptions = await fetch_subscriptions()

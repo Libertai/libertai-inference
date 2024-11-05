@@ -15,6 +15,7 @@ fastapi = { extras = ["standard"], version = "^0.114.1" }
 aleph-sdk-python = "^1.0.1"
 aiohttp = "^3.10.5"
 libertai-utils = "^0.0.4"
+apscheduler = "^3.10.4"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
