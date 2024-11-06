@@ -2,6 +2,7 @@ from http import HTTPStatus
 
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.subscription import (
     GetUserSubscriptionsResponse,
@@ -9,7 +10,6 @@ from libertai_utils.interfaces.subscription import (
     SubscriptionChain,
     Subscription,
 )
-from starlette.middleware.cors import CORSMiddleware
 
 from src.providers.hold import router as hold_router
 from src.providers.subs import router as subs_router
@@ -34,6 +34,7 @@ app.add_middleware(
 
 @app.get("/subscriptions", tags=["General"])
 async def get_user_subscriptions(address: str, chain: SubscriptionChain) -> GetUserSubscriptionsResponse:
+    """Get all the subscriptions of a user"""
     formatted_address = format_address(address, chain)
     subscriptions = await fetch_subscriptions(addresses=[formatted_address])
 

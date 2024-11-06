@@ -12,10 +12,11 @@ class _Config:
     LTAI_BALANCES_AGGREGATE_SENDER: str
     LTAI_BALANCES_AGGREGATE_KEY: str
 
-    SUBSCRIPTION_POST_SENDER: str
-    SUBSCRIPTION_POST_SENDER_SK: bytes
-    SUBSCRIPTION_POST_CHANNEL: str
-    SUBSCRIPTION_POST_TYPE: str
+    ALEPH_POST_SENDER: str
+    ALEPH_OWNER: str
+    ALEPH_POST_SENDER_SK: bytes
+    ALEPH_POST_CHANNEL: str
+    ALEPH_POST_TYPE: str
 
     VOUCHERS_PASSWORDS: list[str]
 
@@ -32,10 +33,11 @@ class _Config:
         self.ALEPH_API_URL = os.getenv("ALEPH_API_URL")
         self.LTAI_BALANCES_AGGREGATE_SENDER = os.getenv("LTAI_BALANCES_AGGREGATE_SENDER")
         self.LTAI_BALANCES_AGGREGATE_KEY = os.getenv("LTAI_BALANCES_AGGREGATE_KEY")
-        self.SUBSCRIPTION_POST_SENDER = os.getenv("SUBSCRIPTION_POST_SENDER")
-        self.SUBSCRIPTION_POST_SENDER_SK = os.getenv("SUBSCRIPTION_POST_SENDER_SK")  # type: ignore
-        self.SUBSCRIPTION_POST_CHANNEL = os.getenv("SUBSCRIPTION_POST_CHANNEL", "libertai")
-        self.SUBSCRIPTION_POST_TYPE = os.getenv("SUBSCRIPTION_POST_TYPE", "libertai-subscription")
+        self.ALEPH_POST_SENDER = os.getenv("ALEPH_POST_SENDER")
+        self.ALEPH_OWNER = os.getenv("ALEPH_OWNER")
+        self.ALEPH_POST_SENDER_SK = os.getenv("ALEPH_POST_SENDER_SK")  # type: ignore
+        self.ALEPH_POST_CHANNEL = os.getenv("ALEPH_POST_CHANNEL", "libertai")
+        self.ALEPH_POST_TYPE = os.getenv("ALEPH_POST_TYPE", "libertai-subscription")
 
         self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
 
