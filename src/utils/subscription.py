@@ -34,7 +34,7 @@ async def fetch_subscriptions(
                 channels=[config.ALEPH_POST_CHANNEL],
             )
         )
-    return [FetchedSubscription(**post.content, post_hash=post.item_hash) for post in result.posts]
+    return [FetchedSubscription(**post.content, post_hash=post.original_item_hash) for post in result.posts]
 
 
 def __find_subscription_group(subscription_type: SubscriptionType) -> list[SubscriptionDefinition] | None:
