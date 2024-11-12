@@ -133,7 +133,9 @@ async def cancel_subscription(subscription: FetchedSubscription) -> None:
         async with aiohttp.ClientSession() as session:
             async with session.delete(
                 url=config.AGENTS_BACKEND_URL,
-                json=BaseDeleteAgentBody(subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD),
+                json=BaseDeleteAgentBody(
+                    subscription_id=subscription.id, password=config.AGENTS_BACKEND_PASSWORD
+                ).dict(),
             ) as response:
                 if response.status != HTTPStatus.OK:
                     # TODO: handle the error in some way
