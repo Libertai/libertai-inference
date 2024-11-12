@@ -29,7 +29,7 @@ async def fetch_subscriptions(
         result = await client.get_posts(
             post_filter=PostFilter(
                 types=[config.ALEPH_POST_TYPE],
-                addresses=[config.ALEPH_POST_SENDER],
+                addresses=[config.ALEPH_OWNER],
                 tags=tags,
                 channels=[config.ALEPH_POST_CHANNEL],
             )
