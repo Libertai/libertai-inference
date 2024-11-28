@@ -135,10 +135,10 @@ def hold_subscription_messages(subscription_type: SubscriptionType) -> HoldGetMe
 
 async def __fetch_hold_balances() -> dict[str, int]:
     async with AlephHttpClient(api_server=config.ALEPH_API_URL) as client:
-        result = await client.fetch_aggregates(
-            address=config.LTAI_BALANCES_AGGREGATE_SENDER, keys=[config.LTAI_BALANCES_AGGREGATE_KEY]
+        result = await client.fetch_aggregate(
+            address=config.LTAI_BALANCES_AGGREGATE_SENDER, key=config.LTAI_BALANCES_AGGREGATE_KEY
         )
-    balances = HoldAggregateData(tokens=result[config.LTAI_BALANCES_AGGREGATE_KEY])
+    balances = HoldAggregateData(tokens=result)
     return {format_eth_address(k): v for k, v in balances.tokens.items()}
 
 
