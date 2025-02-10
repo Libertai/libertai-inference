@@ -26,8 +26,7 @@ class VouchersSubscription(BaseModel):
         return SubscriptionAccount(address=format_address(account.address, account.chain), chain=account.chain)
 
 
-class VouchersPostSubscribeBody(BaseModel):
-    subscriptions: list[VouchersSubscription]
+class VouchersPasswordBody(BaseModel):
     password: str
 
     # noinspection PyMethodParameters
@@ -37,7 +36,11 @@ class VouchersPostSubscribeBody(BaseModel):
             raise ValueError("Given password isn't in the list of allowed passwords.")
 
 
-class VouchersDeleteSubscribeBody(BaseModel):
+class VouchersPostSubscribeBody(VouchersPasswordBody):
+    subscriptions: list[VouchersSubscription]
+
+
+class VouchersDeleteSubscribeBody(VouchersPasswordBody):
     subscription_ids: list[str]
 
 
