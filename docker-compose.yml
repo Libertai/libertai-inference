@@ -2,6 +2,7 @@ services:
   subscription:
     build:
       dockerfile: ./Dockerfile
+    image: libertai-subscriptions
     container_name: libertai-subscriptions
     restart: unless-stopped
     ports:
