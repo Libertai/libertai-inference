@@ -16,6 +16,8 @@ from src.interfaces.vouchers import (
     VouchersCreatedSubscription,
     VouchersDeleteSubscribeBody,
     VouchersDeleteSubscriptionResponse,
+    VouchersPutSubscribeBody,
+    VouchersPutSubscriptionResponse,
 )
 from src.utils.cron import scheduler
 from src.utils.general import get_current_time
@@ -24,12 +26,13 @@ from src.utils.subscription import (
     cancel_subscription,
     is_subscription_authorized,
     create_subscription,
+    change_subscription_expiration,
 )
 
 router = APIRouter(prefix="/vouchers", tags=["Vouchers provider"])
 
 
-@router.post("/subscription", description="Create one or multiple vouchers subscriptions")
+@router.post("/subscription", description="Create one or multiple voucher subscriptions")
 async def subscribe(body: VouchersPostSubscribeBody) -> VouchersPostSubscriptionResponse:
     for subscription in body.subscriptions:
         # Looping to make all verifications before creating all the subscriptions at once
@@ -50,7 +53,7 @@ async def subscribe(body: VouchersPostSubscribeBody) -> VouchersPostSubscription
     created_subscriptions: list[VouchersCreatedSubscription] = []
 
     for subscription in body.subscriptions:
-        subscription_to_create = __create_vouchers_subscription(
+        subscription_to_create = __create_voucher_subscription(
             subscription.type, subscription.account, subscription.end_time
         )
         post_message = await create_subscription(subscription_to_create)
@@ -66,8 +69,31 @@ async def subscribe(body: VouchersPostSubscribeBody) -> VouchersPostSubscription
     return VouchersPostSubscriptionResponse(created_subscriptions=created_subscriptions)
 
 
-@router.delete("/subscription", description="Stop some vouchers subscriptions")
-async def cancel_vouchers_subscriptions(body: VouchersDeleteSubscribeBody) -> VouchersDeleteSubscriptionResponse:
+@router.put("/subscription", description="Change the expiration time of one or multiple voucher subscriptions")
+async def change_expiration_voucher_subscription(body: VouchersPutSubscribeBody) -> VouchersPutSubscriptionResponse:
+    all_subscriptions = await fetch_subscriptions()
+    active_vouchers_subscriptions = [
+        sub for sub in all_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.vouchers
+    ]
+
+    not_found_subscriptions: list[str] = []
+    updated_subscriptions: list[str] = []
+
+    for subscription_id in body.subscription_ids:
+        subscription = next((sub for sub in active_vouchers_subscriptions if sub.id == subscription_id), None)
+        if subscription is None:
+            not_found_subscriptions.append(subscription_id)
+            continue
+        await change_subscription_expiration(subscription, body.end_time)
+        updated_subscriptions.append(subscription_id)
+
+    return VouchersPutSubscriptionResponse(
+        not_found_subscriptions=not_found_subscriptions, updated_subscriptions=updated_subscriptions
+    )
+
+
+@router.delete("/subscription", description="Stop some voucher subscriptions")
+async def cancel_voucher_subscriptions(body: VouchersDeleteSubscribeBody) -> VouchersDeleteSubscriptionResponse:
     all_subscriptions = await fetch_subscriptions()
     active_vouchers_subscriptions = [
         sub for sub in all_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.vouchers
@@ -90,8 +116,8 @@ async def cancel_vouchers_subscriptions(body: VouchersDeleteSubscribeBody) -> Vo
 
 
 @scheduler.scheduled_job("interval", hours=1)
-@router.post("/refresh", description="Check existing vouchers subscriptions to stop if the end_date is passed")
-async def refresh_active_vouchers_subscriptions() -> VouchersPostRefreshSubscriptionsResponse:
+@router.post("/refresh", description="Check existing voucher subscriptions to stop if the end_date is passed")
+async def refresh_active_voucher_subscriptions() -> VouchersPostRefreshSubscriptionsResponse:
     all_subscriptions = await fetch_subscriptions()
     active_vouchers_subscriptions = [
         sub for sub in all_subscriptions if sub.is_active and sub.provider == SubscriptionProvider.vouchers
@@ -109,7 +135,7 @@ async def refresh_active_vouchers_subscriptions() -> VouchersPostRefreshSubscrip
     return VouchersPostRefreshSubscriptionsResponse(cancelled_subscriptions=cancelled_subscriptions)
 
 
-def __create_vouchers_subscription(
+def __create_voucher_subscription(
     subscription_type: SubscriptionType, account: SubscriptionAccount, ended_at: int
 ) -> Subscription:
     subscription_id = str(uuid4())

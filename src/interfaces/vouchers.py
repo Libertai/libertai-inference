@@ -6,9 +6,7 @@ from src.config import config
 from src.utils.general import get_current_time
 
 
-class VouchersSubscription(BaseModel):
-    account: SubscriptionAccount
-    type: SubscriptionType
+class VoucherSubscriptionEndTime(BaseModel):
     end_time: int
 
     # noinspection PyMethodParameters
@@ -18,6 +16,11 @@ class VouchersSubscription(BaseModel):
         if end_time <= current_time:
             raise ValueError("end_time can't be in the past")
         return end_time
+
+
+class VouchersSubscription(VoucherSubscriptionEndTime):
+    account: SubscriptionAccount
+    type: SubscriptionType
 
     # noinspection PyMethodParameters
     @validator("account")
@@ -44,6 +47,10 @@ class VouchersDeleteSubscribeBody(VouchersPasswordBody):
     subscription_ids: list[str]
 
 
+class VouchersPutSubscribeBody(VouchersDeleteSubscribeBody, VoucherSubscriptionEndTime):
+    pass
+
+
 class VouchersCreatedSubscription(VouchersSubscription):
     post_hash: str
     subscription_id: str
@@ -58,4 +65,9 @@ class VouchersPostRefreshSubscriptionsResponse(BaseModel):
 
 
 class VouchersDeleteSubscriptionResponse(VouchersPostRefreshSubscriptionsResponse):
+    not_found_subscriptions: list[str]
+
+
+class VouchersPutSubscriptionResponse(BaseModel):
+    updated_subscriptions: list[str]
     not_found_subscriptions: list[str]
