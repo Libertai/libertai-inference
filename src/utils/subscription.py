@@ -140,3 +140,19 @@ async def cancel_subscription(subscription: FetchedSubscription) -> None:
                 if response.status != HTTPStatus.OK:
                     # TODO: handle the error in some way
                     pass
+
+
+async def change_subscription_expiration(subscription: FetchedSubscription, new_end_time: int) -> None:
+    aleph_account = ETHAccount(config.ALEPH_POST_SENDER_SK)
+    updated_subscription = Subscription(
+        **subscription.dict(exclude={"ended_at"}),
+        ended_at=new_end_time,
+    )
+    async with AuthenticatedAlephHttpClient(aleph_account, api_server=config.ALEPH_API_URL) as client:
+        await client.create_post(
+            address=config.ALEPH_OWNER,
+            post_content=updated_subscription.dict(),
+            post_type="amend",
+            ref=subscription.post_hash,
+            channel=config.ALEPH_POST_CHANNEL,
+        )
