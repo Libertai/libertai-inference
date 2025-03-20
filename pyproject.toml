@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "libertai-subscriptions"
+name = "libertai-inference"
 version = "0.0.1"
 description = ""
 authors = ["Reza Rahemtola <49811529+RezaRahemtola@users.noreply.github.com>"]
@@ -12,11 +12,10 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.12"
 fastapi = { extras = ["standard"], version = "^0.114.1" }
-aleph-sdk-python = "^1.0.1"
-aiohttp = "^3.10.11"
-libertai-utils = "^0.0.4"
 apscheduler = "^3.10.4"
 setuptools = "^75.4.0"
+web3 = "^7.9.0"
+requests = "^2.32.3"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
