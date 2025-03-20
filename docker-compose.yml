@@ -2,8 +2,8 @@ services:
   subscription:
     build:
       dockerfile: ./Dockerfile
-    image: libertai-subscriptions
-    container_name: libertai-subscriptions
+    image: libertai-inference
+    container_name: libertai-inference
     restart: unless-stopped
     ports:
       - "8081:8000"
