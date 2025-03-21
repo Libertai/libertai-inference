@@ -7,7 +7,7 @@ from src.config import config
 from src.credits import router
 from src.utils.cron import scheduler, ltai_payments_lock
 
-web3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
+w3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
 
 LTAI_BASE_ADDRESS = Web3.to_checksum_address(config.LTAI_BASE_ADDRESS)
 LTAI_PAYMENT_RECEIVER_ADDRESS = Web3.to_checksum_address(config.LTAI_PAYMENT_RECEIVER_ADDRESS)
@@ -21,16 +21,16 @@ async def process_ltai_transactions() -> None:
         return  # Skip execution if already running
 
     async with ltai_payments_lock:
-        contract = web3.eth.contract(address=LTAI_BASE_ADDRESS, abi=json.loads(ERC20_ABI))
+        contract = w3.eth.contract(address=LTAI_BASE_ADDRESS, abi=json.loads(ERC20_ABI))
 
         # Use a polling approach instead of filters that expire
-        latest_block = web3.eth.block_number
+        latest_block = w3.eth.block_number
         # TODO: start from the latest block in the credit_transactions table (without forgetting to check transaction hash to avoid duplicates)
         print(f"Starting to watch from block {latest_block}")
         # TODO: switch to logger
 
         try:
-            current_block = web3.eth.block_number
+            current_block = w3.eth.block_number
             if current_block > latest_block:
                 print(f"Checking blocks {latest_block+1} to {current_block}")
                 # Get events from the latest_block+1 to current_block

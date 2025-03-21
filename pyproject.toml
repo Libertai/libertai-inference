@@ -16,6 +16,7 @@ apscheduler = "^3.10.4"
 setuptools = "^75.4.0"
 web3 = "^7.9.0"
 requests = "^2.32.3"
+sqlalchemy = "^2.0.39"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
