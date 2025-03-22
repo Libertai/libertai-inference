@@ -8,6 +8,15 @@ services:
     volumes:
       - libertai_inference_pg_data:/var/lib/postgresql/data
 
+  migrations-postgres:
+    build: .
+    container_name: libertai-inference-migrations
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    command: [ "poetry", "run", "alembic", "upgrade", "head" ]
+
   inference:
     build:
       dockerfile: ./Dockerfile
