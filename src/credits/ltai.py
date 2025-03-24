@@ -17,8 +17,6 @@ logger = setup_logger(__name__)
 
 w3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
 
-LTAI_BASE_ADDRESS = Web3.to_checksum_address(config.LTAI_BASE_ADDRESS)
-LTAI_PAYMENT_PROCESSOR_CONTRACT = Web3.to_checksum_address(config.LTAI_PAYMENT_PROCESSOR_CONTRACT)
 
 code_dir = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(code_dir, "../abis/LTAIPaymentProcessor.json"), "r") as abi_file:
@@ -34,7 +32,7 @@ async def process_ltai_transactions() -> list[str]:
         return processed_transactions  # Skip execution if already running
 
     async with ltai_payments_lock:
-        contract = w3.eth.contract(address=LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
+        contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
 
         from_block = get_start_block()
 
