@@ -2,11 +2,12 @@ import logging
 import os
 
 from dotenv import load_dotenv
+from eth_typing import ChecksumAddress
+from web3 import Web3
 
 
 class _Config:
-    LTAI_BASE_ADDRESS: str
-    LTAI_PAYMENT_PROCESSOR_CONTRACT: str
+    LTAI_PAYMENT_PROCESSOR_CONTRACT: ChecksumAddress
     DATABASE_URL: str
 
     LOG_LEVEL: int
@@ -14,8 +15,7 @@ class _Config:
 
     def __init__(self):
         load_dotenv()
-        self.LTAI_BASE_ADDRESS = os.getenv("LTAI_BASE_ADDRESS")
-        self.LTAI_PAYMENT_PROCESSOR_CONTRACT = os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT")
+        self.LTAI_PAYMENT_PROCESSOR_CONTRACT = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT"))
         self.DATABASE_URL = os.path.expandvars(os.getenv("DATABASE_URL", ""))
 
         # Configure logging
