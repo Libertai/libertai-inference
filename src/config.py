@@ -10,6 +10,8 @@ class _Config:
     LTAI_PAYMENT_PROCESSOR_CONTRACT: ChecksumAddress
     DATABASE_URL: str
 
+    THIRDWEB_WEBHOOK_SECRET: str
+
     LOG_LEVEL: int
     LOG_FILE: str | None
 
@@ -17,6 +19,8 @@ class _Config:
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT"))
         self.DATABASE_URL = os.path.expandvars(os.getenv("DATABASE_URL", ""))
+
+        self.THIRDWEB_WEBHOOK_SECRET = os.getenv("THIRDWEB_WEBHOOK_SECRET")
 
         # Configure logging
         log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
