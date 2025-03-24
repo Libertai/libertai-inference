@@ -6,6 +6,7 @@ from web3 import Web3
 
 from src.config import config
 from src.credits import router
+from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit_service import CreditService
@@ -68,7 +69,7 @@ def handle_payment_event(event) -> str:
 
     token_price = get_token_price()  # Get token/USD price
     usd_value = token_price * (amount / 10**18)  # Calculate USD value
-    CreditService.add_credits(sender, usd_value, transaction_hash, block_number)
+    CreditService.add_credits(CreditTransactionProvider.libertai, sender, usd_value, transaction_hash, block_number)
     return transaction_hash
 
 

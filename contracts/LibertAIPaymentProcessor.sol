@@ -152,7 +152,7 @@ contract LibertAIPaymentProcessor is Ownable2Step {
      * 2. Processes the resulting LTAI tokens through the standard payment flow
      * Only callable by the contract owner
      */
-    function processUSDCBalance(uint256 usdcAmount) external onlyOwner {
+    function processUSDCBalance(uint256 usdcAmount) external payable onlyOwner {
         uint256 _usdcAmount = usdcAmount;
 
         require(_usdcAmount != 0, "USDC amount must be >0");
