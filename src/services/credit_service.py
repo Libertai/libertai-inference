@@ -1,3 +1,4 @@
+from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
 from src.models.credit_balance import CreditBalance
 from src.models.credit_transaction import CreditTransaction
@@ -9,11 +10,18 @@ logger = setup_logger(__name__)
 
 class CreditService:
     @staticmethod
-    def add_credits(address: str, amount: float, transaction_hash: str, block_number: int):
+    def add_credits(
+        provider: CreditTransactionProvider,
+        address: str,
+        amount: float,
+        transaction_hash: str,
+        block_number: int | None = None,
+    ):
         """
         Add credits to a user, creating the user if they don't exist.
 
         Args:
+            provider: The provider used in the transaction
             address: User's blockchain address
             amount: USD amount to add
             transaction_hash: Transaction hash for recording the transaction
@@ -50,6 +58,7 @@ class CreditService:
                 transaction_hash=transaction_hash,
                 address=address,
                 usd_value=amount,  # type: ignore
+                provider=provider.value,
                 block_number=block_number,
             )
             db.add(transaction)
