@@ -144,12 +144,12 @@ contract LibertAIPaymentProcessor is Ownable2Step {
     }
 
     /**
-     * @dev Processes the USDC balance by swapping it for LTAI via Uniswap and then sending it to the standard payment flow
+     * @dev Processes the USDC balance by swapping it for LTAI via Uniswap and then performing the burn/send mechanism
      * @param usdcAmount The amount of USDC in the balance to process
      *
      * This function:
      * 1. Swaps USDC → WETH → LTAI using Uniswap V3
-     * 2. Processes the resulting LTAI tokens through the standard payment flow
+     * 2. Processes the resulting LTAI tokens through the burn/send flow
      * Only callable by the contract owner
      */
     function processUSDCBalance(uint256 usdcAmount) external payable onlyOwner {
@@ -194,30 +194,52 @@ contract LibertAIPaymentProcessor is Ownable2Step {
     }
 
     /**
+     * @dev Processes the ETH balance by swapping it for LTAI via Uniswap and then performing the burn/send mechanism
+     * @param ethAmount The amount of ETH in the balance to process
+     *
+     * This function:
+     * 1. Swaps WETH → LTAI using Uniswap V3
+     * 2. Processes the resulting LTAI tokens through the burn/send flow
+     * Only callable by the contract owner
+     */
+    function processETHBalance(uint256 ethAmount) external payable onlyOwner {
+        uint256 _ethAmount = ethAmount;
+
+        require(_ethAmount != 0, "ETH amount must be >0");
+        require(address(this).balance >= _ethAmount, "Not enough ETH");
+
+        // Set up the swap parameters for Uniswap (USDC → WETH → LTAI)
+        ISwapRouter02.ExactInputParams memory params = ISwapRouter02
+            .ExactInputParams({
+                path: abi.encodePacked(
+                    address(WETH),
+                    uint24(wethLtaiPoolFee),
+                    address(LTAI)
+                ),
+                recipient: address(this),
+                amountIn: _ethAmount,
+                amountOutMinimum: 0 // No minimum output enforced
+            });
+
+        // Execute the swap and get the amount of LTAI received
+        uint256 ltaiReceived = uniswapRouter.exactInput(params);
+
+        // Calculate burn and send amounts based on the burn percentage
+        uint256 amountToBurn = (ltaiReceived * burnPercentage) / 100;
+        uint256 amountToSend = ltaiReceived - amountToBurn;
+
+        ERC20Burnable(address(LTAI)).burn(amountToBurn);
+        require(
+            LTAI.transfer(recipient, amountToSend),
+            "Transfer to recipient failed"
+        );
+    }
+
+    /**
      * @dev Fallback function to receive ETH
      * This allows the contract to receive ETH payments directly
      */
     receive() external payable {}
-
-    /**
-     * @dev Withdraws ETH from the contract
-     * @param _recipient The address to receive the withdrawn ETH
-     * @param _amount The amount of ETH to withdraw in wei
-     *
-     * This function:
-     * 1. Verifies that the contract has sufficient ETH balance
-     * 2. Transfers the specified amount to the recipient address
-     * Only callable by the contract owner
-     */
-    function withdrawEth(
-        address payable _recipient,
-        uint256 _amount
-    ) external payable onlyOwner {
-        require(address(this).balance > _amount, "Insufficient balance");
-
-        (bool success, ) = _recipient.call{value: _amount}("");
-        require(success, "Transfer failed");
-    }
 
     /**
      * @dev Updates the fee tier for the WETH/LTAI Uniswap pool
