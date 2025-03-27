@@ -9,6 +9,7 @@ from src.models.base import Base
 if TYPE_CHECKING:
     from src.models.credit_transaction import CreditTransaction
     from src.models.credit_balance import CreditBalance
+    from src.models.api_key import ApiKey
 
 
 class User(Base):
@@ -22,4 +23,7 @@ class User(Base):
     )
     credit_balance: Mapped["CreditBalance"] = relationship(
         "CreditBalance", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        "ApiKey", back_populates="user", cascade="all, delete-orphan"
     )
