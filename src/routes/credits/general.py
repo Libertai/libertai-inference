@@ -2,10 +2,10 @@ from datetime import datetime
 
 from fastapi import HTTPException, status
 
-from src.credits import router
 from src.interfaces.credits import ExpiredCreditTransactionsResponse, ExpiredCreditTransaction
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.routes.credits import router
 from src.utils.cron import scheduler
 from src.utils.logger import setup_logger
 
@@ -13,7 +13,7 @@ logger = setup_logger(__name__)
 
 
 @scheduler.scheduled_job("interval", hours=1)
-@router.post("/update-expired", description="Deactivate credits with a past expiration date.")
+@router.post("/update-expired", description="Deactivate credits with a past expiration date.")  # type: ignore
 async def update_expired_credit_transactions() -> ExpiredCreditTransactionsResponse:
     """
     Check for expired transactions and mark them as inactive.

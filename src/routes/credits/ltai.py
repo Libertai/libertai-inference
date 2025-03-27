@@ -5,10 +5,10 @@ import requests
 from web3 import Web3
 
 from src.config import config
-from src.credits import router
 from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.routes.credits import router
 from src.services.credit_service import CreditService
 from src.utils.cron import scheduler, ltai_payments_lock
 from src.utils.logger import setup_logger
@@ -19,7 +19,7 @@ w3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
 
 
 code_dir = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(code_dir, "../abis/LTAIPaymentProcessor.json"), "r") as abi_file:
+with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") as abi_file:
     PAYMENT_PROCESSOR_CONTRACT_ABI = json.load(abi_file)
 
 

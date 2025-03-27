@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from web3 import Web3
 
 from src.config import config
-from src.credits import router
 from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook
+from src.routes.credits import router
 from src.services.credit_service import CreditService
 from src.utils.logger import setup_logger
 
@@ -29,7 +29,7 @@ class ThirdwebWebhookPayload(BaseModel):
         return None
 
 
-@router.post("/thirdweb/webhook", description="Receive webhooks from Thirdweb")
+@router.post("/thirdweb/webhook", description="Receive webhooks from Thirdweb")  # type: ignore
 async def thirdweb_webhook(
     request: Request,
     payload: ThirdwebWebhookPayload,
