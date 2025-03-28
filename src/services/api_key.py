@@ -4,7 +4,7 @@ from src.models.api_key import ApiKey
 from src.models.api_key_usage import ApiKeyUsage
 from src.models.base import SessionLocal
 from src.models.user import User
-from src.services.credit_service import CreditService
+from src.services.credit import CreditService
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -45,7 +45,7 @@ class ApiKeyService:
 
             # Create new API key
             api_key = ApiKey(
-                key_id=ApiKey.generate_key_id(),
+                key=ApiKey.generate_key(),
                 name=name,
                 address=address,
                 monthly_limit=monthly_limit,
@@ -92,21 +92,21 @@ class ApiKeyService:
             db.close()
 
     @staticmethod
-    def get_api_key(key_id: str) -> ApiKey | None:
+    def get_api_key(key: str) -> ApiKey | None:
         """
         Get a specific API key by ID.
 
         Args:
-            key_id: API key ID
+            key: API key ID
 
         Returns:
             ApiKey object if found, None otherwise
         """
-        logger.debug(f"Getting API key {key_id}")
+        logger.debug(f"Getting API key {key}")
         db = SessionLocal()
 
         try:
-            api_key = db.query(ApiKey).filter(ApiKey.key_id == key_id).first()
+            api_key = db.query(ApiKey).filter(ApiKey.key == key).first()
 
             if api_key:
                 setattr(api_key, "_session", db)
@@ -114,14 +114,14 @@ class ApiKeyService:
             return api_key
 
         except Exception as e:
-            logger.error(f"Error getting API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting API key {key}: {str(e)}", exc_info=True)
             raise e
         finally:
             db.close()
 
     @staticmethod
     def update_api_key(
-        key_id: str,
+        key: str,
         name: str | None = None,
         is_active: bool | None = None,
         monthly_limit: float | None = None,
@@ -130,7 +130,7 @@ class ApiKeyService:
         Update an API key.
 
         Args:
-            key_id: API key ID
+            key: API key ID
             name: New name for the API key
             is_active: Whether the API key is active
             monthly_limit: Monthly usage limit in credits
@@ -138,14 +138,14 @@ class ApiKeyService:
         Returns:
             Updated ApiKey object if found, None otherwise
         """
-        logger.debug(f"Updating API key {key_id}")
+        logger.debug(f"Updating API key {key}")
         db = SessionLocal()
 
         try:
-            api_key = db.query(ApiKey).filter(ApiKey.key_id == key_id).first()
+            api_key = db.query(ApiKey).filter(ApiKey.key == key).first()
 
             if not api_key:
-                logger.warning(f"API key {key_id} not found for update")
+                logger.warning(f"API key {key} not found for update")
                 return None
 
             # Update fields if provided
@@ -153,7 +153,7 @@ class ApiKeyService:
                 # Check if name already exists for this user
                 existing_key = (
                     db.query(ApiKey)
-                    .filter(ApiKey.address == api_key.address, ApiKey.name == name, ApiKey.key_id != key_id)
+                    .filter(ApiKey.address == api_key.address, ApiKey.name == name, ApiKey.key != key)
                     .first()
                 )
 
@@ -177,30 +177,30 @@ class ApiKeyService:
 
         except Exception as e:
             db.rollback()
-            logger.error(f"Error updating API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error updating API key {key}: {str(e)}", exc_info=True)
             raise e
         finally:
             db.close()
 
     @staticmethod
-    def delete_api_key(key_id: str) -> bool:
+    def delete_api_key(key: str) -> bool:
         """
         Delete an API key.
 
         Args:
-            key_id: API key ID
+            key: API key ID
 
         Returns:
             Boolean indicating if the operation was successful
         """
-        logger.debug(f"Deleting API key {key_id}")
+        logger.debug(f"Deleting API key {key}")
         db = SessionLocal()
 
         try:
-            api_key = db.query(ApiKey).filter(ApiKey.key_id == key_id).first()
+            api_key = db.query(ApiKey).filter(ApiKey.key == key).first()
 
             if not api_key:
-                logger.warning(f"API key {key_id} not found for deletion")
+                logger.warning(f"API key {key} not found for deletion")
                 return False
 
             db.delete(api_key)
@@ -209,38 +209,38 @@ class ApiKeyService:
 
         except Exception as e:
             db.rollback()
-            logger.error(f"Error deleting API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error deleting API key {key}: {str(e)}", exc_info=True)
             raise e
         finally:
             db.close()
 
     @staticmethod
-    def log_api_key_usage(key_id: str, credits_used: float) -> bool:
+    def log_api_key_usage(key: str, credits_used: float) -> bool:
         """
         Log usage of an API key and deduct credits from the user's balance.
         This method is called after the actual API call has happened, so we only log
         usage and deduct credits without performing validation checks.
 
         Args:
-            key_id: API key ID
+            key: API key ID
             credits_used: Number of credits used
 
         Returns:
             Boolean indicating if the operation was successful
         """
-        logger.debug(f"Logging usage of {credits_used} credits for API key {key_id}")
+        logger.debug(f"Logging usage of {credits_used} credits for API key {key}")
         db = SessionLocal()
 
         try:
             # Check if API key exists (even if inactive, we still want to log)
-            api_key = db.query(ApiKey).filter(ApiKey.key_id == key_id).first()
+            api_key = db.query(ApiKey).filter(ApiKey.key == key).first()
 
             if not api_key:
-                logger.warning(f"API key {key_id} not found")
+                logger.warning(f"API key {key} not found")
                 return False
 
             # Log usage regardless of balance or limits
-            usage = ApiKeyUsage(key_id=key_id, credits_used=credits_used)
+            usage = ApiKeyUsage(key=key, credits_used=credits_used)
             db.add(usage)
             db.commit()
 
@@ -249,36 +249,36 @@ class ApiKeyService:
             success = CreditService.use_credits(api_key.address, credits_used)
 
             if not success:
-                logger.warning(f"Failed to deduct {credits_used} credits for API key {key_id}")
+                logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
 
             return True
 
         except Exception as e:
             db.rollback()
-            logger.error(f"Error logging API key usage for {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error logging API key usage for {key}: {str(e)}", exc_info=True)
             raise e
         finally:
             db.close()
 
     @staticmethod
-    def verify_api_key(key_id: str) -> ApiKey | None:
+    def verify_api_key(key: str) -> ApiKey | None:
         """
         Verify that an API key exists and is active.
 
         Args:
-            key_id: API key ID
+            key: API key ID
 
         Returns:
             ApiKey object if valid, None otherwise
         """
-        logger.debug(f"Verifying API key {key_id}")
+        logger.debug(f"Verifying API key {key}")
         db = SessionLocal()
 
         try:
             api_key = (
                 db.query(ApiKey)
                 .filter(
-                    ApiKey.key_id == key_id,
+                    ApiKey.key == key,
                     ApiKey.is_active == True,  # noqa: E712
                 )
                 .first()
@@ -290,31 +290,31 @@ class ApiKeyService:
             return api_key
 
         except Exception as e:
-            logger.error(f"Error verifying API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error verifying API key {key}: {str(e)}", exc_info=True)
             return None
         finally:
             db.close()
 
     @staticmethod
     def get_api_key_usage_stats(
-        key_id: str, start_date: datetime | None = None, end_date: datetime | None = None
+        key: str, start_date: datetime | None = None, end_date: datetime | None = None
     ) -> list[ApiKeyUsage]:
         """
         Get usage statistics for an API key.
 
         Args:
-            key_id: API key ID
+            key: API key ID
             start_date: Optional start date for filtering
             end_date: Optional end date for filtering
 
         Returns:
             List of ApiKeyUsage objects
         """
-        logger.debug(f"Getting usage stats for API key {key_id}")
+        logger.debug(f"Getting usage stats for API key {key}")
         db = SessionLocal()
 
         try:
-            query = db.query(ApiKeyUsage).filter(ApiKeyUsage.key_id == key_id)
+            query = db.query(ApiKeyUsage).filter(ApiKeyUsage.key == key)
 
             if start_date:
                 query = query.filter(ApiKeyUsage.used_at >= start_date)
@@ -325,7 +325,7 @@ class ApiKeyService:
             return query.order_by(ApiKeyUsage.used_at.desc()).all()
 
         except Exception as e:
-            logger.error(f"Error getting usage stats for API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting usage stats for API key {key}: {str(e)}", exc_info=True)
             return []
         finally:
             db.close()

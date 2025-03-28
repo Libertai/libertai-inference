@@ -15,19 +15,19 @@ class ApiKeyUpdate(BaseModel):
 
 
 class ApiKeyUsageLog(BaseModel):
-    key_id: str
+    key: str
     credits_used: float
 
 
 class ApiKeyUsageResponse(BaseModel):
     id: int
-    key_id: str
+    key: str
     credits_used: float
     used_at: datetime
 
 
 class ApiKeyResponse(BaseModel):
-    key_id: str
+    key: str
     name: str
     address: str
     created_at: datetime

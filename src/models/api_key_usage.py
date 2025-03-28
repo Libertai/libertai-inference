@@ -15,15 +15,15 @@ class ApiKeyUsage(Base):
     __tablename__ = "api_key_usages"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    key_id: Mapped[str] = mapped_column(String, ForeignKey("api_keys.key_id", ondelete="CASCADE"), nullable=False)
+    key: Mapped[str] = mapped_column(String, ForeignKey("api_keys.key", ondelete="CASCADE"), nullable=False)
     credits_used: Mapped[float] = mapped_column(Float, nullable=False)
     used_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
 
     api_key: Mapped["ApiKey"] = relationship("ApiKey", back_populates="usages")
 
     # Enforce non-negative credits usage
-    __table_args__ = CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative")
+    __table_args__ = (CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),)
 
-    def __init__(self, key_id: str, credits_used: float):
-        self.key_id = key_id
+    def __init__(self, key: str, credits_used: float):
+        self.key = key
         self.credits_used = credits_used

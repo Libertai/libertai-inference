@@ -9,7 +9,7 @@ from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
-from src.services.credit_service import CreditService
+from src.services.credit import CreditService
 from src.utils.cron import scheduler, ltai_payments_lock
 from src.utils.logger import setup_logger
 
@@ -112,11 +112,9 @@ def get_start_block() -> int:
         if last_transaction and last_transaction.block_number is not None:
             # Start from the block after the last processed one
             start_block = last_transaction.block_number + 1
-            logger.debug(f"Starting from block {start_block} (last processed block)")
         else:
             # If no transactions with block numbers, start from recent blocks
             start_block = w3.eth.block_number
-            logger.debug(f"No previous blocks found, starting from {start_block}")
 
         return start_block
     finally:
