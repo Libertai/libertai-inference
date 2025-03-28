@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
-    key_id: Mapped[str] = mapped_column(String, primary_key=True)
+    key: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
@@ -28,16 +28,16 @@ class ApiKey(Base):
         "ApiKeyUsage", back_populates="api_key", cascade="all, delete-orphan"
     )
 
-    __table_args__ = UniqueConstraint("address", "name", name="unique_api_key_name_per_user")
+    __table_args__ = (UniqueConstraint("address", "name", name="unique_api_key_name_per_user"),)
 
-    def __init__(self, key_id: str, name: str, address: str, monthly_limit: float | None = None):
-        self.key_id = key_id
+    def __init__(self, key: str, name: str, address: str, monthly_limit: float | None = None):
+        self.key = key
         self.name = name
         self.address = address
         self.monthly_limit = monthly_limit
 
     @staticmethod
-    def generate_key_id() -> str:
+    def generate_key() -> str:
         """Generate a random API key ID."""
         return secrets.token_hex(16)
 
@@ -59,9 +59,7 @@ class ApiKey(Base):
 
         result = (
             self._session.query(sql_func.sum(ApiKeyUsage.credits_used))
-            .filter(
-                ApiKeyUsage.key_id == self.key_id, ApiKeyUsage.used_at >= first_day, ApiKeyUsage.used_at < next_month
-            )
+            .filter(ApiKeyUsage.key == self.key, ApiKeyUsage.used_at >= first_day, ApiKeyUsage.used_at < next_month)
             .scalar()
         )
 
@@ -80,7 +78,7 @@ class ApiKey(Base):
             return 0.0
 
         # Import here to avoid circular imports
-        from src.services.credit_service import CreditService
+        from src.services.credit import CreditService
 
         # Get user's current balance
         user_balance = CreditService.get_balance(self.address)

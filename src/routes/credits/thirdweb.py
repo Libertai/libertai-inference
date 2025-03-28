@@ -10,7 +10,7 @@ from web3 import Web3
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook
 from src.routes.credits import router
-from src.services.credit_service import CreditService
+from src.services.credit import CreditService
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
