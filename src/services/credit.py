@@ -2,7 +2,6 @@ from datetime import datetime
 
 from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
-from src.models.credit_balance import CreditBalance
 from src.models.credit_transaction import CreditTransaction
 from src.models.user import User
 from src.utils.logger import setup_logger
@@ -19,7 +18,7 @@ class CreditService:
         transaction_hash: str,
         block_number: int | None = None,
         expired_at: datetime | None = None,
-    ):
+    ) -> None:
         """
         Add credits to a user, creating the user if they don't exist.
 
@@ -32,7 +31,7 @@ class CreditService:
             expired_at: Optional expiration date for the credits
 
         Returns:
-            Updated CreditBalance object
+           None
         """
         logger.debug(
             f"Adding {amount} credits to address {address} from tx {transaction_hash} in block {block_number}"
@@ -47,13 +46,6 @@ class CreditService:
                 db.add(user)
                 db.flush()  # Generate primary key
 
-            # Get or create credit balance
-            credit_balance = db.query(CreditBalance).filter(CreditBalance.address == address).first()
-            if not credit_balance:
-                credit_balance = CreditBalance(address=address)
-                db.add(credit_balance)
-                db.flush()  # Make sure the instance is persisted and has all attributes populated
-
             # Record transaction
             transaction = CreditTransaction(
                 transaction_hash=transaction_hash,
@@ -66,13 +58,7 @@ class CreditService:
                 is_active=True,
             )
             db.add(transaction)
-
             db.commit()
-
-            # To make the session available when calculating balance
-            setattr(credit_balance, "_session", db)
-
-            return credit_balance
 
         except Exception as e:
             db.rollback()
@@ -152,14 +138,12 @@ class CreditService:
 
         try:
             # Get credit balance
-            credit_balance = db.query(CreditBalance).filter(CreditBalance.address == address).first()
-            if not credit_balance:
+            user = db.query(User).filter(User.address == address).first()
+            if not user:
                 return 0
 
-            # Make db session available to calculate balance
-            setattr(credit_balance, "_session", db)
-
-            return credit_balance.balance
+            balance = user.credit_balance
+            return balance
 
         except Exception as e:
             logger.error(f"Error getting balance for {address}: {str(e)}", exc_info=True)

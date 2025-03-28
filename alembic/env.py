@@ -10,7 +10,6 @@ from sqlalchemy import pool
 from src.models.api_key import ApiKey  # noqa
 from src.models.api_key_usage import ApiKeyUsage  # noqa
 from src.models.base import Base  # Import the Base from your models
-from src.models.credit_balance import CreditBalance  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.user import User  # noqa
 
