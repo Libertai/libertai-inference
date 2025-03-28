@@ -1,7 +1,8 @@
 from datetime import datetime
+import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint
+from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -15,7 +16,7 @@ class ApiKeyUsage(Base):
     __tablename__ = "api_key_usages"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    key: Mapped[str] = mapped_column(String, ForeignKey("api_keys.key", ondelete="CASCADE"), nullable=False)
+    api_key_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=False)
     credits_used: Mapped[float] = mapped_column(Float, nullable=False)
     used_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
 
@@ -24,6 +25,6 @@ class ApiKeyUsage(Base):
     # Enforce non-negative credits usage
     __table_args__ = (CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),)
 
-    def __init__(self, key: str, credits_used: float):
-        self.key = key
+    def __init__(self, api_key_id: uuid.UUID, credits_used: float):
+        self.api_key_id = api_key_id
         self.credits_used = credits_used

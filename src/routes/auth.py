@@ -47,7 +47,7 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
         httponly=True,
         max_age=config.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="none",
-        secure=False if config.IS_DEVELOPMENT else True,
+        secure=True,
     )
 
     logger.debug(f"Generated access token for address {request.address}")

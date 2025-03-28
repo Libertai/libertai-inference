@@ -1,8 +1,9 @@
 import secrets
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint
+from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql.expression import func as sql_func
 
@@ -16,9 +17,10 @@ if TYPE_CHECKING:
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
-    key: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
+    user_address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
@@ -28,13 +30,20 @@ class ApiKey(Base):
         "ApiKeyUsage", back_populates="api_key", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (UniqueConstraint("address", "name", name="unique_api_key_name_per_user"),)
+    __table_args__ = (UniqueConstraint("user_address", "name", name="unique_api_key_name_per_user"),)
 
-    def __init__(self, key: str, name: str, address: str, monthly_limit: float | None = None):
+    def __init__(self, key: str, name: str, user_address: str, monthly_limit: float | None = None):
         self.key = key
         self.name = name
-        self.address = address
+        self.user_address = user_address
         self.monthly_limit = monthly_limit
+
+    @property
+    def masked_key(self) -> str:
+        """Return a masked version of the API key, showing only the first 4 and last 4 characters."""
+        if len(self.key) <= 8:
+            return "****"
+        return f"{self.key[:4]}...{self.key[-4:]}"
 
     @staticmethod
     def generate_key() -> str:
@@ -59,7 +68,9 @@ class ApiKey(Base):
 
         result = (
             self._session.query(sql_func.sum(ApiKeyUsage.credits_used))
-            .filter(ApiKeyUsage.key == self.key, ApiKeyUsage.used_at >= first_day, ApiKeyUsage.used_at < next_month)
+            .filter(
+                ApiKeyUsage.api_key_id == self.id, ApiKeyUsage.used_at >= first_day, ApiKeyUsage.used_at < next_month
+            )
             .scalar()
         )
 

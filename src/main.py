@@ -17,7 +17,7 @@ app.openapi_components = {  # type: ignore
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://app.libertai.io"] + (["http://localhost:5173"] if config.IS_DEVELOPMENT else []),
+    allow_origins=["https://app.libertai.io"] + ["http://localhost:5173"] if config.IS_DEVELOPMENT else [],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,  # Required for cookies to be sent with requests

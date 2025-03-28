@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -21,19 +22,24 @@ class ApiKeyUsageLog(BaseModel):
 
 class ApiKeyUsageResponse(BaseModel):
     id: int
-    key: str
+    api_key_id: uuid.UUID
     credits_used: float
     used_at: datetime
 
 
-class ApiKeyResponse(BaseModel):
-    key: str
+class ApiKey(BaseModel):
+    id: uuid.UUID
+    key: str  # Masked key for display
     name: str
-    address: str
+    user_address: str
     created_at: datetime
     is_active: bool
     monthly_limit: float | None = None
 
 
+class FullApiKey(ApiKey):
+    full_key: str
+
+
 class ApiKeyListResponse(BaseModel):
-    keys: list[ApiKeyResponse]
+    keys: list[ApiKey]
