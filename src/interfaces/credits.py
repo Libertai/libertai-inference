@@ -34,10 +34,14 @@ class ThirdwebTransactionDetails(BaseModel):
     completedAt: str
 
 
+class ThirdwebPurchaseData(BaseModel):
+    userAddress: str
+
+
 class ThirdwebBuyWithCryptoWebhook(BaseModel):
     swapType: str
     source: ThirdwebTransactionDetails
     status: Literal["COMPLETED", "PENDING"]
-    fromAddress: str
     toAddress: str
     destination: ThirdwebTransactionDetails | None = None
+    purchase_data: ThirdwebPurchaseData

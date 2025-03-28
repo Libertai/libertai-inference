@@ -104,7 +104,7 @@ async def thirdweb_webhook(
     try:
         # Extract transaction details
         transaction_hash = data.destination.transactionHash
-        sender_address = data.fromAddress
+        sender_address = data.purchase_data.userAddress
 
         # Convert amount from cents to dollars
         amount_usd = data.destination.amountUSDCents / 100

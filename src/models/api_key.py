@@ -92,7 +92,7 @@ class ApiKey(Base):
         from src.services.credit import CreditService
 
         # Get user's current balance
-        user_balance = CreditService.get_balance(self.address)
+        user_balance = CreditService.get_balance(self.user_address)
 
         # If there's a monthly limit, calculate remaining credits within that limit
         if self.monthly_limit is not None:
