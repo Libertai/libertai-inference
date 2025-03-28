@@ -17,6 +17,7 @@ class _Config:
 
     JWT_SECRET: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
+    IS_DEVELOPMENT: bool
 
     def __init__(self):
         load_dotenv()
@@ -32,6 +33,7 @@ class _Config:
 
         self.JWT_SECRET = os.getenv("JWT_SECRET")
         self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES"))
+        self.IS_DEVELOPMENT = os.getenv("IS_DEVELOPMENT", "False").lower() == "true"
 
 
 config = _Config()

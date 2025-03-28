@@ -967,14 +967,14 @@ tools = ["hypothesis (>=6.22.0,<6.108.7)"]
 
 [[package]]
 name = "eth-account"
-version = "0.13.5"
+version = "0.13.6"
 description = "eth-account: Sign Ethereum transactions and messages with local private keys"
 optional = false
 python-versions = "<4,>=3.8"
 groups = ["main"]
 files = [
-    {file = "eth_account-0.13.5-py3-none-any.whl", hash = "sha256:e43fd30c9a7fabb882b50e8c4c41d4486d2f3478ad97c66bb18cfcc872fdbec8"},
-    {file = "eth_account-0.13.5.tar.gz", hash = "sha256:010c9ce5f3d2688106cf9bfeb711bb8eaf0154ea6f85325f54fecea85c2b3759"},
+    {file = "eth_account-0.13.6-py3-none-any.whl", hash = "sha256:27b8c86e134ab10adec5022b55c8005f9fbdccba8b99bd318e45aa56863e1416"},
+    {file = "eth_account-0.13.6.tar.gz", hash = "sha256:e496cc4c50fe4e22972f720fda4c13e126e5636d0274163888eb27f08530ac61"},
 ]
 
 [package.dependencies]
@@ -1544,19 +1544,23 @@ name = "libertai-utils"
 version = "0.0.13"
 description = "LibertAI internal types and functions"
 optional = false
-python-versions = "<4.0,>=3.11"
+python-versions = "^3.11"
 groups = ["main"]
-files = [
-    {file = "libertai_utils-0.0.13-py3-none-any.whl", hash = "sha256:a36f67c2c172f4fde3644b8e216f9816ac68aed53e1d43756cf8e3d7c2eb0856"},
-    {file = "libertai_utils-0.0.13.tar.gz", hash = "sha256:0365212a39768b30dc8328852f2a6de86926271ad157fad130aaf74e41c41ee7"},
-]
+files = []
+develop = false
 
 [package.dependencies]
-eciespy = ">=0.4.2,<0.5.0"
-pydantic = ">=2.10.6,<3.0.0"
-pynacl = ">=1.5.0,<2.0.0"
-solders = ">=0.22.0,<0.23.0"
-web3 = ">=7.9.0,<8.0.0"
+eciespy = "^0.4.2"
+pydantic = "^2.10.6"
+pynacl = "^1.5.0"
+solders = "^0.22.0"
+web3 = "^7.10.0"
+
+[package.source]
+type = "git"
+url = "ssh://git@github.com/Libertai/libertai-utils.git"
+reference = "main"
+resolved_reference = "8b5c22d4a0432bb93de6eface23c262e6be8a62a"
 
 [[package]]
 name = "mako"
@@ -2862,14 +2866,14 @@ typing-extensions = ">=3.7.4.3"
 
 [[package]]
 name = "types-requests"
-version = "2.32.0.20250306"
+version = "2.32.0.20250328"
 description = "Typing stubs for requests"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "types_requests-2.32.0.20250306-py3-none-any.whl", hash = "sha256:25f2cbb5c8710b2022f8bbee7b2b66f319ef14aeea2f35d80f18c9dbf3b60a0b"},
-    {file = "types_requests-2.32.0.20250306.tar.gz", hash = "sha256:0962352694ec5b2f95fda877ee60a159abdf84a0fc6fdace599f20acb41a03d1"},
+    {file = "types_requests-2.32.0.20250328-py3-none-any.whl", hash = "sha256:72ff80f84b15eb3aa7a8e2625fffb6a93f2ad5a0c20215fc1dcfa61117bcb2a2"},
+    {file = "types_requests-2.32.0.20250328.tar.gz", hash = "sha256:c9e67228ea103bd811c96984fac36ed2ae8da87a36a633964a21f199d60baf32"},
 ]
 
 [package.dependencies]
@@ -3113,14 +3117,14 @@ anyio = ">=3.0.0"
 
 [[package]]
 name = "web3"
-version = "7.9.0"
+version = "7.10.0"
 description = "web3: A Python library for interacting with Ethereum"
 optional = false
 python-versions = "<4,>=3.8"
 groups = ["main"]
 files = [
-    {file = "web3-7.9.0-py3-none-any.whl", hash = "sha256:7818267675283e9cae4487d2805fc34b899aa26f41b0000c798c79b1684899eb"},
-    {file = "web3-7.9.0.tar.gz", hash = "sha256:3c4487a7ac57e0a187bd7ee03db455d94f354d15cca45f097f15f7281ad1a01f"},
+    {file = "web3-7.10.0-py3-none-any.whl", hash = "sha256:06fcab920554450e9f7d108da5e6b9d29c0d1a981a59a5551cc82d2cb2233b34"},
+    {file = "web3-7.10.0.tar.gz", hash = "sha256:0cace05ea14f800a4497649ecd99332ca4e85c8a90ea577e05ae909cb08902b9"},
 ]
 
 [package.dependencies]
@@ -3137,7 +3141,7 @@ pywin32 = {version = ">=223", markers = "platform_system == \"Windows\""}
 requests = ">=2.23.0"
 types-requests = ">=2.0.0"
 typing-extensions = ">=4.0.1"
-websockets = ">=10.0.0,<14.0.0"
+websockets = ">=10.0.0,<16.0.0"
 
 [package.extras]
 dev = ["build (>=0.9.0)", "bump_my_version (>=0.19.0)", "eth-tester[py-evm] (>=0.12.0b1,<0.13.0b1)", "flaky (>=3.7.0)", "hypothesis (>=3.31.2)", "ipython", "mypy (==1.10.0)", "pre-commit (>=3.4.0)", "py-geth (>=5.1.0)", "pytest (>=7.0.0)", "pytest-asyncio (>=0.18.1,<0.23)", "pytest-mock (>=1.10)", "pytest-xdist (>=2.4.0)", "setuptools (>=38.6.0)", "sphinx (>=6.0.0)", "sphinx-autobuild (>=2021.3.14)", "sphinx_rtd_theme (>=1.0.0)", "towncrier (>=24,<25)", "tox (>=4.0.0)", "tqdm (>4.32)", "twine (>=1.13)", "wheel"]
@@ -3341,4 +3345,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "1bd2d06ad1d81be2e451bdcba873145268abc01b7ae3e0c9e21824dbe0ed801e"
+content-hash = "6f659d44206c653fb07b206205f0c26bb6dae4e4d80d29220b05261a8f2c6458"
