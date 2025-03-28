@@ -14,14 +14,14 @@ python = "^3.12"
 fastapi = { extras = ["standard"], version = "^0.114.1" }
 apscheduler = "^3.10.4"
 setuptools = "^75.4.0"
-web3 = "^7.9.0"
+web3 = "^7.10.0"
 requests = "^2.32.3"
 sqlalchemy = { extras = ["mypy"], version = "^2.0.39" }
 alembic = "^1.15.1"
 psycopg2-binary = "^2.9.10"
 python-dotenv = "^1.0.1"
 pyjwt = "^2.8.0"
-libertai-utils = "^0.0.13"
+libertai-utils = { git = "git@github.com:Libertai/libertai-utils.git", rev = "main" }
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
