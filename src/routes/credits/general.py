@@ -61,7 +61,7 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
         )
 
 
-@router.get("/balance", description="Get the current credit balance for authenticated user.")
+@router.get("/balance", description="Get the current credit balance for authenticated user.")  # type: ignore
 async def get_user_balance(user_address: str = Depends(get_current_address)) -> CreditBalanceResponse:
     """
     Get the current credit balance for the authenticated user.

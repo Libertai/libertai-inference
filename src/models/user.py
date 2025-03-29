@@ -30,12 +30,12 @@ class User(Base):
         """
         from src.models.credit_transaction import CreditTransaction
 
-        # Get all active transactions for this user
         db = self._session if hasattr(self, "_session") else SessionLocal()
 
+        # Get all active transactions for this user
         active_transactions = (
             db.query(CreditTransaction)
-            .filter(CreditTransaction.address == self.address, CreditTransaction.is_active == True)
+            .filter(CreditTransaction.address == self.address, CreditTransaction.is_active)
             .all()
         )
 

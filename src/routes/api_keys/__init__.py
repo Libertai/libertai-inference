@@ -7,5 +7,5 @@ from src.routes.api_keys.api_keys import (  # noqa
     get_api_keys,
     update_api_key,
     delete_api_key,
-    log_api_key_usage,
+    register_inference_call,
 )

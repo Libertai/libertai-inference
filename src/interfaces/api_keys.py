@@ -15,16 +15,12 @@ class ApiKeyUpdate(BaseModel):
     monthly_limit: float | None = None
 
 
-class ApiKeyUsageLog(BaseModel):
+class InferenceCallData(BaseModel):
     key: str
     credits_used: float
-
-
-class ApiKeyUsageResponse(BaseModel):
-    id: int
-    api_key_id: uuid.UUID
-    credits_used: float
-    used_at: datetime
+    input_tokens: int
+    output_tokens: int
+    model_name: str
 
 
 class ApiKey(BaseModel):
