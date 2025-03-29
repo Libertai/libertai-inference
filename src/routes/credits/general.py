@@ -1,11 +1,13 @@
 from datetime import datetime
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
 
-from src.interfaces.credits import ExpiredCreditTransactionsResponse, ExpiredCreditTransaction
+from src.interfaces.credits import ExpiredCreditTransactionsResponse, ExpiredCreditTransaction, CreditBalanceResponse
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
+from src.services.auth import get_current_address
+from src.services.credit import CreditService
 from src.utils.cron import scheduler
 from src.utils.logger import setup_logger
 
@@ -56,4 +58,22 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
         logger.error(f"Error updating expired transactions: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating expired transactions: {str(e)}"
+        )
+
+
+@router.get("/balance", description="Get the current credit balance for authenticated user.")
+async def get_user_balance(user_address: str = Depends(get_current_address)) -> CreditBalanceResponse:
+    """
+    Get the current credit balance for the authenticated user.
+
+    Returns:
+        CreditBalanceResponse: Object containing the user's address and credit balance
+    """
+    try:
+        balance = CreditService.get_balance(user_address)
+        return CreditBalanceResponse(address=user_address, balance=balance)
+    except Exception as e:
+        logger.error(f"Error retrieving balance for {user_address}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving credit balance: {str(e)}"
         )

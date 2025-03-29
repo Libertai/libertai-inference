@@ -4,7 +4,7 @@ from sqlalchemy import Column, String, TIMESTAMP
 from sqlalchemy.orm import relationship, Mapped
 from sqlalchemy.sql import func
 
-from src.models.base import Base
+from src.models.base import Base, SessionLocal
 
 if TYPE_CHECKING:
     from src.models.credit_transaction import CreditTransaction
@@ -31,12 +31,10 @@ class User(Base):
         from src.models.credit_transaction import CreditTransaction
 
         # Get all active transactions for this user
-        if not hasattr(self, "_session"):
-            # When not in a session context, we can't calculate
-            return 0.0
+        db = self._session if hasattr(self, "_session") else SessionLocal()
 
         active_transactions = (
-            self._session.query(CreditTransaction)
+            db.query(CreditTransaction)
             .filter(CreditTransaction.address == self.address, CreditTransaction.is_active == True)
             .all()
         )

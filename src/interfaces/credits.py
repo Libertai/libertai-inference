@@ -44,4 +44,4 @@ class ThirdwebBuyWithCryptoWebhook(BaseModel):
     status: Literal["COMPLETED", "PENDING"]
     toAddress: str
     destination: ThirdwebTransactionDetails | None = None
-    purchase_data: ThirdwebPurchaseData
+    purchaseData: ThirdwebPurchaseData
