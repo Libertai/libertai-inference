@@ -8,9 +8,9 @@ from sqlalchemy import pool
 
 # Import all models that should be included in migrations
 from src.models.api_key import ApiKey  # noqa
-from src.models.api_key_usage import ApiKeyUsage  # noqa
 from src.models.base import Base  # Import the Base from your models
 from src.models.credit_transaction import CreditTransaction  # noqa
+from src.models.inference_call import InferenceCall  # noqa
 from src.models.user import User  # noqa
 
 # this is the Alembic Config object, which provides

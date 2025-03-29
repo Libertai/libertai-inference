@@ -2,8 +2,8 @@ import uuid
 
 from src.interfaces.api_keys import FullApiKey, ApiKey
 from src.models.api_key import ApiKey as ApiKeyDB
-from src.models.api_key_usage import ApiKeyUsage
 from src.models.base import SessionLocal
+from src.models.inference_call import InferenceCall
 from src.models.user import User
 from src.services.credit import CreditService
 from src.utils.logger import setup_logger
@@ -260,7 +260,9 @@ class ApiKeyService:
             db.close()
 
     @staticmethod
-    def log_api_key_usage(key: str, credits_used: float) -> bool:
+    def register_inference_call(
+        key: str, credits_used: float, input_tokens: int, output_tokens: int, model_name: str
+    ) -> bool:
         """
         Log usage of an API key and deduct credits from the user's balance.
         This method is called after the actual API call has happened, so we only log
@@ -269,6 +271,9 @@ class ApiKeyService:
         Args:
             key: API key string
             credits_used: Number of credits used
+            input_tokens: Number of input tokens processed
+            output_tokens: Number of output tokens generated
+            model_name: Name of the model used
 
         Returns:
             Boolean indicating if the operation was successful
@@ -285,7 +290,13 @@ class ApiKeyService:
                 return False
 
             # Log usage with the API key ID
-            usage = ApiKeyUsage(api_key_id=api_key.id, credits_used=credits_used)
+            usage = InferenceCall(
+                api_key_id=api_key.id,
+                credits_used=credits_used,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model_name=model_name,
+            )
             db.add(usage)
             db.commit()
 

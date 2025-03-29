@@ -7,11 +7,11 @@ from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, Uniq
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql.expression import func as sql_func
 
-from src.models.base import Base
+from src.models.base import Base, SessionLocal
 
 if TYPE_CHECKING:
     from src.models.user import User
-    from src.models.api_key_usage import ApiKeyUsage
+    from src.models.inference_call import InferenceCall
 
 
 class ApiKey(Base):
@@ -26,8 +26,8 @@ class ApiKey(Base):
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
 
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
-    usages: Mapped[list["ApiKeyUsage"]] = relationship(
-        "ApiKeyUsage", back_populates="api_key", cascade="all, delete-orphan"
+    usages: Mapped[list["InferenceCall"]] = relationship(
+        "InferenceCall", back_populates="api_key", cascade="all, delete-orphan"
     )
 
     __table_args__ = (UniqueConstraint("user_address", "name", name="unique_api_key_name_per_user"),)
@@ -55,11 +55,9 @@ class ApiKey(Base):
         """
         Calculate the total usage for the current month directly from the database.
         """
-        if not hasattr(self, "_session"):
-            # When not in a session context, we can't calculate
-            return 0.0
+        from src.models.inference_call import InferenceCall
 
-        from src.models.api_key_usage import ApiKeyUsage
+        db = self._session if hasattr(self, "_session") else SessionLocal()
 
         # Get current month's usage using SQL aggregation
         now = datetime.now()
@@ -67,9 +65,11 @@ class ApiKey(Base):
         next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
 
         result = (
-            self._session.query(sql_func.sum(ApiKeyUsage.credits_used))
+            db.query(sql_func.sum(InferenceCall.credits_used))
             .filter(
-                ApiKeyUsage.api_key_id == self.id, ApiKeyUsage.used_at >= first_day, ApiKeyUsage.used_at < next_month
+                InferenceCall.api_key_id == self.id,
+                InferenceCall.used_at >= first_day,
+                InferenceCall.used_at < next_month,
             )
             .scalar()
         )
@@ -85,10 +85,6 @@ class ApiKey(Base):
         This combines the monthly limit of the API key with the user's current balance
         to determine how many credits can actually be used.
         """
-        if not hasattr(self, "_session"):
-            return 0.0
-
-        # Import here to avoid circular imports
         from src.services.credit import CreditService
 
         # Get user's current balance

@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status
 from src.interfaces.api_keys import (
     ApiKeyCreate,
     ApiKeyUpdate,
-    ApiKeyUsageLog,
+    InferenceCallData,
     ApiKey,
     ApiKeyListResponse,
     FullApiKey,
@@ -18,20 +18,15 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-@router.post("/{address}")  # type: ignore
+@router.post("")  # type: ignore
 async def create_api_key(
-    address: str, api_key_create: ApiKeyCreate, current_address: str = Depends(get_current_address)
+    api_key_create: ApiKeyCreate, current_address: str = Depends(get_current_address)
 ) -> FullApiKey:
     """Create a new API key for a user."""
-    # Verify that the requesting user is the address owner
-    if current_address.lower() != address.lower():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage API keys for your own address"
-        )
     try:
         # This is the only time the full key is returned
         full_api_key = ApiKeyService.create_api_key(
-            address=address, name=api_key_create.name, monthly_limit=api_key_create.monthly_limit
+            address=current_address, name=api_key_create.name, monthly_limit=api_key_create.monthly_limit
         )
 
         return full_api_key
@@ -40,15 +35,11 @@ async def create_api_key(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
-@router.get("/{address}")  # type: ignore
-async def get_api_keys(address: str, current_address: str = Depends(get_current_address)) -> ApiKeyListResponse:
+@router.get("")  # type: ignore
+async def get_api_keys(current_address: str = Depends(get_current_address)) -> ApiKeyListResponse:
     """Get all API keys for a user."""
-    if current_address.lower() != address.lower():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="You can only view API keys for your own address"
-        )
     try:
-        api_keys = ApiKeyService.get_api_keys(address=address)
+        api_keys = ApiKeyService.get_api_keys(address=current_address)
 
         return ApiKeyListResponse(keys=api_keys)
     except Exception as e:
@@ -56,7 +47,7 @@ async def get_api_keys(address: str, current_address: str = Depends(get_current_
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
-@router.put("/id/{key_id}")  # type: ignore
+@router.put("/{key_id}")  # type: ignore
 async def update_api_key(
     key_id: uuid.UUID, api_key_update: ApiKeyUpdate, current_address: str = Depends(get_current_address)
 ) -> ApiKey:
@@ -99,7 +90,7 @@ async def update_api_key(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
-@router.delete("/id/{key_id}")  # type: ignore
+@router.delete("/{key_id}")  # type: ignore
 async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_current_address)) -> None:
     """Delete an API key."""
     try:
@@ -128,15 +119,18 @@ async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_c
 
 
 @router.post("/usage")  # type: ignore
-async def log_api_key_usage(usage_log: ApiKeyUsageLog) -> None:
+async def register_inference_call(usage_log: InferenceCallData) -> None:
     """Log API key usage."""
 
     # TODO: protect route to make it callable only by our models / load balancer
     try:
         # Now log the usage
-        success = ApiKeyService.log_api_key_usage(
+        success = ApiKeyService.register_inference_call(
             key=usage_log.key,
             credits_used=usage_log.credits_used,
+            input_tokens=usage_log.input_tokens,
+            output_tokens=usage_log.output_tokens,
+            model_name=usage_log.model_name,
         )
 
         if not success:
