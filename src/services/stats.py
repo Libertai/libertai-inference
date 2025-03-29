@@ -1,11 +1,11 @@
 from calendar import month_abbr
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 
-from src.interfaces.stats import DashboardStats, TokenStats
+from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
@@ -104,4 +104,157 @@ class StatsService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error retrieving dashboard statistics: {str(e)}",
+            )
+
+    @staticmethod
+    def get_usage_stats(user_address: str, start_date: date, end_date: date) -> UsageStats:
+        """
+        Get detailed usage statistics for a specific date range.
+
+        Args:
+            user_address: The address of the user
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            UsageStats object containing detailed usage statistics
+        """
+        try:
+            db = SessionLocal()
+
+            # Convert dates to datetime for database queries
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            # Add one day to end_date to make it inclusive
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+
+            # Get all user's API keys
+            api_keys = db.query(ApiKey).filter(ApiKey.user_address == user_address).all()
+            if not api_keys:
+                return UsageStats(
+                    inference_calls=0,
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    cost=0.0,
+                    daily_usage={},
+                    usage_by_model=[],
+                    usage_by_api_key=[],
+                )
+
+            api_key_ids = [key.id for key in api_keys]
+            api_key_lookup = {str(key.id): key.name for key in api_keys}
+
+            # Get overall statistics
+            overall_stats: Any = (
+                db.query(
+                    func.count(InferenceCall.id).label("calls"),
+                    func.sum(InferenceCall.credits_used).label("credits"),
+                    func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                    func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                )
+                .filter(
+                    InferenceCall.api_key_id.in_(api_key_ids),
+                    InferenceCall.used_at >= start_datetime,
+                    InferenceCall.used_at <= end_datetime,
+                )
+                .first()
+            )
+
+            # Get daily usage statistics
+            daily_stats = (
+                db.query(
+                    cast(InferenceCall.used_at, Date).label("date"),
+                    func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                    func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                )
+                .filter(
+                    InferenceCall.api_key_id.in_(api_key_ids),
+                    InferenceCall.used_at >= start_datetime,
+                    InferenceCall.used_at <= end_datetime,
+                )
+                .group_by(cast(InferenceCall.used_at, Date))
+                .all()
+            )
+
+            daily_usage = {}
+            for day_stat in daily_stats:
+                day_str = day_stat.date.strftime("%Y-%m-%d")
+                daily_usage[day_str] = DailyTokens(
+                    input_tokens=day_stat.input_tokens or 0, output_tokens=day_stat.output_tokens or 0
+                )
+
+            # Get usage by model
+            model_stats = (
+                db.query(
+                    InferenceCall.model_name.label("name"),
+                    func.count(InferenceCall.id).label("calls"),
+                    func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
+                    func.sum(InferenceCall.credits_used).label("cost"),
+                )
+                .filter(
+                    InferenceCall.api_key_id.in_(api_key_ids),
+                    InferenceCall.used_at >= start_datetime,
+                    InferenceCall.used_at <= end_datetime,
+                )
+                .group_by(InferenceCall.model_name)
+                .all()
+            )
+
+            usage_by_model = [
+                UsageByEntity(
+                    name=model.name,
+                    calls=model.calls or 0,
+                    total_tokens=model.total_tokens or 0,
+                    cost=float(model.cost or 0.0),
+                )
+                for model in model_stats
+            ]
+
+            # Get usage by API key
+            api_key_stats = (
+                db.query(
+                    InferenceCall.api_key_id.label("key_id"),
+                    func.count(InferenceCall.id).label("calls"),
+                    func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
+                    func.sum(InferenceCall.credits_used).label("cost"),
+                )
+                .filter(
+                    InferenceCall.api_key_id.in_(api_key_ids),
+                    InferenceCall.used_at >= start_datetime,
+                    InferenceCall.used_at <= end_datetime,
+                )
+                .group_by(InferenceCall.api_key_id)
+                .all()
+            )
+
+            usage_by_api_key = [
+                UsageByEntity(
+                    name=api_key_lookup.get(str(key.key_id), "Unknown"),
+                    calls=key.calls or 0,
+                    total_tokens=key.total_tokens or 0,
+                    cost=float(key.cost or 0.0),
+                )
+                for key in api_key_stats
+            ]
+
+            # Create the response
+            result = UsageStats(
+                inference_calls=overall_stats.calls or 0,
+                input_tokens=overall_stats.input_tokens or 0,
+                output_tokens=overall_stats.output_tokens or 0,
+                total_tokens=(overall_stats.input_tokens or 0) + (overall_stats.output_tokens or 0),
+                cost=float(overall_stats.credits or 0.0),
+                daily_usage=daily_usage,
+                usage_by_model=usage_by_model,
+                usage_by_api_key=usage_by_api_key,
+            )
+
+            db.close()
+            return result
+
+        except Exception as e:
+            logger.error(f"Error retrieving usage stats for {user_address}: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error retrieving usage statistics: {str(e)}",
             )
