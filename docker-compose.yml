@@ -24,7 +24,7 @@ services:
     container_name: libertai-inference
     restart: always
     ports:
-      - "8081:8000"
+      - "8083:8000"
     env_file:
       - .env
 

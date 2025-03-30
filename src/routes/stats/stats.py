@@ -1,4 +1,5 @@
 from datetime import date
+
 from fastapi import Depends, Query
 
 from src.interfaces.stats import DashboardStats, UsageStats
@@ -10,7 +11,7 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-@router.get("/dashboard", response_model=DashboardStats)
+@router.get("/dashboard", response_model=DashboardStats)  # type: ignore
 async def get_dashboard_stats(user_address: str = Depends(get_current_address)) -> DashboardStats:
     """
     Get dashboard statistics for the authenticated user:
@@ -25,15 +26,15 @@ async def get_dashboard_stats(user_address: str = Depends(get_current_address)) 
         raise
 
 
-@router.get("/usage", response_model=UsageStats)
+@router.get("/usage", response_model=UsageStats)  # type: ignore
 async def get_usage_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-    user_address: str = Depends(get_current_address)
+    user_address: str = Depends(get_current_address),
 ) -> UsageStats:
     """
     Get detailed usage statistics for a specific date range.
-    
+
     Statistics include:
     - Total number of inference calls
     - Total tokens (input and output)

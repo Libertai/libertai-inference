@@ -21,7 +21,7 @@ alembic = "^1.15.1"
 psycopg2-binary = "^2.9.10"
 python-dotenv = "^1.0.1"
 pyjwt = "^2.8.0"
-libertai-utils = { git = "git@github.com:Libertai/libertai-utils.git", rev = "main" }
+libertai-utils = "^0.0.14"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
