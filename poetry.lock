@@ -1541,26 +1541,22 @@ files = [
 
 [[package]]
 name = "libertai-utils"
-version = "0.0.13"
+version = "0.0.14"
 description = "LibertAI internal types and functions"
 optional = false
-python-versions = "^3.11"
+python-versions = "<4.0,>=3.11"
 groups = ["main"]
-files = []
-develop = false
+files = [
+    {file = "libertai_utils-0.0.14-py3-none-any.whl", hash = "sha256:80be5f596d3723825acffbd320e73b48a876a9e384e38801a5a7a44752e00555"},
+    {file = "libertai_utils-0.0.14.tar.gz", hash = "sha256:be5dd934cf71b54759d5caf27fdfb9f7d67fb1145f783c95a629d344bede6acc"},
+]
 
 [package.dependencies]
-eciespy = "^0.4.2"
-pydantic = "^2.10.6"
-pynacl = "^1.5.0"
-solders = "^0.22.0"
-web3 = "^7.10.0"
-
-[package.source]
-type = "git"
-url = "ssh://git@github.com/Libertai/libertai-utils.git"
-reference = "main"
-resolved_reference = "8b5c22d4a0432bb93de6eface23c262e6be8a62a"
+eciespy = ">=0.4.2,<0.5.0"
+pydantic = ">=2.10.6,<3.0.0"
+pynacl = ">=1.5.0,<2.0.0"
+solders = ">=0.22.0,<0.23.0"
+web3 = ">=7.10.0,<8.0.0"
 
 [[package]]
 name = "mako"
@@ -3345,4 +3341,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "6f659d44206c653fb07b206205f0c26bb6dae4e4d80d29220b05261a8f2c6458"
+content-hash = "ffd05baad0e59c1adcad463fed2b3417238ea1544595262526e2914902f45782"
