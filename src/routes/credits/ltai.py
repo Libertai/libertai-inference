@@ -113,8 +113,8 @@ def get_start_block() -> int:
             # Start from the block after the last processed one
             start_block = last_transaction.block_number + 1
         else:
-            # If no transactions with block numbers, start from recent blocks
-            start_block = w3.eth.block_number
+            # If no transactions with block numbers, start from recent blocks with a margin to include missed blocks between executions
+            start_block = w3.eth.block_number - 1000
 
         return start_block
     finally:

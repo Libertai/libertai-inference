@@ -176,12 +176,26 @@ class StatsService:
                 .all()
             )
 
-            daily_usage = {}
+            # Convert database results to dictionary for easier lookup
+            daily_data = {}
             for day_stat in daily_stats:
                 day_str = day_stat.date.strftime("%Y-%m-%d")
+                daily_data[day_str] = {
+                    "input_tokens": day_stat.input_tokens or 0,
+                    "output_tokens": day_stat.output_tokens or 0
+                }
+
+            # Generate all dates in the range and ensure they're all included
+            daily_usage = {}
+            current_date = start_date
+            while current_date <= end_date:
+                day_str = current_date.strftime("%Y-%m-%d")
+                day_data = daily_data.get(day_str, {"input_tokens": 0, "output_tokens": 0})
                 daily_usage[day_str] = DailyTokens(
-                    input_tokens=day_stat.input_tokens or 0, output_tokens=day_stat.output_tokens or 0
+                    input_tokens=day_data["input_tokens"], 
+                    output_tokens=day_data["output_tokens"]
                 )
+                current_date += timedelta(days=1)
 
             # Get usage by model
             model_stats = (

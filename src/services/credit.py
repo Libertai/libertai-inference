@@ -46,6 +46,13 @@ class CreditService:
                 db.add(user)
                 db.flush()  # Generate primary key
 
+            existing_transaction = (
+                db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+            )
+            if existing_transaction:
+                logger.warning(f"Transaction {transaction_hash} already processed, skipping")
+                return
+
             # Record transaction
             transaction = CreditTransaction(
                 transaction_hash=transaction_hash,
