@@ -15,7 +15,7 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-w3 = Web3(Web3.HTTPProvider("https://mainnet.base.org"))
+w3 = Web3(Web3.HTTPProvider(config.BASE_RPC_URL))
 
 
 code_dir = os.path.dirname(os.path.abspath(__file__))
