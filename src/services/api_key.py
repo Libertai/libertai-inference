@@ -1,6 +1,6 @@
 import uuid
 
-from src.interfaces.api_keys import FullApiKey, ApiKey
+from src.interfaces.api_keys import ApiKey, FullApiKey
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
@@ -280,7 +280,7 @@ class ApiKeyService:
             for key in api_keys:
                 # Create a detached copy with all needed attributes
                 detached_key = ApiKey(
-                    key=key.masked_key,  # Masked key for display
+                    key=key.key,  # Masked key for display
                     name=key.name,
                     user_address=key.user_address,
                     monthly_limit=key.monthly_limit,
@@ -297,7 +297,7 @@ class ApiKeyService:
             raise e
         finally:
             db.close()
-    
+
     @staticmethod
     def register_inference_call(
         key: str, credits_used: float, input_tokens: int, output_tokens: int, model_name: str
