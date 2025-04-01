@@ -1,18 +1,17 @@
 import uuid
 
 from fastapi import Depends, HTTPException, status
-
 from src.interfaces.api_keys import (
-    ApiKeyCreate,
-    ApiKeyUpdate,
-    InferenceCallData,
     ApiKey,
+    ApiKeyCreate,
     ApiKeyListResponse,
+    ApiKeyUpdate,
     FullApiKey,
+    InferenceCallData,
 )
 from src.routes.api_keys import router
 from src.services.api_key import ApiKeyService
-from src.services.auth import get_current_address
+from src.services.auth import get_current_address, verify_admin_token
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -118,9 +117,13 @@ async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_c
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
-@router.post("/usage")  # type: ignore
-async def register_inference_call(usage_log: InferenceCallData) -> None:
-    """Log API key usage."""
+@router.post("/admin/usage")  # type: ignore
+async def register_inference_call(usage_log: InferenceCallData, dependencies=[Depends(verify_admin_token)]) -> None:
+    """Log API key usage.
+
+    This endpoint is protected by admin authorization and requires
+    the X-Admin-Token header to match the ADMIN_SECRET environment variable.
+    """
 
     # TODO: protect route to make it callable only by our models / load balancer
     try:
@@ -141,4 +144,20 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
         raise
     except Exception as e:
         logger.error(f"Error logging API key usage: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+
+
+@router.get("/admin/list", dependencies=[Depends(verify_admin_token)])  # type: ignore
+async def get_all_api_keys() -> ApiKeyListResponse:
+    """
+    Get all API keys across all addresses.
+
+    This endpoint is protected by admin authorization and requires
+    the X-Admin-Token header to match the ADMIN_SECRET environment variable.
+    """
+    try:
+        api_keys = ApiKeyService.get_all_api_keys()
+        return ApiKeyListResponse(keys=api_keys)
+    except Exception as e:
+        logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status, Cookie
+from fastapi import Depends, HTTPException, status, Cookie, Header
 from pydantic import BaseModel
 
 from src.config import config
@@ -52,3 +52,22 @@ def verify_token(libertai_auth: str = Cookie(default=None)) -> TokenData:
 def get_current_address(token_data: Annotated[TokenData, Depends(verify_token)]) -> str:
     """Return the current wallet address from the token."""
     return token_data.address
+
+
+def verify_admin_token(x_admin_token: str = Header(...)) -> None:
+    """Verify the admin token from header."""
+    if not config.ADMIN_SECRET:
+        logger.error("ADMIN_SECRET not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin authentication not configured",
+        )
+        
+    if x_admin_token != config.ADMIN_SECRET:
+        logger.warning("Invalid admin token attempt")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin credentials",
+        )
+    
+    # If we got here, the token is valid

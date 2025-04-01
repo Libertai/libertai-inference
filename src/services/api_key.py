@@ -260,6 +260,45 @@ class ApiKeyService:
             db.close()
 
     @staticmethod
+    def get_all_api_keys() -> list[ApiKey]:
+        """
+        Get all API keys across all addresses.
+        This method is intended for admin use only.
+
+        Returns:
+            List of ApiKey objects for all users with all properties eagerly loaded
+            Keys are masked for security
+        """
+        logger.debug("Getting all API keys (admin request)")
+        db = SessionLocal()
+
+        try:
+            api_keys = db.query(ApiKeyDB).all()
+
+            # Create fully detached copies
+            result = []
+            for key in api_keys:
+                # Create a detached copy with all needed attributes
+                detached_key = ApiKey(
+                    key=key.masked_key,  # Masked key for display
+                    name=key.name,
+                    user_address=key.user_address,
+                    monthly_limit=key.monthly_limit,
+                    id=key.id,
+                    created_at=key.created_at,
+                    is_active=key.is_active,
+                )
+                result.append(detached_key)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
+            raise e
+        finally:
+            db.close()
+    
+    @staticmethod
     def register_inference_call(
         key: str, credits_used: float, input_tokens: int, output_tokens: int, model_name: str
     ) -> bool:
