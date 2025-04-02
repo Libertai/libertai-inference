@@ -260,35 +260,30 @@ class ApiKeyService:
             db.close()
 
     @staticmethod
-    def get_all_api_keys() -> list[ApiKey]:
+    def get_admin_all_api_keys() -> list[str]:
         """
-        Get all API keys across all addresses.
+        Get all API keys across all addresses that have at least 0.02 credits available.
         This method is intended for admin use only.
 
         Returns:
-            List of ApiKey objects for all users with all properties eagerly loaded
-            Keys are masked for security
+            List of API key strings (unmasked) that meet the requirements
         """
         logger.debug("Getting all API keys (admin request)")
         db = SessionLocal()
 
         try:
-            api_keys = db.query(ApiKeyDB).all()
+            api_keys = db.query(ApiKeyDB).where(ApiKeyDB.is_active).all()
 
-            # Create fully detached copies
+            # Filter keys with sufficient credits available
             result = []
             for key in api_keys:
-                # Create a detached copy with all needed attributes
-                detached_key = ApiKey(
-                    key=key.key,  # Masked key for display
-                    name=key.name,
-                    user_address=key.user_address,
-                    monthly_limit=key.monthly_limit,
-                    id=key.id,
-                    created_at=key.created_at,
-                    is_active=key.is_active,
-                )
-                result.append(detached_key)
+                # Check if the key has at least 0.02 credits available
+                effective_limit = key.effective_limit_remaining
+                if effective_limit < 0.02:
+                    continue
+
+                # Add the unmasked key to the result
+                result.append(key.key)
 
             return result
 
