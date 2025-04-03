@@ -127,11 +127,14 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
     the X-Admin-Token header to match the ADMIN_SECRET environment variable.
     """
 
+    # TODO: real calculation
+    credits_used = 0.05
+
     try:
         # Now log the usage
         success = ApiKeyService.register_inference_call(
             key=usage_log.key,
-            credits_used=usage_log.credits_used,
+            credits_used=credits_used,
             input_tokens=usage_log.input_tokens,
             output_tokens=usage_log.output_tokens,
             model_name=usage_log.model_name,
