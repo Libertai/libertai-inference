@@ -17,7 +17,6 @@ class ApiKeyUpdate(BaseModel):
 
 class InferenceCallData(BaseModel):
     key: str
-    credits_used: float
     input_tokens: int
     output_tokens: int
     model_name: str
