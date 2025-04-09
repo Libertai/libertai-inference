@@ -1,15 +1,14 @@
 import uuid
 
 from fastapi import Depends, HTTPException, status
-
 from src.interfaces.api_keys import (
     ApiKey,
+    ApiKeyAdminListResponse,
     ApiKeyCreate,
     ApiKeyListResponse,
     ApiKeyUpdate,
     FullApiKey,
     InferenceCallData,
-    ApiKeyAdminListResponse,
 )
 from src.routes.api_keys import router
 from src.services.api_key import ApiKeyService
@@ -127,7 +126,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
     the X-Admin-Token header to match the ADMIN_SECRET environment variable.
     """
 
-    # TODO: real calculation
+    # TODO: real calculation using input/output tokens - cached tokens ....
     credits_used = 0.05
 
     try:
@@ -137,6 +136,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
             credits_used=credits_used,
             input_tokens=usage_log.input_tokens,
             output_tokens=usage_log.output_tokens,
+            cached_tokens=usage_log.cached_tokens,
             model_name=usage_log.model_name,
         )
 
