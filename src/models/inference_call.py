@@ -27,7 +27,7 @@ class InferenceCall(Base):
     credits_used: Mapped[float] = mapped_column(Float, nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     used_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     model_name: Mapped[str] = mapped_column(String, nullable=False)
 
