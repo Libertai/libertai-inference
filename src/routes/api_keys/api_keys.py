@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import Depends, HTTPException, status
+
 from src.interfaces.api_keys import (
     ApiKey,
     ApiKeyAdminListResponse,
@@ -11,6 +12,7 @@ from src.interfaces.api_keys import (
     InferenceCallData,
 )
 from src.routes.api_keys import router
+from src.services.aleph import aleph_service
 from src.services.api_key import ApiKeyService
 from src.services.auth import get_current_address, verify_admin_token
 from src.utils.logger import setup_logger
@@ -126,10 +128,14 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
     the X-Admin-Token header to match the ADMIN_SECRET environment variable.
     """
 
-    # TODO: real calculation using input/output tokens - cached tokens ....
-    credits_used = 0.05
-
     try:
+        credits_used = await aleph_service.calculate_price(
+            model_id=usage_log.model_name,
+            input_tokens=usage_log.input_tokens,
+            output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+        )
+        logger.debug(f"Calculated {credits_used} credits for model {usage_log.model_name}")
+
         # Now log the usage
         success = ApiKeyService.register_inference_call(
             key=usage_log.key,
