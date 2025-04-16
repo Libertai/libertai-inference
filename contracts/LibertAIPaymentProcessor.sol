@@ -146,13 +146,17 @@ contract LibertAIPaymentProcessor is Ownable2Step {
     /**
      * @dev Processes the USDC balance by swapping it for LTAI via Uniswap and then performing the burn/send mechanism
      * @param usdcAmount The amount of USDC in the balance to process
+     * @param ltaiAmountMinimum The minimum amount of LTAI the swap should give
      *
      * This function:
      * 1. Swaps USDC → WETH → LTAI using Uniswap V3
      * 2. Processes the resulting LTAI tokens through the burn/send flow
      * Only callable by the contract owner
      */
-    function processUSDCBalance(uint256 usdcAmount) external payable onlyOwner {
+    function processUSDCBalance(
+        uint256 usdcAmount,
+        uint256 ltaiAmountMinimum
+    ) external payable onlyOwner {
         uint256 _usdcAmount = usdcAmount;
 
         require(_usdcAmount != 0, "USDC amount must be >0");
@@ -176,7 +180,7 @@ contract LibertAIPaymentProcessor is Ownable2Step {
                 ),
                 recipient: address(this),
                 amountIn: _usdcAmount,
-                amountOutMinimum: 0 // No minimum output enforced
+                amountOutMinimum: ltaiAmountMinimum
             });
 
         // Execute the swap and get the amount of LTAI received
