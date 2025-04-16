@@ -1,2 +1,3 @@
-# libertai-subscriptions
-Backend to handle subscriptions with different providers on LibertAI
+# libertai-inference
+
+Backend to handle inference stats & credits on LibertAI

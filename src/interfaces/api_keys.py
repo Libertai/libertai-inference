@@ -19,7 +19,7 @@ class InferenceCallData(BaseModel):
     key: str
     input_tokens: int
     output_tokens: int
-    cached_tokens: int | None = None
+    cached_tokens: int = 0
     model_name: str
 
 
