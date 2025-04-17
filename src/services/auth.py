@@ -32,7 +32,8 @@ def verify_token(libertai_auth: str = Cookie(default=None)) -> TokenData:
         )
 
     try:
-        payload = jwt.decode(libertai_auth, config.JWT_SECRET, algorithms=["HS256"])
+        # Added options to explicitly verify expiration of tokens
+        payload = jwt.decode(libertai_auth, config.JWT_SECRET, algorithms=["HS256"], options={"verify_exp": True})
         address: str | None = payload.get("sub")
         if address is None:
             raise HTTPException(
@@ -40,6 +41,11 @@ def verify_token(libertai_auth: str = Cookie(default=None)) -> TokenData:
                 detail="Invalid authentication credentials",
             )
         token_data = TokenData(address=address)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has expired",
+        )
     except jwt.PyJWTError as e:
         logger.error(f"JWT verification error: {str(e)}")
         raise HTTPException(
@@ -62,12 +68,12 @@ def verify_admin_token(x_admin_token: str = Header(...)) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin authentication not configured",
         )
-        
+
     if x_admin_token != config.ADMIN_SECRET:
         logger.warning("Invalid admin token attempt")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin credentials",
         )
-    
+
     # If we got here, the token is valid

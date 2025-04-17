@@ -18,3 +18,8 @@ class AuthLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     address: str
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+    address: str | None = None

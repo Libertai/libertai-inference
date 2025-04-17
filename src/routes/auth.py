@@ -1,12 +1,18 @@
 import fastapi
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Cookie
 from libertai_utils.chains.ethereum import format_eth_address
 from libertai_utils.chains.index import is_signature_valid
 from libertai_utils.interfaces.subscription import SubscriptionChain
 
 from src.config import config
-from src.interfaces.auth import AuthLoginRequest, AuthLoginResponse, AuthMessageRequest, AuthMessageResponse
-from src.services.auth import create_access_token
+from src.interfaces.auth import (
+    AuthLoginRequest,
+    AuthLoginResponse,
+    AuthMessageRequest,
+    AuthMessageResponse,
+    AuthStatusResponse,
+)
+from src.services.auth import create_access_token, verify_token
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -53,3 +59,17 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
     logger.debug(f"Generated access token for address {request.address}")
 
     return AuthLoginResponse(access_token=access_token, address=request.address)
+
+
+@router.get("/status")
+async def check_auth_status(libertai_auth: str = Cookie(default=None)) -> AuthStatusResponse:
+    """Check if the user is authenticated with a valid token."""
+    if not libertai_auth:
+        return AuthStatusResponse(authenticated=False)
+
+    try:
+        token_data = verify_token(libertai_auth)
+        return AuthStatusResponse(authenticated=True, address=token_data.address)
+    except HTTPException:
+        # If token verification fails, return not authenticated
+        return AuthStatusResponse(authenticated=False)
