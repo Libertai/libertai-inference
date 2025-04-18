@@ -33,6 +33,10 @@ class CreditService:
         Returns:
            None
         """
+
+        # Apply the boost for LTAI payments
+        amount = amount * 100 / 80 if provider == CreditTransactionProvider.libertai else amount
+
         logger.debug(
             f"Adding {amount} credits to address {address} from tx {transaction_hash} in block {block_number}"
         )
