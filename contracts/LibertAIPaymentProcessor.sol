@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
@@ -30,7 +31,7 @@ interface ISwapRouter02 is IUniswapV3SwapCallback {
  * It processes payments received directly in LTAI tokens, burning a percentage and sending the rest to a recipient (team wallet)
  * Also supports receiving USDC (payments through external providers) and converting it to LTAI through Uniswap V3 to get a similar result than stated previously.
  */
-contract LibertAIPaymentProcessor is Ownable2Step {
+contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
     // Token contracts
     IERC20 public immutable LTAI;
     IERC20 public immutable USDC;
@@ -44,6 +45,9 @@ contract LibertAIPaymentProcessor is Ownable2Step {
     // Payment settings
     address public recipient; // Address that receives the non-burned portion of payments
     uint256 public burnPercentage; // Percentage of tokens to burn (0-100)
+
+    // @notice Role allowed to process balances
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     /**
      * @dev Emitted when a payment is processed
@@ -98,6 +102,8 @@ contract LibertAIPaymentProcessor is Ownable2Step {
         uniswapRouter = ISwapRouter02(_uniswapRouter);
         wethLtaiPoolFee = _wethLtaiPoolFee;
         usdcWethPoolFee = _usdcWethPoolFee;
+
+        _grantRole(ADMIN_ROLE, msg.sender);
     }
 
     /**
@@ -151,12 +157,12 @@ contract LibertAIPaymentProcessor is Ownable2Step {
      * This function:
      * 1. Swaps USDC → WETH → LTAI using Uniswap V3
      * 2. Processes the resulting LTAI tokens through the burn/send flow
-     * Only callable by the contract owner
+     * Only callable by admins
      */
     function processUSDCBalance(
         uint256 usdcAmount,
         uint256 ltaiAmountMinimum
-    ) external payable onlyOwner {
+    ) external payable onlyRole(ADMIN_ROLE) {
         uint256 _usdcAmount = usdcAmount;
 
         require(_usdcAmount != 0, "USDC amount must be >0");
@@ -200,13 +206,17 @@ contract LibertAIPaymentProcessor is Ownable2Step {
     /**
      * @dev Processes the ETH balance by swapping it for LTAI via Uniswap and then performing the burn/send mechanism
      * @param ethAmount The amount of ETH in the balance to process
+     * @param ltaiAmountMinimum The minimum amount of LTAI the swap should give
      *
      * This function:
      * 1. Swaps WETH → LTAI using Uniswap V3
      * 2. Processes the resulting LTAI tokens through the burn/send flow
-     * Only callable by the contract owner
+     * Only callable by admins
      */
-    function processETHBalance(uint256 ethAmount) external payable onlyOwner {
+    function processETHBalance(
+        uint256 ethAmount,
+        uint256 ltaiAmountMinimum
+    ) external payable onlyRole(ADMIN_ROLE) {
         uint256 _ethAmount = ethAmount;
 
         require(_ethAmount != 0, "ETH amount must be >0");
@@ -222,7 +232,7 @@ contract LibertAIPaymentProcessor is Ownable2Step {
                 ),
                 recipient: address(this),
                 amountIn: _ethAmount,
-                amountOutMinimum: 0 // No minimum output enforced
+                amountOutMinimum: ltaiAmountMinimum
             });
 
         // Execute the swap and get the amount of LTAI received
@@ -291,5 +301,23 @@ contract LibertAIPaymentProcessor is Ownable2Step {
         require(_newRecipient != address(0), "Invalid recipient address");
         recipient = _newRecipient;
         emit RecipientUpdated(_newRecipient);
+    }
+
+    /**
+     * @dev Add a new admin
+     * @param newAdmin The new admin address
+     * Only callable by the contract owner
+     */
+    function addAdmin(address newAdmin) external onlyOwner {
+        _grantRole(ADMIN_ROLE, newAdmin);
+    }
+
+    /**
+     * @dev Remove an admin
+     * @param admin The new admin address
+     * Only callable by the contract owner
+     */
+    function removeAdmin(address admin) external onlyOwner {
+        _revokeRole(ADMIN_ROLE, admin);
     }
 }
