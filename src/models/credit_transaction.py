@@ -1,7 +1,8 @@
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean
+from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -14,7 +15,10 @@ if TYPE_CHECKING:
 class CreditTransaction(Base):
     __tablename__ = "credit_transactions"
 
-    transaction_hash: Mapped[str] = mapped_column(String, primary_key=True)  # Unique transaction hash
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)  # Primary key UUID
+    transaction_hash: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True
+    )  # Optional transaction hash
     address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     amount_left: Mapped[float] = mapped_column(
@@ -32,11 +36,11 @@ class CreditTransaction(Base):
 
     def __init__(
         self,
-        transaction_hash: str,
         address: str,
         amount: float,
         amount_left: float,
         provider: str,
+        transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
         is_active: bool = True,
@@ -55,9 +59,9 @@ class CreditTransaction(Base):
         CheckConstraint("amount >= 0", name="check_amount_non_negative"),
         CheckConstraint("amount_left >= 0", name="check_amount_left_non_negative"),
         CheckConstraint("amount_left <= amount", name="check_amount_left_not_exceeding_value"),
-        CheckConstraint("provider IN ('libertai', 'thirdweb')", name="check_provider_choices"),
+        CheckConstraint("provider IN ('libertai', 'thirdweb', 'voucher')", name="check_provider_choices"),
         CheckConstraint(
-            "(provider = 'thirdweb') OR (provider = 'libertai' AND block_number IS NOT NULL)",
+            "(provider = 'thirdweb' OR provider = 'voucher') OR (provider = 'libertai' AND block_number IS NOT NULL)",
             name="check_block_number_required_for_provider_libertai",
         ),
     )

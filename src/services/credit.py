@@ -15,10 +15,10 @@ class CreditService:
         provider: CreditTransactionProvider,
         address: str,
         amount: float,
-        transaction_hash: str,
+        transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         """
         Add credits to a user, creating the user if they don't exist.
 
@@ -26,20 +26,24 @@ class CreditService:
             provider: The provider used in the transaction
             address: User's blockchain address
             amount: USD amount to add
-            transaction_hash: Transaction hash for recording the transaction
+            transaction_hash: Transaction hash for recording the transaction (optional for vouchers)
             block_number: The block number this transaction was processed in
             expired_at: Optional expiration date for the credits
 
         Returns:
-           None
+           Boolean indicating if the operation was successful
         """
 
         # Apply the boost for LTAI payments
         amount = amount * 100 / 80 if provider == CreditTransactionProvider.libertai else amount
 
-        logger.debug(
-            f"Adding {amount} credits to address {address} from tx {transaction_hash} in block {block_number}"
-        )
+        log_msg = f"Adding {amount} credits to address {address}"
+        if transaction_hash:
+            log_msg += f" from tx {transaction_hash}"
+        if block_number:
+            log_msg += f" in block {block_number}"
+        logger.debug(log_msg)
+
         db = SessionLocal()
 
         try:
@@ -50,12 +54,14 @@ class CreditService:
                 db.add(user)
                 db.flush()  # Generate primary key
 
-            existing_transaction = (
-                db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
-            )
-            if existing_transaction:
-                logger.warning(f"Transaction {transaction_hash} already processed, skipping")
-                return
+            # Check if transaction already exists (if a hash was provided)
+            if transaction_hash:
+                existing_transaction = (
+                    db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+                )
+                if existing_transaction:
+                    logger.warning(f"Transaction {transaction_hash} already processed, skipping")
+                    return False
 
             # Record transaction
             transaction = CreditTransaction(
@@ -70,6 +76,7 @@ class CreditService:
             )
             db.add(transaction)
             db.commit()
+            return True
 
         except Exception as e:
             db.rollback()
@@ -159,5 +166,75 @@ class CreditService:
         except Exception as e:
             logger.error(f"Error getting balance for {address}: {str(e)}", exc_info=True)
             return 0
+        finally:
+            db.close()
+
+    @staticmethod
+    def get_vouchers(address: str) -> list[CreditTransaction]:
+        """
+        Get all voucher transactions for a user.
+
+        Args:
+            address: User's blockchain address
+
+        Returns:
+            List of voucher credit transactions
+        """
+        db = SessionLocal()
+
+        try:
+            vouchers = (
+                db.query(CreditTransaction)
+                .filter(
+                    CreditTransaction.address == address,
+                    CreditTransaction.provider == CreditTransactionProvider.voucher.value,
+                )
+                .order_by(CreditTransaction.created_at.desc())
+                .all()
+            )
+            return vouchers
+
+        except Exception as e:
+            logger.error(f"Error getting vouchers for {address}: {str(e)}", exc_info=True)
+            return []
+        finally:
+            db.close()
+
+    @staticmethod
+    def change_voucher_expiration_date(voucher_id: str, new_expiration: datetime | None) -> bool:
+        """
+        Change the expiration date of a voucher.
+
+        Args:
+            voucher_id: UUID of the voucher transaction
+            new_expiration: New expiration date
+        Returns:
+            Boolean indicating if the operation was successful
+        """
+        db = SessionLocal()
+
+        try:
+            voucher = (
+                db.query(CreditTransaction)
+                .filter(
+                    CreditTransaction.is_active == True,  # noqa: E712
+                    CreditTransaction.id == voucher_id,
+                    CreditTransaction.provider == CreditTransactionProvider.voucher.value,
+                )
+                .first()
+            )
+
+            if not voucher:
+                logger.warning(f"Voucher with ID {voucher_id} not found or not a voucher or already expired")
+                return False
+
+            voucher.expired_at = new_expiration
+            db.commit()
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error expiring voucher {voucher_id}: {str(e)}", exc_info=True)
+            return False
         finally:
             db.close()

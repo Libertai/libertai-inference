@@ -1,8 +1,8 @@
 """Setup
 
-Revision ID: 7d265a4eacf9
+Revision ID: e0b3ca5902de
 Revises: 
-Create Date: 2025-03-30 02:08:13.948451
+Create Date: 2025-04-22 18:17:11.005165
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '7d265a4eacf9'
+revision: str = 'e0b3ca5902de'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -40,7 +40,8 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_api_keys_key'), 'api_keys', ['key'], unique=True)
     op.create_table('credit_transactions',
-    sa.Column('transaction_hash', sa.String(), nullable=False),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('transaction_hash', sa.String(), nullable=True),
     sa.Column('address', sa.String(), nullable=False),
     sa.Column('amount', sa.Float(), nullable=False),
     sa.Column('amount_left', sa.Float(), nullable=False),
@@ -49,13 +50,14 @@ def upgrade() -> None:
     sa.Column('created_at', sa.TIMESTAMP(), nullable=False),
     sa.Column('expired_at', sa.TIMESTAMP(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.CheckConstraint("(provider = 'thirdweb') OR (provider = 'libertai' AND block_number IS NOT NULL)", name='check_block_number_required_for_provider_libertai'),
-    sa.CheckConstraint("provider IN ('libertai', 'thirdweb')", name='check_provider_choices'),
+    sa.CheckConstraint("(provider = 'thirdweb' OR provider = 'voucher') OR (provider = 'libertai' AND block_number IS NOT NULL)", name='check_block_number_required_for_provider_libertai'),
+    sa.CheckConstraint("provider IN ('libertai', 'thirdweb', 'voucher')", name='check_provider_choices'),
     sa.CheckConstraint('amount >= 0', name='check_amount_non_negative'),
     sa.CheckConstraint('amount_left <= amount', name='check_amount_left_not_exceeding_value'),
     sa.CheckConstraint('amount_left >= 0', name='check_amount_left_non_negative'),
     sa.ForeignKeyConstraint(['address'], ['users.address'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('transaction_hash')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('transaction_hash')
     )
     op.create_table('inference_calls',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -63,6 +65,7 @@ def upgrade() -> None:
     sa.Column('credits_used', sa.Float(), nullable=False),
     sa.Column('input_tokens', sa.Integer(), nullable=False),
     sa.Column('output_tokens', sa.Integer(), nullable=False),
+    sa.Column('cached_tokens', sa.Integer(), nullable=False),
     sa.Column('used_at', sa.TIMESTAMP(), nullable=False),
     sa.Column('model_name', sa.String(), nullable=False),
     sa.CheckConstraint('credits_used >= 0', name='check_credits_used_non_negative'),

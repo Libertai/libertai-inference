@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -21,6 +22,7 @@ class _Config:
     IS_DEVELOPMENT: bool
 
     ADMIN_SECRET: str
+    VOUCHERS_PASSWORDS: list[str]
 
     def __init__(self):
         load_dotenv()
@@ -41,6 +43,7 @@ class _Config:
         self.IS_DEVELOPMENT = os.getenv("IS_DEVELOPMENT", "False").lower() == "true"
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+        self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
 
 
 config = _Config()

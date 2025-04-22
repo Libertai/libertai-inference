@@ -45,7 +45,7 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
             tx.is_active = False
             transactions_response.append(
                 ExpiredCreditTransaction(
-                    transaction_hash=tx.transaction_hash, address=tx.address, expired_at=tx.expired_at
+                    id=str(tx.id), transaction_hash=tx.transaction_hash, address=tx.address, expired_at=tx.expired_at
                 )
             )
         db.commit()
