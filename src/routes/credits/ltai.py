@@ -23,7 +23,7 @@ with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") a
     PAYMENT_PROCESSOR_CONTRACT_ABI = json.load(abi_file)
 
 
-@scheduler.scheduled_job("interval", seconds=20)
+@scheduler.scheduled_job("interval", seconds=60)
 @router.post("/ltai/process", description="Process credit purchase with $LTAI transactions")  # type: ignore
 async def process_ltai_transactions() -> list[str]:
     processed_transactions: list[str] = []
