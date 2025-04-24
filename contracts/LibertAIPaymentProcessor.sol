@@ -138,7 +138,7 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
         );
 
         // Burn the specified percentage of tokens
-        ERC20Burnable(address(LTAI)).burnFrom(msg.sender, amountToBurn);
+        ERC20Burnable(address(LTAI)).burn(amountToBurn);
 
         // Send the remaining tokens to the recipient
         require(
@@ -164,6 +164,7 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
         uint256 ltaiAmountMinimum
     ) external payable onlyRole(ADMIN_ROLE) {
         uint256 _usdcAmount = usdcAmount;
+        uint256 _ltaiAmountMinimum = ltaiAmountMinimum;
 
         require(_usdcAmount != 0, "USDC amount must be >0");
         require(
@@ -186,7 +187,7 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
                 ),
                 recipient: address(this),
                 amountIn: _usdcAmount,
-                amountOutMinimum: ltaiAmountMinimum
+                amountOutMinimum: _ltaiAmountMinimum
             });
 
         // Execute the swap and get the amount of LTAI received
@@ -218,6 +219,7 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
         uint256 ltaiAmountMinimum
     ) external payable onlyRole(ADMIN_ROLE) {
         uint256 _ethAmount = ethAmount;
+        uint256 _ltaiAmountMinimum = ltaiAmountMinimum;
 
         require(_ethAmount != 0, "ETH amount must be >0");
         require(address(this).balance >= _ethAmount, "Not enough ETH");
@@ -232,7 +234,7 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
                 ),
                 recipient: address(this),
                 amountIn: _ethAmount,
-                amountOutMinimum: ltaiAmountMinimum
+                amountOutMinimum: _ltaiAmountMinimum
             });
 
         // Execute the swap and get the amount of LTAI received
