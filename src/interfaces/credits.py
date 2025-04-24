@@ -31,12 +31,19 @@ class ExpiredCreditTransactionsResponse(BaseModel):
     transactions: list[ExpiredCreditTransaction]
 
 
-class ThirdwebTransactionDetails(BaseModel):
+class ThirdwebToken(BaseModel):
+    chainId: int
+    address: str
+    symbol: str
+    name: str
+    decimals: int
+    priceUsd: float
+    iconUri: str
+
+
+class ThirdwebTransaction(BaseModel):
     transactionHash: str
-    amountWei: str
-    amount: str
-    amountUSDCents: int
-    completedAt: str
+    chainId: int
 
 
 class ThirdwebPurchaseData(BaseModel):
@@ -44,11 +51,21 @@ class ThirdwebPurchaseData(BaseModel):
 
 
 class ThirdwebBuyWithCryptoWebhook(BaseModel):
-    swapType: str
-    source: ThirdwebTransactionDetails
+    transactionId: str
+    paymentId: str
+    clientId: str
+    action: Literal["BUY"]
     status: Literal["COMPLETED", "PENDING"]
-    toAddress: str
-    destination: ThirdwebTransactionDetails | None = None
+    originToken: ThirdwebToken
+    originAmount: str
+    destinationToken: ThirdwebToken
+    destinationAmount: str
+    sender: str
+    receiver: str
+    type: str
+    transactions: list[ThirdwebTransaction]
+    developerFeeBps: int
+    developerFeeRecipient: str
     purchaseData: ThirdwebPurchaseData
 
 

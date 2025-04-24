@@ -1,10 +1,9 @@
 import hashlib
 import hmac
 import time
-from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, Header, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from web3 import Web3
 
 from src.config import config
@@ -20,13 +19,7 @@ MAX_WEBHOOK_AGE = 300
 
 
 class ThirdwebWebhookPayload(BaseModel):
-    data: Dict[str, Any] = Field(...)
-
-    @property
-    def buy_with_crypto_status(self) -> Optional[ThirdwebBuyWithCryptoWebhook]:
-        if "buyWithCryptoStatus" in self.data:
-            return ThirdwebBuyWithCryptoWebhook(**self.data["buyWithCryptoStatus"])
-        return None
+    data: ThirdwebBuyWithCryptoWebhook
 
 
 @router.post("/thirdweb/webhook", description="Receive webhooks from Thirdweb")  # type: ignore
@@ -89,25 +82,28 @@ async def thirdweb_webhook(
 
     logger.debug(f"Received Thirdweb webhook: {payload.model_dump_json()}")
 
-    data = payload.buy_with_crypto_status
+    data = payload.data
     if data is None:
         raise HTTPException(status_code=400, detail="Unsupported webhook type")
 
-    if data.status != "COMPLETED" or data.destination is None:
+    if data.status != "COMPLETED":
         logger.debug(f"Ignoring non-completed transaction: {data.status}")
         return
 
-    if Web3.to_checksum_address(data.toAddress) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT:
-        logger.warning(f"Transaction not destined for LTAI payment processor ({data.toAddress}), ignoring it")
+    if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT:
+        logger.warning(f"Transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
 
     try:
         # Extract transaction details
-        transaction_hash = data.destination.transactionHash
+        transaction_hash = data.transactions[0].transactionHash if data.transactions else None
         sender_address = data.purchaseData.userAddress
 
-        # Convert amount from cents to dollars
-        amount_usd = data.destination.amountUSDCents / 100
+        # Calculate USD amount from destination token amount and price
+        # The destination token should be USDC/USDT with a price close to $1
+        amount_usd = (
+            float(data.destinationAmount) / (10**data.destinationToken.decimals) * data.destinationToken.priceUsd
+        )
 
         # Add credits to the user's account
         CreditService.add_credits(
