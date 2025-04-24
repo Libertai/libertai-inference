@@ -6,8 +6,6 @@ from web3 import Web3
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider
-from src.models.base import SessionLocal
-from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
 from src.utils.cron import scheduler, ltai_payments_lock
@@ -34,7 +32,8 @@ async def process_ltai_transactions() -> list[str]:
     async with ltai_payments_lock:
         contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
 
-        from_block = get_start_block()
+        # Start from recent blocks with a margin to include missed blocks between executions or downtimes
+        from_block = w3.eth.block_number - 1000
 
         events = contract.events.PaymentProcessed.get_logs(from_block=from_block)
 
@@ -92,30 +91,3 @@ def get_token_price() -> float:
     except requests.RequestException as e:
         logger.error(f"Failed to fetch token price: {str(e)}")
         raise e
-
-
-def get_start_block() -> int:
-    """
-    Get the starting block for transaction processing.
-    Returns the block after the most recent transaction in DB or defaults to current block.
-    """
-    db = SessionLocal()
-    try:
-        # Find the most recent transaction and get its block number
-        last_transaction = (
-            db.query(CreditTransaction)
-            .filter(CreditTransaction.block_number.isnot(None))
-            .order_by(CreditTransaction.block_number.desc())
-            .first()
-        )
-
-        if last_transaction and last_transaction.block_number is not None:
-            # Start from the block after the last processed one
-            start_block = last_transaction.block_number + 1
-        else:
-            # If no transactions with block numbers, start from recent blocks with a margin to include missed blocks between executions
-            start_block = w3.eth.block_number - 1000
-
-        return start_block
-    finally:
-        db.close()
