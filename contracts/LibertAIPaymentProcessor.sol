@@ -250,6 +250,29 @@ contract LibertAIPaymentProcessor is Ownable2Step, AccessControl {
     }
 
     /**
+     * @dev Allows an admin to withdraw any ERC20 token (excluding USDC) to a specified address
+     * @param token The ERC20 token to withdraw
+     * @param to The address to send the tokens to
+     * @param amount The amount of tokens to withdraw
+     * Only callable by admins
+     */
+    function processERC20Balance(
+        IERC20 token,
+        address to,
+        uint256 amount
+    ) external onlyRole(ADMIN_ROLE) {
+        require(address(token) != address(USDC), "Cannot withdraw USDC");
+        require(to != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than 0");
+        require(
+            token.balanceOf(address(this)) >= amount,
+            "Insufficient token balance"
+        );
+
+        require(token.transfer(to, amount), "Token transfer failed");
+    }
+
+    /**
      * @dev Fallback function to receive ETH
      * This allows the contract to receive ETH payments directly
      */
