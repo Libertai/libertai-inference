@@ -57,24 +57,23 @@ class ApiKey(Base):
         """
         from src.models.inference_call import InferenceCall
 
-        db = self._session if hasattr(self, "_session") else SessionLocal()
+        with SessionLocal() as db:
+            # Get current month's usage using SQL aggregation
+            now = datetime.now()
+            first_day = datetime(now.year, now.month, 1)
+            next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
 
-        # Get current month's usage using SQL aggregation
-        now = datetime.now()
-        first_day = datetime(now.year, now.month, 1)
-        next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
-
-        result = (
-            db.query(sql_func.sum(InferenceCall.credits_used))
-            .filter(
-                InferenceCall.api_key_id == self.id,
-                InferenceCall.used_at >= first_day,
-                InferenceCall.used_at < next_month,
+            result = (
+                db.query(sql_func.sum(InferenceCall.credits_used))
+                .filter(
+                    InferenceCall.api_key_id == self.id,
+                    InferenceCall.used_at >= first_day,
+                    InferenceCall.used_at < next_month,
+                )
+                .scalar()
             )
-            .scalar()
-        )
 
-        return float(result or 0.0)
+            return float(result or 0.0)
 
     @property
     def effective_limit_remaining(self) -> float:

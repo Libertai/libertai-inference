@@ -22,39 +22,40 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
     This can be called manually or via scheduled job.
     """
 
-    db = SessionLocal()
-
     try:
-        # Find transactions that have expired but still active
-        expired_transactions: list[CreditTransaction] = (
-            db.query(CreditTransaction)
-            .filter(
-                CreditTransaction.is_active == True,  # noqa: E712
-                CreditTransaction.expired_at.isnot(None),
-                CreditTransaction.expired_at < datetime.now(),
-            )
-            .all()
-        )
-
-        if not expired_transactions:
-            return ExpiredCreditTransactionsResponse(updated_count=0, transactions=[])
-
-        # Update expired transactions
-        transactions_response = []
-        for tx in expired_transactions:
-            tx.is_active = False
-            transactions_response.append(
-                ExpiredCreditTransaction(
-                    id=str(tx.id), transaction_hash=tx.transaction_hash, address=tx.address, expired_at=tx.expired_at
+        with SessionLocal() as db:
+            # Find transactions that have expired but still active
+            expired_transactions: list[CreditTransaction] = (
+                db.query(CreditTransaction)
+                .filter(
+                    CreditTransaction.is_active == True,  # noqa: E712
+                    CreditTransaction.expired_at.isnot(None),
+                    CreditTransaction.expired_at < datetime.now(),
                 )
+                .all()
             )
-        db.commit()
-        return ExpiredCreditTransactionsResponse(
-            updated_count=len(expired_transactions), transactions=transactions_response
-        )
+
+            if not expired_transactions:
+                return ExpiredCreditTransactionsResponse(updated_count=0, transactions=[])
+
+            # Update expired transactions
+            transactions_response = []
+            for tx in expired_transactions:
+                tx.is_active = False
+                transactions_response.append(
+                    ExpiredCreditTransaction(
+                        id=str(tx.id),
+                        transaction_hash=tx.transaction_hash,
+                        address=tx.address,
+                        expired_at=tx.expired_at,
+                    )
+                )
+            db.commit()
+            return ExpiredCreditTransactionsResponse(
+                updated_count=len(expired_transactions), transactions=transactions_response
+            )
 
     except Exception as e:
-        db.rollback()
         logger.error(f"Error updating expired transactions: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating expired transactions: {str(e)}"

@@ -30,15 +30,14 @@ class User(Base):
         """
         from src.models.credit_transaction import CreditTransaction
 
-        db = self._session if hasattr(self, "_session") else SessionLocal()
+        with SessionLocal() as db:
+            # Get all active transactions for this user
+            active_transactions = (
+                db.query(CreditTransaction)
+                .filter(CreditTransaction.address == self.address, CreditTransaction.is_active)
+                .all()
+            )
 
-        # Get all active transactions for this user
-        active_transactions = (
-            db.query(CreditTransaction)
-            .filter(CreditTransaction.address == self.address, CreditTransaction.is_active)
-            .all()
-        )
-
-        # Sum remaining amounts
-        total_balance = sum(tx.amount_left for tx in active_transactions)
-        return total_balance
+            # Sum remaining amounts
+            total_balance = sum(tx.amount_left for tx in active_transactions)
+            return total_balance
