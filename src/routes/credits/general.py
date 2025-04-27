@@ -2,7 +2,14 @@ from datetime import datetime
 
 from fastapi import HTTPException, status, Depends
 
-from src.interfaces.credits import ExpiredCreditTransactionsResponse, ExpiredCreditTransaction, CreditBalanceResponse
+from src.interfaces.credits import (
+    ExpiredCreditTransactionsResponse,
+    ExpiredCreditTransaction,
+    CreditBalanceResponse,
+    CreditTransactionResponse,
+    CreditTransactionsResponse,
+    CreditTransactionProvider,
+)
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
@@ -77,4 +84,44 @@ async def get_user_balance(user_address: str = Depends(get_current_address)) -> 
         logger.error(f"Error retrieving balance for {user_address}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving credit balance: {str(e)}"
+        )
+
+
+@router.get("/transactions", description="Get transaction history for authenticated user")  # type: ignore
+async def get_transaction_history(user_address: str = Depends(get_current_address)) -> CreditTransactionsResponse:
+    """
+    Get the credit transaction history for the authenticated user.
+
+    Returns:
+        CreditTransactionsResponse: Object containing the user's address and list of credit transactions
+    """
+    try:
+        with SessionLocal() as db:
+            transactions = (
+                db.query(CreditTransaction)
+                .filter(CreditTransaction.address == user_address)
+                .order_by(CreditTransaction.created_at.desc())
+                .all()
+            )
+
+            transaction_responses = []
+            for tx in transactions:
+                transaction_responses.append(
+                    CreditTransactionResponse(
+                        id=str(tx.id),
+                        transaction_hash=tx.transaction_hash,
+                        amount=tx.amount,
+                        amount_left=tx.amount_left,
+                        provider=CreditTransactionProvider(tx.provider),
+                        created_at=tx.created_at,
+                        expired_at=tx.expired_at,
+                        is_active=tx.is_active,
+                    )
+                )
+
+            return CreditTransactionsResponse(address=user_address, transactions=transaction_responses)
+    except Exception as e:
+        logger.error(f"Error retrieving transaction history for {user_address}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving transaction history: {str(e)}"
         )

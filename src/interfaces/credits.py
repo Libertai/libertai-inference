@@ -19,6 +19,22 @@ class CreditBalanceResponse(BaseModel):
     balance: float
 
 
+class CreditTransactionResponse(BaseModel):
+    id: str  # UUID as string
+    transaction_hash: str | None
+    amount: float
+    amount_left: float
+    provider: CreditTransactionProvider
+    created_at: datetime
+    expired_at: datetime | None
+    is_active: bool
+
+
+class CreditTransactionsResponse(BaseModel):
+    address: str
+    transactions: list[CreditTransactionResponse]
+
+
 class ExpiredCreditTransaction(BaseModel):
     id: str  # UUID as string
     transaction_hash: str | None
