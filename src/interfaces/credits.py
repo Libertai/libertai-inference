@@ -1,3 +1,4 @@
+import enum
 from datetime import datetime
 from enum import Enum
 from typing import Literal, Annotated
@@ -6,7 +7,6 @@ from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
 from src.config import config
-from src.models.credit_transaction import TransactionStatus
 
 
 class CreditTransactionProvider(str, Enum):
@@ -20,6 +20,11 @@ class CreditBalanceResponse(BaseModel):
     balance: float
 
 
+class CreditTransactionStatus(str, enum.Enum):
+    pending = "pending"
+    completed = "completed"
+
+
 class CreditTransactionResponse(BaseModel):
     id: str  # UUID as string
     transaction_hash: str | None
@@ -29,7 +34,7 @@ class CreditTransactionResponse(BaseModel):
     created_at: datetime
     expired_at: datetime | None
     is_active: bool
-    status: TransactionStatus
+    status: CreditTransactionStatus
 
 
 class CreditTransactionsResponse(BaseModel):

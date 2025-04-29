@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field
 from web3 import Web3
 
 from src.config import config
-from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook
+from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook, CreditTransactionStatus
 from src.models.base import SessionLocal
-from src.models.credit_transaction import CreditTransaction, TransactionStatus
+from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
 from src.utils.logger import setup_logger
@@ -118,11 +118,13 @@ async def thirdweb_webhook(
             )
 
         # Determine transaction status based on the webhook status
-        tx_status = TransactionStatus.completed if data.status == "COMPLETED" else TransactionStatus.pending
+        tx_status = (
+            CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
+        )
 
         # If the transaction already exists and status is completed, update it
         if existing_transaction is not None:
-            CreditService.update_transaction_status(transaction_hash, TransactionStatus.completed)
+            CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             logger.info(f"Updated transaction {transaction_hash} status to completed")
             return
 

@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from src.interfaces.credits import CreditTransactionProvider
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import SessionLocal
-from src.models.credit_transaction import CreditTransaction, TransactionStatus
+from src.models.credit_transaction import CreditTransaction
 from src.models.user import User
 from src.utils.logger import setup_logger
 
@@ -18,7 +18,7 @@ class CreditService:
         transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
-        status: TransactionStatus = TransactionStatus.completed,
+        status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ) -> bool:
         """
         Add credits to a user, creating the user if they don't exist.
@@ -72,7 +72,7 @@ class CreditService:
                     address=address,
                     amount=amount,
                     amount_left=amount,
-                    provider=provider.value,
+                    provider=provider,
                     block_number=block_number,
                     expired_at=expired_at,
                     is_active=True,
@@ -107,7 +107,7 @@ class CreditService:
                     .filter(
                         CreditTransaction.address == address,
                         CreditTransaction.is_active == True,  # noqa: E712
-                        CreditTransaction.status == TransactionStatus.completed,
+                        CreditTransaction.status == CreditTransactionStatus.completed,
                     )
                     .order_by(
                         CreditTransaction.expired_at.asc().nullslast()  # Transactions with expiration dates first
@@ -186,7 +186,7 @@ class CreditService:
                     db.query(CreditTransaction)
                     .filter(
                         CreditTransaction.address == address,
-                        CreditTransaction.provider == CreditTransactionProvider.voucher.value,
+                        CreditTransaction.provider == CreditTransactionProvider.voucher,
                     )
                     .order_by(CreditTransaction.created_at.desc())
                     .all()
@@ -216,7 +216,7 @@ class CreditService:
                     .filter(
                         CreditTransaction.is_active == True,  # noqa: E712
                         CreditTransaction.id == voucher_id,
-                        CreditTransaction.provider == CreditTransactionProvider.voucher.value,
+                        CreditTransaction.provider == CreditTransactionProvider.voucher,
                     )
                     .first()
                 )
@@ -234,7 +234,7 @@ class CreditService:
             return False
 
     @staticmethod
-    def update_transaction_status(transaction_hash: str, status: TransactionStatus) -> bool:
+    def update_transaction_status(transaction_hash: str, status: CreditTransactionStatus) -> bool:
         """
         Update the status of a transaction.
 
