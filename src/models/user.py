@@ -28,13 +28,17 @@ class User(Base):
         Dynamically calculate the balance from active transactions.
         This will be calculated when accessing the property.
         """
-        from src.models.credit_transaction import CreditTransaction
+        from src.models.credit_transaction import CreditTransaction, TransactionStatus
 
         with SessionLocal() as db:
             # Get all active transactions for this user
             active_transactions = (
                 db.query(CreditTransaction)
-                .filter(CreditTransaction.address == self.address, CreditTransaction.is_active)
+                .filter(
+                    CreditTransaction.address == self.address,
+                    CreditTransaction.is_active,
+                    CreditTransaction.status == TransactionStatus.completed,
+                )
                 .all()
             )
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
 from src.config import config
+from src.models.credit_transaction import TransactionStatus
 
 
 class CreditTransactionProvider(str, Enum):
@@ -28,6 +29,7 @@ class CreditTransactionResponse(BaseModel):
     created_at: datetime
     expired_at: datetime | None
     is_active: bool
+    status: TransactionStatus
 
 
 class CreditTransactionsResponse(BaseModel):

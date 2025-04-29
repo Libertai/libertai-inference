@@ -1,8 +1,9 @@
+import enum
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID
+from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID, Enum
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -10,6 +11,11 @@ from src.models.base import Base
 
 if TYPE_CHECKING:
     from src.models.user import User
+
+
+class TransactionStatus(str, enum.Enum):
+    pending = "pending"
+    completed = "completed"
 
 
 class CreditTransaction(Base):
@@ -33,6 +39,9 @@ class CreditTransaction(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )  # Whether the credits of this transaction are still active
+    status: Mapped[TransactionStatus] = mapped_column(
+        Enum(TransactionStatus), nullable=False, default=TransactionStatus.completed
+    )  # Status of the transaction
 
     def __init__(
         self,
@@ -44,6 +53,7 @@ class CreditTransaction(Base):
         block_number: int | None = None,
         expired_at: datetime | None = None,
         is_active: bool = True,
+        status: TransactionStatus = TransactionStatus.completed,
     ):
         self.transaction_hash = transaction_hash
         self.address = address
@@ -53,6 +63,7 @@ class CreditTransaction(Base):
         self.block_number = block_number
         self.expired_at = expired_at
         self.is_active = is_active
+        self.status = status
 
     # Enforcing constraints at the database level
     __table_args__ = (

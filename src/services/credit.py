@@ -2,7 +2,7 @@ from datetime import datetime
 
 from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import SessionLocal
-from src.models.credit_transaction import CreditTransaction
+from src.models.credit_transaction import CreditTransaction, TransactionStatus
 from src.models.user import User
 from src.utils.logger import setup_logger
 
@@ -18,6 +18,7 @@ class CreditService:
         transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
+        status: TransactionStatus = TransactionStatus.completed,
     ) -> bool:
         """
         Add credits to a user, creating the user if they don't exist.
@@ -29,6 +30,7 @@ class CreditService:
             transaction_hash: Transaction hash for recording the transaction (optional for vouchers)
             block_number: The block number this transaction was processed in
             expired_at: Optional expiration date for the credits
+            status: Status of the transaction (pending or completed)
 
         Returns:
            Boolean indicating if the operation was successful
@@ -37,7 +39,7 @@ class CreditService:
         # Apply the boost for LTAI payments
         amount = amount * 100 / 80 if provider == CreditTransactionProvider.libertai else amount
 
-        log_msg = f"Adding {amount} credits to address {address}"
+        log_msg = f"Adding {amount} credits to address {address} with status {status.value}"
         if transaction_hash:
             log_msg += f" from tx {transaction_hash}"
         if block_number:
@@ -74,6 +76,7 @@ class CreditService:
                     block_number=block_number,
                     expired_at=expired_at,
                     is_active=True,
+                    status=status,
                 )
                 db.add(transaction)
                 db.commit()
@@ -101,7 +104,11 @@ class CreditService:
             with SessionLocal() as db:
                 transactions: list[CreditTransaction] = (
                     db.query(CreditTransaction)
-                    .filter(CreditTransaction.address == address, CreditTransaction.is_active == True)  # noqa: E712
+                    .filter(
+                        CreditTransaction.address == address,
+                        CreditTransaction.is_active == True,  # noqa: E712
+                        CreditTransaction.status == TransactionStatus.completed,
+                    )
                     .order_by(
                         CreditTransaction.expired_at.asc().nullslast()  # Transactions with expiration dates first
                     )
@@ -224,4 +231,35 @@ class CreditService:
 
         except Exception as e:
             logger.error(f"Error expiring voucher {voucher_id}: {str(e)}", exc_info=True)
+            return False
+
+    @staticmethod
+    def update_transaction_status(transaction_hash: str, status: TransactionStatus) -> bool:
+        """
+        Update the status of a transaction.
+
+        Args:
+            transaction_hash: The transaction hash
+            status: The new status for the transaction
+
+        Returns:
+            Boolean indicating if the operation was successful
+        """
+        try:
+            with SessionLocal() as db:
+                transaction = (
+                    db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+                )
+
+                if not transaction:
+                    logger.warning(f"Transaction with hash {transaction_hash} not found")
+                    return False
+
+                transaction.status = status
+                db.commit()
+                logger.info(f"Updated transaction {transaction_hash} status to {status.value}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Error updating transaction status for {transaction_hash}: {str(e)}", exc_info=True)
             return False
