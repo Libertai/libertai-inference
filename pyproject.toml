@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "libertai-inference"
-version = "0.0.2"
+version = "0.0.1"
 description = ""
 authors = ["Reza Rahemtola <49811529+RezaRahemtola@users.noreply.github.com>"]
 readme = "README.md"
@@ -23,6 +23,8 @@ python-dotenv = "^1.0.1"
 pyjwt = "^2.8.0"
 libertai-utils = "^0.0.15"
 solana = "0.36.0"
+aleph-sdk-python = "^2.0.2"
+paramiko = "^3.5.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"

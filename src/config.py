@@ -28,6 +28,15 @@ class _Config:
     ADMIN_SECRET: str
     VOUCHERS_PASSWORDS: list[str]
 
+    ALEPH_API_URL: str | None
+    ALEPH_SENDER: str
+    ALEPH_OWNER: str
+    ALEPH_SENDER_SK: bytes
+    ALEPH_SENDER_PK: bytes
+
+    ALEPH_AGENT_CHANNEL: str
+    ALEPH_AGENT_POST_TYPE: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE"))
@@ -50,6 +59,15 @@ class _Config:
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
         self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
+
+        self.ALEPH_API_URL = os.getenv("ALEPH_API_URL")
+        self.ALEPH_SENDER = os.getenv("ALEPH_SENDER")
+        self.ALEPH_OWNER = os.getenv("ALEPH_OWNER")
+        self.ALEPH_SENDER_SK = os.getenv("ALEPH_SENDER_SK")  # type: ignore
+        self.ALEPH_SENDER_PK = os.getenv("ALEPH_SENDER_PK")  # type: ignore
+
+        self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_CHANNEL")
+        self.ALEPH_AGENT_POST_TYPE = os.getenv("ALEPH_AGENT_POST_TYPE")
 
 
 config = _Config()
