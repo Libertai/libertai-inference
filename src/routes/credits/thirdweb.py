@@ -125,7 +125,6 @@ async def thirdweb_webhook(
         # If the transaction already exists and status is completed, update it
         if existing_transaction is not None:
             CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
-            logger.info(f"Updated transaction {transaction_hash} status to completed")
             return
 
         # Add credits to the user's account with the appropriate status
