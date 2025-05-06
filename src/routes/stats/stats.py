@@ -1,5 +1,4 @@
-from datetime import date, datetime
-from typing import List
+from datetime import date
 
 from fastapi import Depends, Query
 
