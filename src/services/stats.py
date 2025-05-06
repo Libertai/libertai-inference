@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
-from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, CreditsStats, \
+from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, GlobalCreditsStats, \
     CreditsConsumption
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
@@ -272,7 +272,7 @@ class StatsService:
             )
 
     @staticmethod
-    def get_credits_stats(start_date: date, end_date: date) -> CreditsStats:
+    def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         """
         Get model usage for a specific date range.
 
@@ -312,7 +312,7 @@ class StatsService:
                     for ai_model in model_stats
                 ]
 
-                return CreditsStats(
+                return GlobalCreditsStats(
                     total_credits_used=total_credits_used,
                     credits_consumption=credits_consumption
                 )

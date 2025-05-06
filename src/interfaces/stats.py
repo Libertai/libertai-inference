@@ -1,4 +1,3 @@
-from typing import Dict, List
 from pydantic import BaseModel
 
 
@@ -16,7 +15,7 @@ class DashboardStats(BaseModel):
     """Dashboard statistics for a user."""
 
     address: str
-    monthly_usage: Dict[str, float]
+    monthly_usage: dict[str, float]
     current_month: TokenStats
 
 
@@ -44,19 +43,16 @@ class UsageStats(BaseModel):
     output_tokens: int
     total_tokens: int
     cost: float
-    daily_usage: Dict[str, DailyTokens]
-    usage_by_model: List[UsageByEntity]
-    usage_by_api_key: List[UsageByEntity]
+    daily_usage: dict[str, DailyTokens]
+    usage_by_model: list[UsageByEntity]
+    usage_by_api_key: list[UsageByEntity]
 
 class CreditsConsumption(BaseModel):
     credits_used: float
     used_at: str
     model_name: str
 
-class CreditsStats(BaseModel):
+class GlobalCreditsStats(BaseModel):
     """Credit usage statistics for a date range."""
     total_credits_used: float
-    credits_consumption: List[CreditsConsumption]
-
-class ModelsStats(BaseModel):
-    """Models usage statistics for a date range."""
+    credits_consumption: list[CreditsConsumption]
