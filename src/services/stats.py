@@ -5,7 +5,8 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
-from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity
+from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, GlobalCreditsStats, \
+    CreditsConsumption
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
@@ -268,4 +269,56 @@ class StatsService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error retrieving usage statistics: {str(e)}",
+            )
+
+    @staticmethod
+    def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+        """
+        Get model usage for a specific date range.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            Name of the model used in the date range ("hermes" if used, otherwise "yolo")
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_credits_used = db.query(func.sum(InferenceCall.credits_used)).scalar()
+
+                model_stats = (
+                    db.query(
+                        InferenceCall.credits_used.label("credits"),
+                        InferenceCall.used_at.label("used_at"),
+                        InferenceCall.model_name.label("name"),
+                    )
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .all()
+                )
+
+                credits_consumption = [
+                    CreditsConsumption(
+                        credits_used=ai_model.credits,
+                        used_at=ai_model.used_at.strftime('%Y-%m-%d'),
+                        model_name=ai_model.name,
+                    )
+                    for ai_model in model_stats
+                ]
+
+                return GlobalCreditsStats(
+                    total_credits_used=total_credits_used,
+                    credits_consumption=credits_consumption
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving credits stats: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
             )
