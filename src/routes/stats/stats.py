@@ -49,7 +49,7 @@ async def get_usage_stats(
         logger.error(f"Error in usage stats route for {user_address}: {str(e)}", exc_info=True)
         raise
 
-@router.get("/credits", response_model=GlobalCreditsStats) # type: ignore
+@router.get("/global/credits", response_model=GlobalCreditsStats) # type: ignore
 async def get_credits_stats(
         start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
         end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
