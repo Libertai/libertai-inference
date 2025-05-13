@@ -47,7 +47,7 @@ class UsageStats(BaseModel):
     usage_by_model: list[UsageByEntity]
     usage_by_api_key: list[UsageByEntity]
 
-class CreditsConsumption(BaseModel):
+class CreditsUsage(BaseModel):
     credits_used: float
     used_at: str
     model_name: str
@@ -55,4 +55,13 @@ class CreditsConsumption(BaseModel):
 class GlobalCreditsStats(BaseModel):
     """Credit usage statistics for a date range."""
     total_credits_used: float
-    credits_consumption: list[CreditsConsumption]
+    credits_usage: list[CreditsUsage]
+
+class ModelApiUsage(BaseModel):
+    model_name: str
+    used_at: str
+
+class GlobalApiStats(BaseModel):
+    """Api usage statistics for a date range."""
+    total_calls: int
+    api_usage: list[ModelApiUsage]
