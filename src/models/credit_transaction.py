@@ -2,10 +2,11 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID
+from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID, Enum
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import Base
 
 if TYPE_CHECKING:
@@ -24,7 +25,7 @@ class CreditTransaction(Base):
     amount_left: Mapped[float] = mapped_column(
         Float, nullable=False
     )  # Remaining amount available from this transaction
-    provider: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[CreditTransactionProvider] = mapped_column(Enum(CreditTransactionProvider), nullable=False)
     block_number: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )  # The block number this transaction was processed in
@@ -33,17 +34,21 @@ class CreditTransaction(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )  # Whether the credits of this transaction are still active
+    status: Mapped[CreditTransactionStatus] = mapped_column(
+        Enum(CreditTransactionStatus), nullable=False, default=CreditTransactionStatus.completed
+    )  # Status of the transaction
 
     def __init__(
         self,
         address: str,
         amount: float,
         amount_left: float,
-        provider: str,
+        provider: CreditTransactionProvider,
         transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
         is_active: bool = True,
+        status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ):
         self.transaction_hash = transaction_hash
         self.address = address
@@ -53,13 +58,13 @@ class CreditTransaction(Base):
         self.block_number = block_number
         self.expired_at = expired_at
         self.is_active = is_active
+        self.status = status
 
     # Enforcing constraints at the database level
     __table_args__ = (
         CheckConstraint("amount >= 0", name="check_amount_non_negative"),
         CheckConstraint("amount_left >= 0", name="check_amount_left_non_negative"),
         CheckConstraint("amount_left <= amount", name="check_amount_left_not_exceeding_value"),
-        CheckConstraint("provider IN ('libertai', 'thirdweb', 'voucher')", name="check_provider_choices"),
         CheckConstraint(
             "(provider = 'thirdweb' OR provider = 'voucher') OR (provider = 'libertai' AND block_number IS NOT NULL)",
             name="check_block_number_required_for_provider_libertai",

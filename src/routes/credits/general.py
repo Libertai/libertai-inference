@@ -116,6 +116,7 @@ async def get_transaction_history(user_address: str = Depends(get_current_addres
                         created_at=tx.created_at,
                         expired_at=tx.expired_at,
                         is_active=tx.is_active,
+                        status=tx.status,
                     )
                 )
 
