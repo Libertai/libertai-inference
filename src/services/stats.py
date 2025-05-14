@@ -4,8 +4,8 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
-from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, CreditsStats, \
-    CreditsConsumption
+from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, GlobalCreditsStats, \
+    CreditsUsage, GlobalApiStats, ModelApiUsage
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
@@ -271,16 +271,16 @@ class StatsService:
             )
 
     @staticmethod
-    def get_credits_stats(start_date: date, end_date: date) -> CreditsStats:
+    def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         """
-        Get model usage for a specific date range.
+        Get model credits usage for a specific date range.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
             end_date: End date for the statistics period (inclusive)
 
         Returns:
-            Name of the model used in the date range ("hermes" if used, otherwise "yolo")
+            GlobalCreditsStats object containing detailed credits usage statistics
         """
         try:
             with SessionLocal() as db:
@@ -302,8 +302,8 @@ class StatsService:
                     .all()
                 )
 
-                credits_consumption = [
-                    CreditsConsumption(
+                credits_usage = [
+                    CreditsUsage(
                         credits_used=ai_model.credits,
                         used_at=ai_model.used_at.strftime('%Y-%m-%d'),
                         model_name=ai_model.name,
@@ -311,12 +311,62 @@ class StatsService:
                     for ai_model in model_stats
                 ]
 
-                return CreditsStats(
+                return GlobalCreditsStats(
                     total_credits_used=total_credits_used,
-                    credits_consumption=credits_consumption
+                    credits_usage=credits_usage
                 )
         except Exception as e:
             logger.error(f"Error retrieving credits stats: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
+
+    @staticmethod
+    def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
+        """
+        Get model api usage for a specific date range.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            GlobalApiStats object containing detailed api usage statistics
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_calls = db.query(func.count(InferenceCall.id)).scalar()
+
+                model_stats = (
+                    db.query(
+                        InferenceCall.model_name.label("name"),
+                        InferenceCall.used_at.label("used_at"),
+                    )
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .all()
+                )
+
+                api_usage = [
+                    ModelApiUsage(
+                        model_name=ai_model.name,
+                        used_at=ai_model.used_at.strftime('%Y-%m-%d'),
+                    )
+                    for ai_model in model_stats
+                ]
+
+                return GlobalApiStats(
+                    total_calls=total_calls,
+                    api_usage=api_usage
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving api stats: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail="Internal server error"

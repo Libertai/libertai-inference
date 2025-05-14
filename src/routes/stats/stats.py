@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi import Depends, Query
 
-from src.interfaces.stats import DashboardStats, UsageStats, CreditsStats
+from src.interfaces.stats import DashboardStats, UsageStats, GlobalCreditsStats, GlobalApiStats
 from src.routes.stats import router
 from src.services.auth import get_current_address
 from src.services.stats import StatsService
@@ -49,12 +49,11 @@ async def get_usage_stats(
         logger.error(f"Error in usage stats route for {user_address}: {str(e)}", exc_info=True)
         raise
 
-
-@router.get("/credits", response_model=CreditsStats) # type: ignore
+@router.get("/global/credits", response_model=GlobalCreditsStats) # type: ignore
 async def get_credits_stats(
         start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
         end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> CreditsStats:
+) -> GlobalCreditsStats:
     """
         Get detailed credits statistics and models usage for a specific date range.
 
@@ -65,7 +64,26 @@ async def get_credits_stats(
         """
 
     try:
-        return StatsService.get_credits_stats(start_date, end_date)
+        return StatsService.get_global_credits_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
+        raise
+
+@router.get("/global/api", response_model=GlobalApiStats) # type: ignore
+async def get_api_stats(
+        start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+        end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalApiStats:
+    """
+        Get detailed api statistics and models usage for a specific date range.
+
+        Statistics include:
+        - Total API calls for the entire models
+        - List with API calls for each model
+        """
+
+    try:
+        return StatsService.get_global_api_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
         raise

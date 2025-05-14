@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, Header, Request
 from pydantic import BaseModel, Field
@@ -22,7 +22,7 @@ MAX_WEBHOOK_AGE = 300
 
 
 class ThirdwebWebhookPayload(BaseModel):
-    data: Dict[str, Any] = Field(...)
+    data: dict[str, Any] = Field(...)
 
     @property
     def buy_with_crypto_status(self) -> Optional[ThirdwebBuyWithCryptoWebhook]:

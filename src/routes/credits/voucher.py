@@ -1,4 +1,3 @@
-from typing import List
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -31,7 +30,7 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
 
 
 @router.get("/vouchers", description="Get all vouchers for a specific address")  # type: ignore
-async def get_vouchers(address: str, password: str) -> List[VoucherCreditsResponse]:
+async def get_vouchers(address: str, password: str) -> list[VoucherCreditsResponse]:
     # Validate input using Pydantic model
     try:
         params = GetVouchersRequest(address=address, password=password)
