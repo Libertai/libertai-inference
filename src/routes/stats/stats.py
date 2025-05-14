@@ -1,5 +1,4 @@
-from datetime import date, datetime
-from typing import List
+from datetime import date
 
 from fastapi import Depends, Query
 
@@ -51,7 +50,7 @@ async def get_usage_stats(
         raise
 
 
-@router.get("/credits", response_model=CreditsStats)
+@router.get("/credits", response_model=CreditsStats) # type: ignore
 async def get_credits_stats(
         start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
         end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
