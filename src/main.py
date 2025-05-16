@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import config
+from src.routes.agents import router as agents_router
 from src.routes.api_keys import router as api_keys_router
 from src.routes.auth import router as auth_router
 from src.routes.credits import router as credits_router
@@ -30,3 +31,4 @@ app.include_router(auth_router)
 app.include_router(credits_router)
 app.include_router(api_keys_router)
 app.include_router(stats_router)
+app.include_router(agents_router)
