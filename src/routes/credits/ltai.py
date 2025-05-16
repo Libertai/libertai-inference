@@ -34,7 +34,7 @@ async def process_ltai_transactions() -> list[str]:
             last_block_number = last_block_number[0] if last_block_number else None
 
             if ltai_payments_lock.locked():
-                return processed_transactions  # Skip execution if already running
+                return processed_transactions
 
             async with ltai_payments_lock:
                 contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
