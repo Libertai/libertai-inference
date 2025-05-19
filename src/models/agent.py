@@ -1,4 +1,3 @@
-import secrets
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -17,7 +16,6 @@ class Agent(Base):
     __tablename__ = "agents"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
-    secret: Mapped[str] = mapped_column(String, unique=True, nullable=False, default=secrets.token_hex(32))
     instance_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     user_address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)

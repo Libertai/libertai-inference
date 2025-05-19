@@ -31,7 +31,6 @@ class _Config:
     ALEPH_SENDER_PK: bytes
 
     ALEPH_AGENT_CHANNEL: str
-    ALEPH_AGENT_POST_TYPE: str
 
     def __init__(self):
         load_dotenv()
@@ -61,7 +60,6 @@ class _Config:
         self.ALEPH_SENDER_PK = os.getenv("ALEPH_SENDER_PK")  # type: ignore
 
         self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_CHANNEL")
-        self.ALEPH_AGENT_POST_TYPE = os.getenv("ALEPH_AGENT_POST_TYPE")
 
 
 config = _Config()
