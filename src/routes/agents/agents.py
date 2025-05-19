@@ -14,7 +14,6 @@ from src.interfaces.agent import (
     CreateAgentRequest,
     AgentResponse,
     GetAgentResponse,
-    GetAgentSecretResponse,
     ResubscribeAgentResponse,
     ResubscribeAgentRequest,
 )
@@ -90,23 +89,36 @@ async def create_agent(
         from src.models.subscription import SubscriptionType
         from src.services.subscription import SubscriptionService
 
-        # Create subscription and handle initial payment
+        # Create subscription and handle initial payment using the same DB session
         subscription = SubscriptionService.create_subscription(
             user_address=user_address,
             subscription_type=SubscriptionType.agent,
             amount=AGENT_MONTHLY_COST,
             related_id=agent_id,
             months=body.subscription_months,
+            db_session=db
         )
 
-        # Update paid_until with the next charge date
+        # Update subscription_id on the agent
         agent.subscription_id = subscription.id
 
         db.add(agent)
         db.commit()
         db.refresh(agent)
 
-        return AgentResponse.model_validate(agent)
+        # Create response with required fields from agent and subscription
+        return AgentResponse(
+            id=agent.id,
+            instance_hash=agent.instance_hash,
+            name=agent.name,
+            user_address=agent.user_address,
+            created_at=agent.created_at,
+            monthly_cost=AGENT_MONTHLY_COST,
+            paid_until=subscription.next_charge_at,
+            renew_history=[],
+            is_active=agent.is_active,
+            subscription_id=agent.subscription_id
+        )
 
 
 @router.get("/", description="List all agents for the current user")
@@ -165,22 +177,6 @@ async def get_agent_public_info(agent_id: uuid.UUID) -> GetAgentResponse:
             is_active=agent.is_active,
             subscription_id=agent.subscription_id,
         )
-
-
-@router.get("/{agent_id}/secret", description="Get an agent secret")
-async def get_agent_secret(
-    agent_id: uuid.UUID, user_address: str = Depends(get_current_address)
-) -> GetAgentSecretResponse:
-    with SessionLocal() as db:
-        agent = db.query(Agent).filter(Agent.id == agent_id, Agent.user_address == user_address).first()
-
-        if not agent:
-            raise HTTPException(
-                status_code=HTTPStatus.NOT_FOUND,
-                detail=f"Agent with ID {agent_id} not found.",
-            )
-
-        return GetAgentSecretResponse(secret=agent.secret)
 
 
 @router.post(
@@ -309,7 +305,6 @@ async def process_subscriptions():
                             # Update paid_until
                             agent.paid_until = subscription.next_charge_at
                             agent.is_active = True
-                            agent.add_renew_transaction(subscription.amount)
                             logger.info(f"Renewed agent {agent.id} until {agent.paid_until}")
                         elif not success and subscription.status == SubscriptionStatus.paused:
                             # Deactivate agent if payment failed and subscription is paused
