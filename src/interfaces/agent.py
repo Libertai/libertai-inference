@@ -41,10 +41,6 @@ class GetAgentResponse(BaseModel):
     subscription_id: UUID | None = None
 
 
-class GetAgentSecretResponse(BaseModel):
-    secret: str
-
-
 class UploadAgentCodeRequest(BaseModel):
     code_url: str
     python_version: str = "3.11"

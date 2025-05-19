@@ -20,6 +20,7 @@ class SubscriptionService:
         amount: float,
         related_id: uuid.UUID,
         months: int = 1,
+        db_session=None,
     ) -> Subscription:
         """
         Create a new subscription and process the initial payment.
@@ -30,6 +31,7 @@ class SubscriptionService:
             amount: Amount to charge per months
             related_id: ID of the related entity (agent_id, etc.)
             months: Number of months for the subscription (default is 1 month)
+            db_session: Optional existing database session to use
 
         Returns:
             The newly created subscription
@@ -38,47 +40,66 @@ class SubscriptionService:
         next_charge_at = datetime.now() + relativedelta(months=months)
 
         try:
-            with SessionLocal() as db:
-                # Create the subscription
-                subscription = Subscription(
-                    user_address=user_address,
-                    subscription_type=subscription_type,
-                    amount=amount,
-                    related_id=related_id,
-                    next_charge_at=next_charge_at,
-                    status=SubscriptionStatus.active,
+            # Use provided session or create a new one
+            if db_session:
+                subscription = SubscriptionService._create_subscription_internal(
+                    db_session, user_address, subscription_type, amount, related_id, next_charge_at
                 )
-                db.add(subscription)
-
-                # Process initial payment
-                if amount > 0:
-                    # Check balance
-                    balance = CreditService.get_balance(user_address)
-                    if balance < amount:
-                        raise ValueError(
-                            f"Insufficient balance: {balance} < {amount}. Subscription cannot be created."
-                        )
-
-                    # Deduct credits
-                    CreditService.use_credits(user_address, amount)
-
-                    # Create successful transaction record
-                    transaction = SubscriptionTransaction(
-                        subscription_id=subscription.id,
-                        amount=amount,
-                        status=SubscriptionTransactionStatus.success,
-                    )
-
-                    db.add(transaction)
-
-                db.commit()
-                db.refresh(subscription)
-
                 return subscription
+            else:
+                with SessionLocal() as db:
+                    subscription = SubscriptionService._create_subscription_internal(
+                        db, user_address, subscription_type, amount, related_id, next_charge_at
+                    )
+                    db.commit()  # Commit only if we created our own session
+                    return subscription
 
         except Exception as e:
             logger.error(f"Error creating subscription for {user_address}: {str(e)}", exc_info=True)
             raise e
+            
+    @staticmethod
+    def _create_subscription_internal(
+        db, user_address, subscription_type, amount, related_id, next_charge_at
+    ):
+        # Create the subscription
+        subscription = Subscription(
+            user_address=user_address,
+            subscription_type=subscription_type,
+            amount=amount,
+            related_id=related_id,
+            next_charge_at=next_charge_at,
+            status=SubscriptionStatus.active,
+        )
+        db.add(subscription)
+        
+        # We need to flush so that the ID is generated but don't commit yet
+        # if an external session was passed in
+        db.flush()
+        db.refresh(subscription)
+
+        # Process initial payment
+        if amount > 0:
+            # Check balance
+            balance = CreditService.get_balance(user_address)
+            if balance < amount:
+                raise ValueError(
+                    f"Insufficient balance: {balance} < {amount}. Subscription cannot be created."
+                )
+
+            # Deduct credits
+            CreditService.use_credits(user_address, amount)
+
+            # Create successful transaction record with the now-available subscription ID
+            transaction = SubscriptionTransaction(
+                subscription_id=subscription.id,
+                amount=amount,
+                status=SubscriptionTransactionStatus.success,
+            )
+
+            db.add(transaction)
+
+        return subscription
 
     @staticmethod
     def process_renewal(subscription_id: uuid.UUID) -> bool:
@@ -137,6 +158,10 @@ class SubscriptionService:
 
                 # Update subscription
                 subscription.update_charge_dates(now)
+                
+                # Commit updates to subscription
+                db.commit()
+                db.refresh(subscription)
 
                 # Create transaction record
                 transaction = SubscriptionTransaction(
@@ -225,6 +250,10 @@ class SubscriptionService:
                 # Update subscription
                 subscription.status = SubscriptionStatus.active
                 subscription.update_charge_dates(datetime.now(), months=months)
+                
+                # Commit updates to subscription
+                db.commit()
+                db.refresh(subscription)
 
                 # Create transaction record
                 transaction = SubscriptionTransaction(
