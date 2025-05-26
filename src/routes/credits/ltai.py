@@ -30,15 +30,18 @@ async def process_ltai_transactions() -> list[str]:
     try:
         with SessionLocal() as db:
             processed_transactions: list[str] = []
-            last_block_number = db.query(CreditTransaction.block_number).first()
+            last_block_number = db.query(CreditTransaction.block_number)\
+                .order_by(CreditTransaction.block_number.desc())\
+                .first()
             last_block_number = last_block_number[0] if last_block_number else None
-
+            
             if ltai_payments_lock.locked():
-                return processed_transactions
+                return processed_transactions # Skip execution if already running
 
             async with ltai_payments_lock:
                 contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
 
+                # Start from recent blocks with a margin to include missed blocks between executions or downtimes
                 from_block = w3.eth.block_number - 1000
                 start_block = max(from_block - 1000, last_block_number or 0)
 
