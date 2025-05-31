@@ -1,7 +1,6 @@
 from calendar import month_abbr
 from datetime import datetime, timedelta, date
 from typing import Any
-
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
