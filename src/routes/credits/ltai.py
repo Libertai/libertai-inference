@@ -43,7 +43,7 @@ async def process_ltai_transactions() -> list[str]:
 
                 # Start from recent blocks with a margin to include missed blocks between executions or downtimes
                 from_block = w3.eth.block_number - 1000
-                start_block = max(from_block - 1000, last_block_number or 0)
+                start_block = max(from_block, last_block_number or 0)
 
                 events = contract.events.PaymentProcessed.get_logs(from_block=start_block)
 
