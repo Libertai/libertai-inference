@@ -2,10 +2,13 @@ import json
 import os
 
 import requests
+from starlette.exceptions import HTTPException
 from web3 import Web3
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider
+from src.models.base import SessionLocal
+from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
 from src.utils.cron import scheduler, ltai_payments_lock
@@ -24,27 +27,40 @@ with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") a
 @scheduler.scheduled_job("interval", seconds=60)
 @router.post("/ltai/process", description="Process credit purchase with $LTAI transactions")  # type: ignore
 async def process_ltai_transactions() -> list[str]:
-    processed_transactions: list[str] = []
+    try:
+        with SessionLocal() as db:
+            processed_transactions: list[str] = []
+            last_block_number = db.query(CreditTransaction.block_number)\
+                .order_by(CreditTransaction.block_number.desc())\
+                .first()
+            last_block_number = last_block_number[0] if last_block_number else None
+            
+            if ltai_payments_lock.locked():
+                return processed_transactions # Skip execution if already running
 
-    if ltai_payments_lock.locked():
-        return processed_transactions  # Skip execution if already running
+            async with ltai_payments_lock:
+                contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
 
-    async with ltai_payments_lock:
-        contract = w3.eth.contract(address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI)
+                # Start from recent blocks with a margin to include missed blocks between executions or downtimes
+                from_block = w3.eth.block_number - 1000
+                start_block = max(from_block, last_block_number or 0)
 
-        # Start from recent blocks with a margin to include missed blocks between executions or downtimes
-        from_block = w3.eth.block_number - 1000
+                events = contract.events.PaymentProcessed.get_logs(from_block=start_block)
 
-        events = contract.events.PaymentProcessed.get_logs(from_block=from_block)
+            for event in events:
+                try:
+                    transaction_hash = handle_payment_event(event)
+                except Exception as e:
+                    logger.error(f"Error processing payment: {e}", exc_info=True)
+                processed_transactions.append(transaction_hash)
 
-        for event in events:
-            try:
-                transaction_hash = handle_payment_event(event)
-            except Exception as e:
-                logger.error(f"Error processing payment: {e}", exc_info=True)
-            processed_transactions.append(transaction_hash)
-
-    return processed_transactions
+        return processed_transactions
+    except Exception as e:
+        logger.error(f"Error retrieving last payment block: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
 
 
 def handle_payment_event(event) -> str:
