@@ -4,12 +4,16 @@ import os
 
 from dotenv import load_dotenv
 from eth_typing import ChecksumAddress
+from solders.solders import Pubkey
 from web3 import Web3
 
 
 class _Config:
-    LTAI_PAYMENT_PROCESSOR_CONTRACT: ChecksumAddress
+    LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE: ChecksumAddress
+    LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA: Pubkey
     BASE_RPC_URL: str
+    SOLANA_RPC_URL: str
+
     DATABASE_URL: str
 
     THIRDWEB_WEBHOOK_SECRET: str
@@ -26,8 +30,10 @@ class _Config:
 
     def __init__(self):
         load_dotenv()
-        self.LTAI_PAYMENT_PROCESSOR_CONTRACT = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT"))
+        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE"))
+        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA = Pubkey.from_string(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA"))
         self.BASE_RPC_URL = os.getenv("BASE_RPC_URL")
+        self.SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL")
 
         self.DATABASE_URL = os.path.expandvars(os.getenv("DATABASE_URL", ""))
 
