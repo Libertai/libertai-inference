@@ -99,7 +99,7 @@ async def thirdweb_webhook(
         logger.debug(f"Ignoring transaction without destination: {data.status}")
         return
 
-    if Web3.to_checksum_address(data.toAddress) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT:
+    if Web3.to_checksum_address(data.toAddress) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
         logger.warning(f"Transaction not destined for LTAI payment processor ({data.toAddress}), ignoring it")
         return
 
