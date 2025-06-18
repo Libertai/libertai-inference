@@ -4,7 +4,7 @@ import os
 
 from dotenv import load_dotenv
 from eth_typing import ChecksumAddress
-from solders.solders import Pubkey
+from solders.pubkey import Pubkey
 from web3 import Web3
 
 
