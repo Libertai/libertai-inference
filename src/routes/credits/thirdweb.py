@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import time
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import HTTPException, Header, Request
 from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ class ThirdwebWebhookPayload(BaseModel):
     data: dict[str, Any] = Field(...)
 
     @property
-    def buy_with_crypto_status(self) -> Optional[ThirdwebBuyWithCryptoWebhook]:
+    def buy_with_crypto_status(self) -> ThirdwebBuyWithCryptoWebhook | None:
         if "buyWithCryptoStatus" in self.data:
             return ThirdwebBuyWithCryptoWebhook(**self.data["buyWithCryptoStatus"])
         return None

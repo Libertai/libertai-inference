@@ -1,6 +1,5 @@
 import json
 import logging
-from typing import Optional, List
 
 from solana.rpc.api import Client
 from sqlalchemy.orm import Session
@@ -20,7 +19,7 @@ class TransactionPoller:
         self.program_id = config.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA
         self.client = Client(config.SOLANA_RPC_URL)
 
-    def _get_last_signature_from_db(self, db: Session) -> Optional[str]:
+    def _get_last_signature_from_db(self, db: Session) -> str | None:
         """Get the last processed signature from database"""
         try:
             stmt = select(CreditTransaction.transaction_hash).where(
@@ -33,9 +32,9 @@ class TransactionPoller:
             return None
 
 
-    async def poll_transactions(self) -> List[str]:
+    async def poll_transactions(self) -> list[str]:
         """Poll for new transactions"""
-        processed_txs: List[str] = []
+        processed_txs: list[str] = []
         
         try:
             with SessionLocal() as db:
@@ -76,7 +75,7 @@ class TransactionPoller:
             
         return processed_txs
 
-    def _filter_new_signatures(self, signatures, last_signature: Optional[str]) -> List:
+    def _filter_new_signatures(self, signatures, last_signature: str | None) -> list:
         """Filter out already processed signatures"""
         if not last_signature:
             return signatures
@@ -88,7 +87,7 @@ class TransactionPoller:
             new_signatures.append(sig_info)
         return new_signatures
 
-    async def _process_transaction(self, tx_data, signature: str) -> List[str]:
+    async def _process_transaction(self, tx_data, signature: str) -> list[str]:
         """Process individual transaction"""
         try:
             # Safely parse transaction data
@@ -162,7 +161,7 @@ class TransactionPoller:
                             if balance["accountIndex"] == index:
                                 decimals = balance["uiTokenAmount"]["decimals"]
                                 break
-                        
+
                         if decimals is not None:
                             return diff / (10 ** decimals)
                             
