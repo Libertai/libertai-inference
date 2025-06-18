@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "libertai-inference"
-version = "0.0.1"
+version = "0.0.2"
 description = ""
 authors = ["Reza Rahemtola <49811529+RezaRahemtola@users.noreply.github.com>"]
 readme = "README.md"
@@ -13,9 +13,9 @@ package-mode = false
 python = "^3.12"
 fastapi = { extras = ["standard"], version = "^0.114.1" }
 apscheduler = "^3.10.4"
-setuptools = "^75.4.0"
+setuptools = "^78.1.1"
 web3 = "^7.10.0"
-requests = "^2.32.3"
+requests = "^2.32.4"
 sqlalchemy = { extras = ["mypy"], version = "^2.0.39" }
 alembic = "^1.15.1"
 psycopg2-binary = "^2.9.10"
