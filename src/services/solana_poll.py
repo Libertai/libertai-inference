@@ -12,6 +12,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from sqlalchemy import select, desc
 
+from src.routes.credits.ltai import get_token_price
 from src.services.credit import CreditService
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,9 @@ class TransactionPoller:
             sender = account_keys[0]
             
             # Process token balance changes
-            amount_sent = self._calculate_token_transfer_amount(meta)
+            ltai_amount = self._calculate_token_transfer_amount(meta)
+            
+            
 
             tx_status = (
                 CreditTransactionStatus.completed if "Ok" in tx_status_obj 
@@ -121,12 +124,14 @@ class TransactionPoller:
                 else CreditTransactionStatus.pending
             )
             
-            if amount_sent > 0:
+            if ltai_amount > 0:
                 try:
+                    token_price = get_token_price()
+                    amout = token_price * ltai_amount
                     CreditService.add_credits(
                         provider=CreditTransactionProvider.solana,
                         address=sender,
-                        amount=amount_sent,
+                        amount=amout,
                         transaction_hash=signature,
                         block_number=tx_block_slot,
                         status=tx_status
