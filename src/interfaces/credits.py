@@ -13,6 +13,7 @@ class CreditTransactionProvider(str, Enum):
     libertai = "libertai"
     thirdweb = "thirdweb"
     voucher = "voucher"
+    solana = "solana"
 
 
 class CreditBalanceResponse(BaseModel):
@@ -23,6 +24,7 @@ class CreditBalanceResponse(BaseModel):
 class CreditTransactionStatus(str, enum.Enum):
     pending = "pending"
     completed = "completed"
+    error = "error"
 
 
 class CreditTransactionResponse(BaseModel):

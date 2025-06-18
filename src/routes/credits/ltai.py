@@ -2,7 +2,7 @@ import json
 import os
 
 import requests
-from starlette.exceptions import HTTPException
+from fastapi import HTTPException
 from web3 import Web3
 
 from src.config import config
@@ -11,10 +11,12 @@ from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
-from src.utils.cron import scheduler, ltai_payments_lock
+from src.services.solana_poll import TransactionPoller
+from src.utils.cron import scheduler, ltai_base_payments_lock, ltai_solana_payments_lock
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+poller = TransactionPoller()
 
 w3 = Web3(Web3.HTTPProvider(config.BASE_RPC_URL))
 
@@ -25,13 +27,13 @@ with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") a
 
 
 @scheduler.scheduled_job("interval", seconds=60)
-@router.post("/ltai/process", description="Process credit purchase with $LTAI transactions")  # type: ignore
-async def process_ltai_transactions() -> list[str]:
+@router.post("/ltai/base/process", description="Process credit purchase with $LTAI transactions in Base")  # type: ignore
+async def process_base_ltai_transactions() -> list[str]:
     try:
         with SessionLocal() as db:
             processed_transactions: list[str] = []
 
-            if ltai_payments_lock.locked():
+            if ltai_base_payments_lock.locked():
                 return processed_transactions  # Skip execution if already running
 
             last_db_block = (
@@ -44,9 +46,9 @@ async def process_ltai_transactions() -> list[str]:
                 last_db_block.block_number if last_db_block and last_db_block.block_number is not None else 0
             )
 
-            async with ltai_payments_lock:
+            async with ltai_base_payments_lock:
                 contract = w3.eth.contract(
-                    address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT, abi=PAYMENT_PROCESSOR_CONTRACT_ABI
+                    address=config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE, abi=PAYMENT_PROCESSOR_CONTRACT_ABI
                 )
 
                 # Start from recent blocks with a margin to include missed blocks between executions or downtimes
@@ -68,6 +70,19 @@ async def process_ltai_transactions() -> list[str]:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@scheduler.scheduled_job("interval", seconds=100)
+@router.post("/ltai/solana/process", description="Process credit purchase with $LTAI in solana blockchain")  # type: ignore
+async def process_solana_ltai_transactions() -> list[str]:
+    processed_transactions: list[str] = []
+
+    if ltai_solana_payments_lock.locked():
+        return processed_transactions
+
+    async with ltai_base_payments_lock:
+        processed_transactions = await poller.poll_transactions()
+        return processed_transactions
+
+
 def handle_payment_event(event) -> str:
     """Handle a PaymentProcessed event from the LTAI Payment Processor contract
 
@@ -82,11 +97,11 @@ def handle_payment_event(event) -> str:
 
     transaction_hash = f"0x{event['transactionHash'].hex()}"
     sender = event["args"]["sender"]
-    amount = event["args"]["amount"]
+    ltai_amount = event["args"]["amount"] / 10**18
     block_number = event["blockNumber"]
 
     token_price = get_token_price()  # Get token/USD price
-    amount = token_price * (amount / 10**18)  # Calculate USD value
+    amount = token_price * ltai_amount  # Calculate USD value
     CreditService.add_credits(CreditTransactionProvider.libertai, sender, amount, transaction_hash, block_number)
     return transaction_hash
 

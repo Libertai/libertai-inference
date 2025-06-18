@@ -15,7 +15,17 @@ if TYPE_CHECKING:
 
 class CreditTransaction(Base):
     __tablename__ = "credit_transactions"
-
+    def __repr__(self):
+        # Get all mapped columns and their values
+        attrs = []
+        for column in self.__table__.columns:
+            value = getattr(self, column.name)
+            if isinstance(value, str):
+                attrs.append(f"{column.name}='{value}'")
+            else:
+                attrs.append(f"{column.name}={value}")
+                
+        return f"{self.__class__.__name__}({', '.join(attrs)})"
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)  # Primary key UUID
     transaction_hash: Mapped[str | None] = mapped_column(
         String, nullable=True, unique=True
@@ -66,7 +76,7 @@ class CreditTransaction(Base):
         CheckConstraint("amount_left >= 0", name="check_amount_left_non_negative"),
         CheckConstraint("amount_left <= amount", name="check_amount_left_not_exceeding_value"),
         CheckConstraint(
-            "(provider = 'thirdweb' OR provider = 'voucher') OR (provider = 'libertai' AND block_number IS NOT NULL)",
+            "(provider::text = 'thirdweb' OR provider::text = 'voucher') OR (provider::text = 'libertai' AND block_number IS NOT NULL) OR (provider::text = 'solana' AND block_number IS NOT NULL)",
             name="check_block_number_required_for_provider_libertai",
         ),
     )

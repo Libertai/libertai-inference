@@ -6,7 +6,8 @@ from fastapi import FastAPI
 
 scheduler = AsyncIOScheduler()
 
-ltai_payments_lock = asyncio.Lock()
+ltai_base_payments_lock = asyncio.Lock()
+ltai_solana_payments_lock = asyncio.Lock()
 
 
 @asynccontextmanager

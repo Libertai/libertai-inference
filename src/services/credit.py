@@ -37,7 +37,11 @@ class CreditService:
         """
 
         # Apply the boost for LTAI payments
-        amount = amount * 100 / 80 if provider == CreditTransactionProvider.libertai else amount
+        amount = (
+            amount * 100 / 80
+            if provider in [CreditTransactionProvider.libertai, CreditTransactionProvider.solana]
+            else amount
+        )
 
         log_msg = f"Adding {amount} credits to address {address} with status {status.value}"
         if transaction_hash:
