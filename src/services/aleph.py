@@ -12,7 +12,9 @@ class AlephService:
     __last_fetch_time = 0
     __cache_ttl = 300  # 5 minutes
     __models_data: AlephAPIResponse | None = None
-    __api_url = "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=TEST_LTAI_PRICING"
+    __api_url = (
+        "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=LTAI_PRICING"
+    )
 
     async def __fetch_models_data(self) -> AlephAPIResponse:
         """Fetch models data from Aleph API"""
@@ -50,9 +52,9 @@ class AlephService:
         data = await self.__fetch_models_data()
 
         # Navigate through the updated structure
-        models_response = data.data.get("TEST_LTAI_PRICING", None)
+        models_response = data.data.get("LTAI_PRICING", None)
         if not models_response:
-            logger.error("TEST_LTAI_PRICING key not found in Aleph API response")
+            logger.error("LTAI_PRICING key not found in Aleph API response")
             return None
 
         for model in models_response.models:
