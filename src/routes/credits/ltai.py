@@ -97,11 +97,11 @@ def handle_payment_event(event) -> str:
 
     transaction_hash = f"0x{event['transactionHash'].hex()}"
     sender = event["args"]["sender"]
-    amount = event["args"]["amount"]
+    ltai_amount = event["args"]["amount"] / 10**18
     block_number = event["blockNumber"]
 
     token_price = get_token_price()  # Get token/USD price
-    amount = token_price * (amount / 10**18)  # Calculate USD value
+    amount = token_price * ltai_amount  # Calculate USD value
     CreditService.add_credits(CreditTransactionProvider.libertai, sender, amount, transaction_hash, block_number)
     return transaction_hash
 
