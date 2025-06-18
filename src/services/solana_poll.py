@@ -2,6 +2,8 @@ import json
 import logging
 
 from solana.rpc.api import Client
+from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
+from solders.solders import EncodedConfirmedTransactionWithStatusMeta
 from sqlalchemy.orm import Session
 
 from src.config import config
@@ -75,7 +77,7 @@ class TransactionPoller:
             
         return processed_txs
 
-    def _filter_new_signatures(self, signatures, last_signature: str | None) -> list:
+    def _filter_new_signatures(self, signatures: list[RpcConfirmedTransactionStatusWithSignature], last_signature: str | None) -> list:
         """Filter out already processed signatures"""
         if not last_signature:
             return signatures
@@ -87,7 +89,7 @@ class TransactionPoller:
             new_signatures.append(sig_info)
         return new_signatures
 
-    async def _process_transaction(self, tx_data, signature: str) -> list[str]:
+    async def _process_transaction(self, tx_data: EncodedConfirmedTransactionWithStatusMeta, signature: str) -> list[str]:
         """Process individual transaction"""
         try:
             # Safely parse transaction data
@@ -121,7 +123,6 @@ class TransactionPoller:
             
             if amount_sent > 0:
                 try:
-                    print(f"This is the BLOCK NUMBER: {tx_block_slot}")
                     CreditService.add_credits(
                         provider=CreditTransactionProvider.solana,
                         address=sender,
