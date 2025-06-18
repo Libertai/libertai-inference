@@ -48,12 +48,14 @@ async def process_base_ltai_transactions() -> list[str]:
 
     return processed_transactions
 
-@scheduler.scheduled_job("interval", seconds=100)
+@scheduler.scheduled_job("interval", seconds=5)
 @router.post("/ltai/solana/process", description="Process credit purchase with $LTAI in solana blockchain") # type: ignore
 async def process_solana_ltai_transactions() -> list[str]:
     processed_transactions: list[str] = []
+
     if ltai_payments_lock.locked():
-        return processed_transactions  # Skip execution if already running
+        return processed_transactions
+
     processed_transactions = await poller.poll_transactions()
     return processed_transactions
 
