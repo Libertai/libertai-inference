@@ -1,8 +1,6 @@
 import json
 import logging
-import sys
 from typing import Optional, List
-import time
 
 from solana.rpc.api import Client
 from sqlalchemy.orm import Session
@@ -13,7 +11,6 @@ from src.models.credit_transaction import CreditTransaction
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from sqlalchemy import select, desc
 
-from src.models.user import User
 from src.services.credit import CreditService
 
 logger = logging.getLogger(__name__)
