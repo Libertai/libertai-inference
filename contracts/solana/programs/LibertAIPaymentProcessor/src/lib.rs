@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use std::str::FromStr;
 
 declare_id!("2RHgoS9Xdx8DcA9aCPzK9afQUJfZGip7w1VU4VkiTp2P");
 
@@ -151,6 +152,9 @@ pub struct ProcessPayment<'info> {
         constraint = program_token_account.mint == token_mint.key()
     )]
     pub program_token_account: Account<'info, TokenAccount>,
+    #[account(
+        constraint = token_mint.key() == Pubkey::from_str("mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u").unwrap() @PaymentProcessorError::InvalidTokenMint
+    )]
     pub token_mint: Account<'info, token::Mint>,
     pub token_program: Program<'info, Token>,
 }
@@ -170,7 +174,6 @@ pub struct CreateProgramTokenAccount<'info> {
         token::authority = program_token_account,
     )]
     pub program_token_account: Account<'info, TokenAccount>,
-    
     pub token_mint: Account<'info, token::Mint>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -256,4 +259,7 @@ pub enum PaymentProcessorError {
     
     #[msg("Admin not found")]
     AdminNotFound,
+    
+    #[msg("Invalid token mint - only LTAI tokens are accepted")]
+    InvalidTokenMint,
 }

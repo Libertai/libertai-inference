@@ -12,7 +12,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from sqlalchemy import select, desc
 
-from src.routes.credits.ltai import get_token_price
+from src.utils.token_price import get_token_price
 from src.services.credit import CreditService
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,6 @@ class TransactionPoller:
             
             # Process token balance changes
             ltai_amount = self._calculate_token_transfer_amount(meta)
-            
-            
 
             tx_status = (
                 CreditTransactionStatus.completed if "Ok" in tx_status_obj 
