@@ -1,7 +1,6 @@
 import json
 import os
 
-import requests
 from fastapi import HTTPException
 from web3 import Web3
 
@@ -14,6 +13,7 @@ from src.services.credit import CreditService
 from src.services.solana_poll import TransactionPoller
 from src.utils.cron import scheduler, ltai_base_payments_lock, ltai_solana_payments_lock
 from src.utils.logger import setup_logger
+from src.utils.token import get_token_price
 
 logger = setup_logger(__name__)
 poller = TransactionPoller()
@@ -104,26 +104,3 @@ def handle_payment_event(event) -> str:
     amount = token_price * ltai_amount  # Calculate USD value
     CreditService.add_credits(CreditTransactionProvider.libertai, sender, amount, transaction_hash, block_number)
     return transaction_hash
-
-
-def get_token_price() -> float:
-    """Get the current price of $LTAI in USD from Coingecko"""
-    try:
-        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=libertai&vs_currencies=usd")
-        response.raise_for_status()  # Raise exception for 4XX/5XX responses
-        price_data = response.json()
-
-        if "libertai" not in price_data or "usd" not in price_data["libertai"]:
-            logger.error(f"Unexpected response format from Coingecko: {price_data}")
-            raise ValueError("Unexpected response format from Coingecko")
-
-        price = price_data["libertai"]["usd"]
-
-        if price is None or price <= 0:
-            logger.error(f"Invalid token price received: {price}")
-            raise ValueError("Invalid price from Coingecko")
-
-        return price
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch token price: {str(e)}")
-        raise e
