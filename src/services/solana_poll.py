@@ -3,7 +3,6 @@ import logging
 
 from solana.rpc.api import Client
 from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
-from solders.transaction_status import EncodedConfirmedTransactionWithStatusMeta
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
