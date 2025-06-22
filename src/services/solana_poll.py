@@ -3,7 +3,7 @@ import logging
 
 from solana.rpc.api import Client
 from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
-from solders.solders import EncodedConfirmedTransactionWithStatusMeta
+from solders.transaction_status import EncodedConfirmedTransactionWithStatusMeta
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,6 @@ from src.services.credit import CreditService
 from src.utils.token import get_token_price
 
 logger = logging.getLogger(__name__)
-
 
 class TransactionPoller:
     def __init__(self):
@@ -85,7 +84,7 @@ class TransactionPoller:
         return new_signatures
 
     async def _process_transaction(
-        self, tx_data: EncodedConfirmedTransactionWithStatusMeta, signature: str
+        self, tx_data, signature: str
     ) -> list[str]:
         """Process individual transaction"""
         try:
@@ -123,11 +122,11 @@ class TransactionPoller:
             if ltai_amount > 0:
                 try:
                     token_price = get_token_price()
-                    amout = token_price * ltai_amount
+                    amount = token_price * ltai_amount
                     CreditService.add_credits(
                         provider=CreditTransactionProvider.solana,
                         address=sender,
-                        amount=amout,
+                        amount=amount,
                         transaction_hash=signature,
                         block_number=tx_block_slot,
                         status=tx_status,
