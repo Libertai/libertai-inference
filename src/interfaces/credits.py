@@ -4,9 +4,9 @@ from enum import Enum
 from typing import Literal, Annotated
 
 from pydantic import BaseModel, Field, field_validator
-from web3 import Web3
 
 from src.config import config
+from src.utils.address import validate_and_format_address
 
 
 class CreditTransactionProvider(str, Enum):
@@ -84,8 +84,8 @@ class VoucherAddCreditsRequest(BaseModel):
     password: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value):
+        return validate_and_format_address(value)
 
     @field_validator("password")
     def valid_password(cls, password):
@@ -108,8 +108,8 @@ class GetVouchersRequest(BaseModel):
     password: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value):
+        return validate_and_format_address(value)
 
     @field_validator("password")
     def valid_password(cls, password):

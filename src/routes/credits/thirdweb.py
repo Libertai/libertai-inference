@@ -7,6 +7,8 @@ from fastapi import HTTPException, Header, Request
 from pydantic import BaseModel, Field
 from web3 import Web3
 
+from src.utils.address import validate_and_format_address
+
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook, CreditTransactionStatus
 from src.models.base import SessionLocal
@@ -128,10 +130,13 @@ async def thirdweb_webhook(
             logger.info(f"Updated transaction {transaction_hash} status to completed")
             return
 
+        # Validate and format the sender address
+        validated_sender_address = validate_and_format_address(sender_address)
+        
         # Add credits to the user's account with the appropriate status
         CreditService.add_credits(
             provider=CreditTransactionProvider.thirdweb,
-            address=sender_address,
+            address=validated_sender_address,
             amount=amount_usd,
             transaction_hash=transaction_hash,
             block_number=None,  # Thirdweb doesn't provide block number

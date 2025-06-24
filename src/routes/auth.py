@@ -35,15 +35,19 @@ async def get_auth_message(request: AuthMessageRequest) -> AuthMessageResponse:
 @router.post("/login")
 async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Response) -> AuthLoginResponse:
     """Authenticate with a wallet signature."""
+    print(f"Address {request.address}")
+    print(f"Signature {request.signature}")
     if not is_signature_valid(
-        SubscriptionChain.base, auth_message(request.address), request.signature, request.address
+        SubscriptionChain(request.chain), auth_message(request.address), request.signature, request.address
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signature",
         )
+    print(f"It's a valid address {request.address}")
 
     # Create access token
+    print("Creating token...")
     access_token = create_access_token(address=request.address)
 
     # Set the token as an HTTP-only cookie
