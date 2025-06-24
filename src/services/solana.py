@@ -166,38 +166,3 @@ class SolanaService:
             logger.error(f"Error calculating token transfer amount: {e}")
 
         return 0.0
-
-    @staticmethod
-    async def get_balance_from_json_rpc(address: str) -> float:
-        body = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTokenAccountsByOwner",
-            "params": [
-                address,
-                {
-                    "mint": config.SOLANA_LTAI_MINT_ADDRESS,
-                },
-                {
-                    "encoding": "jsonParsed",
-                }
-            ],
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    config.SOLANA_RPC_URL,
-                    json=body,
-                    headers={
-                        "Content-Type": "application/json"
-                    }
-                ) as response:
-                    json_data = await response.json()
-                    balance = 0.0
-                    for value in json_data["result"]["value"]:
-                        balance += value["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmount"]
-                    return balance
-
-        except Exception as error:
-            print(f"Error fetching balance: {error}")
-        return 0.0

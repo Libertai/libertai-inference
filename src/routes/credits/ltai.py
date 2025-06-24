@@ -83,11 +83,6 @@ async def process_solana_ltai_transactions() -> list[str]:
         processed_transactions = await poller.poll_transactions()
         return processed_transactions
 
-@router.get("/ltai/solana/balance", description="Get $LTAI balance from address") # type: ignore
-async def get_solana_ltai_balance(address: str) -> float:
-    validated_address = validate_and_format_address(address)
-    return await SolanaService.get_balance_from_json_rpc(validated_address)
-
 def handle_payment_event(event) -> str:
     """Handle a PaymentProcessed event from the LTAI Payment Processor contract
 
