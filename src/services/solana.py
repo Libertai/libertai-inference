@@ -1,6 +1,5 @@
 import json
 import logging
-import aiohttp
 from solana.rpc.api import Client
 from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
 from sqlalchemy import select, desc
