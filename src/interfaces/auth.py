@@ -1,13 +1,14 @@
 from pydantic import BaseModel, field_validator
-from web3 import Web3
+
+from src.utils.address import validate_and_format_address
 
 
 class AuthMessageRequest(BaseModel):
     address: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value):
+        return validate_and_format_address(value)
 
 
 class AuthMessageResponse(BaseModel):
@@ -17,10 +18,11 @@ class AuthMessageResponse(BaseModel):
 class AuthLoginRequest(BaseModel):
     address: str
     signature: str
+    chain: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value):
+        return validate_and_format_address(value)
 
 
 class AuthLoginResponse(BaseModel):

@@ -6,17 +6,18 @@ from web3 import Web3
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider
+from src.utils.address import validate_and_format_address
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
-from src.services.solana_poll import TransactionPoller
+from src.services.solana import SolanaService
 from src.utils.cron import scheduler, ltai_base_payments_lock, ltai_solana_payments_lock
 from src.utils.logger import setup_logger
 from src.utils.token import get_token_price
 
 logger = setup_logger(__name__)
-poller = TransactionPoller()
+poller = SolanaService()
 
 w3 = Web3(Web3.HTTPProvider(config.BASE_RPC_URL))
 
@@ -82,7 +83,6 @@ async def process_solana_ltai_transactions() -> list[str]:
         processed_transactions = await poller.poll_transactions()
         return processed_transactions
 
-
 def handle_payment_event(event) -> str:
     """Handle a PaymentProcessed event from the LTAI Payment Processor contract
 
@@ -102,5 +102,6 @@ def handle_payment_event(event) -> str:
 
     token_price = get_token_price()  # Get token/USD price
     amount = token_price * ltai_amount  # Calculate USD value
-    CreditService.add_credits(CreditTransactionProvider.libertai, sender, amount, transaction_hash, block_number)
+    validated_sender = validate_and_format_address(sender)
+    CreditService.add_credits(CreditTransactionProvider.libertai, validated_sender, amount, transaction_hash, block_number)
     return transaction_hash

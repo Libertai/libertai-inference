@@ -1,11 +1,9 @@
 import json
 import logging
-
 from solana.rpc.api import Client
 from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
-
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import SessionLocal
@@ -15,7 +13,7 @@ from src.utils.token import get_token_price
 
 logger = logging.getLogger(__name__)
 
-class TransactionPoller:
+class SolanaService:
     def __init__(self):
         self.program_id = config.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA
         self.client = Client(config.SOLANA_RPC_URL)
