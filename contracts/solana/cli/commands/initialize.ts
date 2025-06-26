@@ -17,7 +17,7 @@ const initialize = async (payer: Keypair, program: Program) => {
   const tx = new Transaction().add(initializeIx);
   console.log("Sending tx...");
   const sig = await sendAndConfirmTransaction(program.provider.connection, tx, [payer]);
-  console.log("✅ Initialized. Tx Signature:", sig);
+  console.log(`✅ Initialized. Tx Signature: ${sig}`);
 };
 
 export const InitializeCommand = async () => {
