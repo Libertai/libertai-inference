@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-LibertAIPaymentProcessor = "2RHgoS9Xdx8DcA9aCPzK9afQUJfZGip7w1VU4VkiTp2P"
+LibertAIPaymentProcessor = "AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu"
 
 [registry]
 url = "https://api.apr.dev"
