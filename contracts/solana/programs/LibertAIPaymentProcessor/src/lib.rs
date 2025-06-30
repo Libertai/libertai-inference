@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-declare_id!("2RHgoS9Xdx8DcA9aCPzK9afQUJfZGip7w1VU4VkiTp2P");
+declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
+
+pub const ACCEPTED_MINT: Pubkey = pubkey!("HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk");
 
 
 #[program]
@@ -183,6 +185,9 @@ pub struct ProcessPayment<'info> {
         constraint = program_token_account.mint == token_mint.key()
     )]
     pub program_token_account: Account<'info, TokenAccount>,
+    #[account(
+        constraint = token_mint.key() == ACCEPTED_MINT @ PaymentProcessorError::InvalidTokenMint
+    )]
     pub token_mint: Account<'info, token::Mint>,
     pub token_program: Program<'info, Token>,
 }
@@ -320,4 +325,7 @@ pub enum PaymentProcessorError {
     
     #[msg("Insufficient funds in program token account")]
     InsufficientFunds,
+    
+    #[msg("Invalid token mint - only HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk is accepted")]
+    InvalidTokenMint,
 }
