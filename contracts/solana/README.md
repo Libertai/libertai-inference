@@ -36,7 +36,7 @@ These options are available for all commands:
 | `--payer-key-filepath <path>` | Path to payer private key JSON file | - |
 | `--payer-private-key <key>` | Payer private key as JSON string | - |
 | `--json-rpc-endpoint <url>` | Solana RPC endpoint | `https://api.testnet.solana.com` |
-| `--token-mint <address>` | Token mint address | `HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk` |
+| `--token-mint <address>` | Token mint address | `mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u` |
 | `--amount <amount>` | Amount of tokens (human-readable format) | - |
 | `--admin <address>` | Admin public key address | - |
 | `--new-owner <address>` | New owner public key address | - |
@@ -290,7 +290,7 @@ npm run cli initialize --payer-private-key "$PAYER_KEY"
 
 ### Default Token Information
 
-- **Default Token Mint:** `HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk` (LTAI token)
+- **Default Token Mint:** `mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u` (LTAI token)
 - **Default RPC Endpoint:** `https://api.testnet.solana.com`
 
 ## Development
