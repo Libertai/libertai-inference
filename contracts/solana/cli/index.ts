@@ -17,7 +17,7 @@ program
   .option("--payer-private-key <key>", "Payer private key as JSON string")
   .option("--json-rpc-endpoint <url>", "Solana RPC endpoint", "https://api.testnet.solana.com")
   .option("--amount <amount>", "Amount of tokens to transfer (in human-readable format, e.g. 60 for 60 tokens)")
-  .option("--token-mint <address>", "Token mint address", "HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk")
+  .option("--token-mint <address>", "Token mint address", "mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u")
   .option("--admin <address>", "Admin address")
   .option("--new-owner <address>", "New owner address")
   .option("--destination <address>", "Destination wallet address for withdrawal")
