@@ -42,7 +42,7 @@ async def create_agent(
     agent_id = uuid.uuid4()
 
     # Create Aleph instance
-    rootfs = settings.UBUNTU_22_QEMU_ROOTFS_ID
+    rootfs = settings.UBUNTU_24_QEMU_ROOTFS_ID
     aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
 
     user_balance = CreditService.get_balance(user_address)
@@ -96,7 +96,7 @@ async def create_agent(
             amount=AGENT_MONTHLY_COST,
             related_id=agent_id,
             months=body.subscription_months,
-            db_session=db
+            db_session=db,
         )
 
         # Update subscription_id on the agent
@@ -117,7 +117,7 @@ async def create_agent(
             paid_until=subscription.next_charge_at,
             renew_history=[],
             is_active=agent.is_active,
-            subscription_id=agent.subscription_id
+            subscription_id=agent.subscription_id,
         )
 
 
