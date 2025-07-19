@@ -53,8 +53,6 @@ async def refresh_subscriptions() -> None:
     """
     logger.info("Running scheduled subscription processing")
 
-    from src.models.subscription import Subscription
-
     with SessionLocal() as db:
         # Find all active subscriptions due for renewal
         active_subscriptions: list[Subscription] = (
