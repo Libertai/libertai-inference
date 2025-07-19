@@ -38,8 +38,12 @@ class _Config:
 
     def __init__(self):
         load_dotenv()
-        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE"))
-        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA = Pubkey.from_string(os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA"))
+        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
+            os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE")
+        )
+        self.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA = Pubkey.from_string(
+            os.getenv("LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA")
+        )
         self.BASE_RPC_URL = os.getenv("BASE_RPC_URL")
         self.SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL")
 
@@ -65,7 +69,7 @@ class _Config:
         self.ALEPH_SENDER_SK = os.getenv("ALEPH_SENDER_SK")  # type: ignore
         self.ALEPH_SENDER_PK = os.getenv("ALEPH_SENDER_PK")  # type: ignore
 
-        self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_CHANNEL")
+        self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_AGENT_CHANNEL")
 
 
 config = _Config()

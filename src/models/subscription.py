@@ -20,8 +20,8 @@ class SubscriptionType(str, enum.Enum):
 
 class SubscriptionStatus(str, enum.Enum):
     active = "active"
-    paused = "paused"
-    cancelled = "cancelled"
+    cancelled = "cancelled"  # Still active but stopping at the end of the period
+    inactive = "inactive"
 
 
 class Subscription(Base):
@@ -72,18 +72,6 @@ class Subscription(Base):
             self.next_charge_at = current_time + relativedelta(months=1)
 
         self.status = status
-
-    def pause(self) -> None:
-        """Pause this subscription"""
-        self.status = SubscriptionStatus.paused
-
-    def resume(self) -> None:
-        """Resume this subscription"""
-        self.status = SubscriptionStatus.active
-
-    def cancel(self) -> None:
-        """Cancel this subscription"""
-        self.status = SubscriptionStatus.cancelled
 
     def update_charge_dates(self, timestamp: datetime | None = None, months: int = 1) -> None:
         """

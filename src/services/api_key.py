@@ -73,7 +73,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error creating API key for {address}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def get_api_keys(address: str) -> list[ApiKey]:
@@ -113,7 +113,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error getting API keys for {address}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def get_api_key_by_id(key_id: uuid.UUID) -> ApiKey | None:
@@ -148,7 +148,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error getting API key with ID {key_id}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def update_api_key(
@@ -218,7 +218,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error updating API key {key_id}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def delete_api_key(key_id: uuid.UUID) -> bool:
@@ -247,7 +247,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error deleting API key {key_id}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def get_admin_all_api_keys() -> list[str]:
@@ -279,7 +279,7 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def register_inference_call(
@@ -335,4 +335,4 @@ class ApiKeyService:
 
         except Exception as e:
             logger.error(f"Error logging API key usage for {key}: {str(e)}", exc_info=True)
-            raise e
+            raise
