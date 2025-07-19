@@ -56,12 +56,10 @@ class SubscriptionService:
 
         except Exception as e:
             logger.error(f"Error creating subscription for {user_address}: {str(e)}", exc_info=True)
-            raise e
-            
+            raise
+
     @staticmethod
-    def _create_subscription_internal(
-        db, user_address, subscription_type, amount, related_id, next_charge_at
-    ):
+    def _create_subscription_internal(db, user_address, subscription_type, amount, related_id, next_charge_at):
         # Create the subscription
         subscription = Subscription(
             user_address=user_address,
@@ -72,7 +70,7 @@ class SubscriptionService:
             status=SubscriptionStatus.active,
         )
         db.add(subscription)
-        
+
         # We need to flush so that the ID is generated but don't commit yet
         # if an external session was passed in
         db.flush()
@@ -83,9 +81,7 @@ class SubscriptionService:
             # Check balance
             balance = CreditService.get_balance(user_address)
             if balance < amount:
-                raise ValueError(
-                    f"Insufficient balance: {balance} < {amount}. Subscription cannot be created."
-                )
+                raise ValueError(f"Insufficient balance: {balance} < {amount}. Subscription cannot be created.")
 
             # Deduct credits
             CreditService.use_credits(user_address, amount)
@@ -147,7 +143,7 @@ class SubscriptionService:
                     )
                     db.add(transaction)
 
-                    subscription.status = SubscriptionStatus.paused
+                    subscription.status = SubscriptionStatus.inactive
 
                     db.commit()
                     logger.warning(f"Renewal failed for subscription {subscription_id}: Insufficient balance")
@@ -158,7 +154,7 @@ class SubscriptionService:
 
                 # Update subscription
                 subscription.update_charge_dates(now)
-                
+
                 # Commit updates to subscription
                 db.commit()
                 db.refresh(subscription)
@@ -209,12 +205,12 @@ class SubscriptionService:
             return False
 
     @staticmethod
-    def resume_subscription(subscription_id: uuid.UUID, months: int = 1) -> bool:
+    def restart_subscription(subscription_id: uuid.UUID, months: int = 1) -> bool:
         """
-        Resume a paused subscription.
+        Restart an inactive subscription.
 
         Args:
-            subscription_id: The ID of the subscription to resume
+            subscription_id: The ID of the subscription to restart
             months: Number of months for the subscription (default is 1 month)
 
         Returns:
@@ -228,8 +224,8 @@ class SubscriptionService:
                     logger.warning(f"Subscription {subscription_id} not found")
                     return False
 
-                if subscription.status == SubscriptionStatus.cancelled:
-                    logger.warning(f"Cannot resume cancelled subscription {subscription_id}")
+                if subscription.status != SubscriptionStatus.inactive:
+                    logger.warning(f"Cannot resume non-inactive subscription {subscription_id}")
                     return False
 
                 # Check balance
@@ -239,8 +235,7 @@ class SubscriptionService:
 
                 if balance < amount:
                     logger.warning(
-                        f"Cannot resume subscription {subscription_id}: "
-                        f"Insufficient balance ({balance} < {amount})"
+                        f"Cannot restart subscription {subscription_id}: Insufficient balance ({balance} < {amount})"
                     )
                     return False
 
@@ -250,7 +245,7 @@ class SubscriptionService:
                 # Update subscription
                 subscription.status = SubscriptionStatus.active
                 subscription.update_charge_dates(datetime.now(), months=months)
-                
+
                 # Commit updates to subscription
                 db.commit()
                 db.refresh(subscription)
@@ -266,9 +261,10 @@ class SubscriptionService:
 
                 db.commit()
 
-                logger.info(f"Resumed subscription {subscription_id}")
+                logger.info(f"Restarted subscription {subscription_id}")
+                # TODO: Call functions to restart related services (agents etc)
                 return True
 
         except Exception as e:
-            logger.error(f"Error resuming subscription {subscription_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error restarting subscription {subscription_id}: {str(e)}", exc_info=True)
             return False

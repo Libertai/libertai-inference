@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from src.models import SubscriptionStatus
+
 
 class RenewTransaction(BaseModel):
     amount: float
@@ -18,26 +20,26 @@ class CreateAgentRequest(BaseModel):
 
 class AgentResponse(BaseModel):
     id: UUID
-    instance_hash: str
+    instance_hash: str | None
     name: str
     user_address: str
     created_at: datetime
     monthly_cost: float
     paid_until: datetime
     renew_history: list[dict[str, Any]]
-    is_active: bool = True
+    subscription_status: SubscriptionStatus
     subscription_id: UUID | None = None
 
 
 class GetAgentResponse(BaseModel):
     id: UUID
-    instance_hash: str
+    instance_hash: str | None
     name: str
     user_address: str
     monthly_cost: float
     paid_until: datetime
     instance_ip: str | None = None
-    is_active: bool = True
+    subscription_status: SubscriptionStatus
     subscription_id: UUID | None = None
 
 
