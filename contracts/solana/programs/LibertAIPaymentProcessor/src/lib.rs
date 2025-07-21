@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
-pub const ACCEPTED_MINT: Pubkey = pubkey!("HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk");
+pub const ACCEPTED_MINT: Pubkey = pubkey!("3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k");
 
 
 #[program]
@@ -326,6 +326,6 @@ pub enum PaymentProcessorError {
     #[msg("Insufficient funds in program token account")]
     InsufficientFunds,
     
-    #[msg("Invalid token mint - only HrGxyLboQpUAxQTDm5AKQ2vfEASo1FNnRFY3AqEi3iDk is accepted")]
+    #[msg("Invalid token mint - only 3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k is accepted")]
     InvalidTokenMint,
 }
