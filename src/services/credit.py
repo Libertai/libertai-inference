@@ -43,13 +43,6 @@ class CreditService:
             else amount
         )
 
-        log_msg = f"Adding {amount} credits to address {address} with status {status.value}"
-        if transaction_hash:
-            log_msg += f" from tx {transaction_hash}"
-        if block_number:
-            log_msg += f" in block {block_number}"
-        logger.debug(log_msg)
-
         try:
             with SessionLocal() as db:
                 # Get or create user
@@ -67,7 +60,6 @@ class CreditService:
                         .first()
                     )
                     if existing_transaction:
-                        logger.warning(f"Transaction {transaction_hash} already processed, skipping")
                         return False
 
                 # Record transaction
