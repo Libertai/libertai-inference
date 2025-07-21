@@ -15,7 +15,7 @@ const getAdmins = async (
 
   const programState = await anchorProgram.account.programState.fetch(programStatePDA);
   
-  console.log("Admins:");
+  console.log(programState.admins.length > 0 ? "Admins:" : "There are no admins except the owner");
   programState.admins.forEach((admin, index) => {
     console.log(`${index + 1}: ${admin.toString()}`);
   });

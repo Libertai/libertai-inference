@@ -51,21 +51,28 @@ const processPayment = async (
 export const ProcessPaymentCommand = async () => {
   const opts = program.opts();
 
+  console.log("1")
   const payer = getKeypair({
     filepath: opts.payerKeyFilepath,
     key: opts.payerPrivateKey,
   });
+  console.log("2")
 
   const connection = new Connection(opts.jsonRpcEndpoint, "confirmed");
   const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
     connection,
   });
+  console.log("3")
 
   const humanAmount = parseFloat(opts.amount);
+  console.log("3.2")
   const tokenMint = new PublicKey(opts.tokenMint);
+  console.log("3.3")
   const mintInfo = await getMint(connection, tokenMint);
+  console.log("4")
   const decimals = mintInfo.decimals;
   const amount = new BN(humanAmount * Math.pow(10, decimals));
+
 
   await processPayment(
     payer,
