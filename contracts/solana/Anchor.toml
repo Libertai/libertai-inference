@@ -12,7 +12,7 @@ LibertAIPaymentProcessor = "AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "testnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

@@ -1,4 +1,4 @@
-import { AccountInfo, Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { program } from "..";
 import { getKeypair } from "../utils";
 import { Program, BN, AnchorProvider } from "@coral-xyz/anchor";
@@ -25,7 +25,7 @@ interface SolanaRpcResponse {
   error?: any;
 }
 
-const getBalance = async (tokenMint: PublicKey, programId: PublicKey): Promise<number> => {
+const getBalance = async (tokenMint: PublicKey, programId: PublicKey, networkURL: string): Promise<number> => {
   // Derive the program token account PDA (same as in withdraw function)
   const [programTokenAccount] = PublicKey.findProgramAddressSync(
     [Buffer.from("program_token_account"), tokenMint.toBuffer()],
@@ -44,7 +44,7 @@ const getBalance = async (tokenMint: PublicKey, programId: PublicKey): Promise<n
     ],
   };
   try {
-    const response = await fetch("https://api.testnet.solana.com", {
+    const response = await fetch(networkURL, {
       method: "POST",
       body: JSON.stringify(body),
       headers: {
@@ -65,13 +65,40 @@ const getBalance = async (tokenMint: PublicKey, programId: PublicKey): Promise<n
 }
 
 
+const waitForBalanceChange = async (
+  tokenMint: PublicKey,
+  programId: PublicKey,
+  networkURL: string,
+  expectedBalance: number,
+  maxRetries: number = 10,
+  retryDelayMs: number = 2000
+): Promise<number> => {
+  for (let i = 0; i < maxRetries; i++) {
+    const currentBalance = await getBalance(tokenMint, programId, networkURL);
+    if (currentBalance !== expectedBalance) {
+      return currentBalance;
+    }
+    if (i < maxRetries - 1) {
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    }
+  }
+  return await getBalance(tokenMint, programId, networkURL);
+};
+
 const withdraw = async (
   payer: Keypair,
   destinationWallet: PublicKey,
   amount: BN,
   tokenMint: PublicKey,
   program: Program,
+  networkURL: string
 ) => {
+  // Check if amount is zero
+  if (amount.isZero()) {
+    console.log("❌ Cannot withdraw 0 tokens. Please specify a valid amount.");
+    return;
+  }
+
   const destinationTokenAccount = getAssociatedTokenAddressSync(tokenMint, destinationWallet);
   
   const [programState] = PublicKey.findProgramAddressSync(
@@ -96,18 +123,21 @@ const withdraw = async (
     })
     .instruction();
 
-  const balanceBefore = await getBalance(tokenMint, program.programId)
+  const balanceBefore = await getBalance(tokenMint, program.programId, networkURL)
   console.log(`Program balance before withdraw is ${balanceBefore}`)
+  
   const tx = new Transaction().add(ix);
   const sig = await sendAndConfirmTransaction(program.provider.connection, tx, [payer]);
-  const balanceAfter = await getBalance(tokenMint, program.programId)
+  
+  console.log("Waiting for balance update...");
+  const balanceAfter = await waitForBalanceChange(tokenMint, program.programId, networkURL, balanceBefore);
   console.log(`Program balance after withdraw is ${balanceAfter}`)
   console.log(`✅ Withdrew ${amount.toString()} tokens to ${destinationWallet.toString()}. Tx Signature: ${sig}`);
 }
 
 export const WithdrawCommand = async () => {
   const opts = program.opts();
-  
+
   const payer = getKeypair({
     filepath: opts.payerKeyFilepath,
     key: opts.payerPrivateKey,
@@ -142,12 +172,12 @@ export const WithdrawCommand = async () => {
   const amount = new BN(humanAmount * Math.pow(10, decimals));
 
   console.log(`💰 Withdrawing ${humanAmount} tokens`);
-
   await withdraw(
     payer,
     destinationWallet,
     amount,
     tokenMint,
-    anchorProgram
+    anchorProgram,
+      opts.jsonRpcEndpoint
   );
 }

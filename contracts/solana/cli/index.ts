@@ -7,6 +7,7 @@ import { RemoveAdminCommand } from "./commands/removeAdmin";
 import { ChangeOwnerCommand } from "./commands/changeOwner";
 import { GetAdminsCommand } from "./commands/getAdmins";
 import { WithdrawCommand } from "./commands/withdraw";
+import { WithdrawSolCommand } from "./commands/withdraw_sol";
 
 export const program = new Command();
 
@@ -61,5 +62,10 @@ program
   .command("withdraw")
   .description("Withdraw LTAI tokens from program (admin/owner only)")
   .action(WithdrawCommand)
+
+program
+  .command("withdraw-sol")
+  .description("Withdraw SOL from program (admin/owner only)")
+  .action(WithdrawSolCommand)
 
 program.parseAsync(process.argv);

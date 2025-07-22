@@ -5,7 +5,6 @@ declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
 pub const ACCEPTED_MINT: Pubkey = pubkey!("3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k");
 
-
 #[program]
 pub mod libert_ai_payment_processor {
     use super::*;
@@ -125,6 +124,38 @@ pub mod libert_ai_payment_processor {
              amount, 
              ctx.accounts.authority.key(), 
              ctx.accounts.destination_token_account.owner);
+        
+        Ok(())
+    }
+
+    pub fn withdraw_sol(ctx: Context<WithdrawSol>, amount: u64) -> Result<()> {
+        let program_state_account = &ctx.accounts.program_state;
+        let rent = Rent::get()?;
+        let min_balance = rent.minimum_balance(program_state_account.to_account_info().data_len());
+
+        msg!("Program state balance: {}, Min balance needed: {}, Amount requested: {}", 
+            program_state_account.to_account_info().lamports(),
+            min_balance,
+            amount);
+
+        require!(
+            program_state_account.to_account_info().lamports() >= amount + min_balance,
+            PaymentProcessorError::InsufficientFunds
+        );
+
+        let seeds = &[
+            b"program_state".as_ref(),
+            &[program_state_account.bump],
+        ];
+        let _signer = &[&seeds[..]];
+
+        **program_state_account.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.destination.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        msg!("SOL withdrawal processed: {} lamports by {} to {}", 
+             amount, 
+             ctx.accounts.authority.key(), 
+             ctx.accounts.destination.key());
         
         Ok(())
     }
@@ -299,6 +330,23 @@ pub struct Withdraw<'info> {
     
     pub token_mint: Account<'info, token::Mint>,
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawSol<'info> {
+    #[account(
+        mut,
+        seeds = [b"program_state"],
+        bump = program_state.bump,
+        constraint = program_state.is_owner_or_admin(&authority.key()) @PaymentProcessorError::UnauthorizedAccess
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    #[account(mut)]
+    pub destination: AccountInfo<'info>,
 }
 
 #[event]
