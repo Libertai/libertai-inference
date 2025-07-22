@@ -345,6 +345,8 @@ pub struct WithdrawSol<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     
+    
+    /// CHECK 
     #[account(mut)]
     pub destination: AccountInfo<'info>,
 }
