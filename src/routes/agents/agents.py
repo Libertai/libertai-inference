@@ -31,6 +31,33 @@ logger = setup_logger(__name__)
 AGENT_MONTHLY_COST = 10  # Monthly cost in credits
 
 
+async def _create_agent_instance(
+    client: AuthenticatedAlephHttpClient, agent_id: uuid.UUID, ssh_public_key: str
+) -> str:
+    """Helper function to create an Aleph agent instance."""
+    rootfs = settings.UBUNTU_24_QEMU_ROOTFS_ID
+    rootfs_message: StoreMessage = await client.get_message(item_hash=rootfs, message_type=StoreMessage)
+    rootfs_size = (
+        rootfs_message.content.size if rootfs_message.content.size is not None else settings.DEFAULT_ROOTFS_SIZE
+    )
+
+    instance_message, _status = await client.create_instance(
+        rootfs=rootfs,
+        rootfs_size=rootfs_size,
+        hypervisor=HypervisorType.qemu,
+        payment=Payment(chain=Chain.ETH, type=PaymentType.hold, receiver=None),
+        channel=config.ALEPH_AGENT_CHANNEL,
+        address=config.ALEPH_OWNER,
+        ssh_keys=[ssh_public_key],
+        metadata={"name": f"agent-{agent_id}"},
+        vcpus=settings.DEFAULT_VM_VCPUS,
+        memory=settings.DEFAULT_INSTANCE_MEMORY,
+        sync=True,
+    )
+
+    return instance_message.item_hash
+
+
 @router.post("/", description="Create a new agent", response_model=AgentResponse)  # type: ignore
 async def create_agent(
     body: CreateAgentRequest,
@@ -39,7 +66,6 @@ async def create_agent(
     agent_id = uuid.uuid4()
 
     # Create Aleph instance
-    rootfs = settings.UBUNTU_24_QEMU_ROOTFS_ID
     aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
 
     user_balance = CreditService.get_balance(user_address)
@@ -51,31 +77,12 @@ async def create_agent(
 
     with SessionLocal() as db:
         async with AuthenticatedAlephHttpClient(account=aleph_account, api_server=config.ALEPH_API_URL) as client:
-            rootfs_message: StoreMessage = await client.get_message(item_hash=rootfs, message_type=StoreMessage)
-            rootfs_size = (
-                rootfs_message.content.size
-                if rootfs_message.content.size is not None
-                else settings.DEFAULT_ROOTFS_SIZE
-            )
-
-            instance_message, _status = await client.create_instance(
-                rootfs=rootfs,
-                rootfs_size=rootfs_size,
-                hypervisor=HypervisorType.qemu,
-                payment=Payment(chain=Chain.ETH, type=PaymentType.hold, receiver=None),
-                channel=config.ALEPH_AGENT_CHANNEL,
-                address=config.ALEPH_OWNER,
-                ssh_keys=[body.ssh_public_key],
-                metadata={"name": f"agent-{agent_id}"},
-                vcpus=settings.DEFAULT_VM_VCPUS,
-                memory=settings.DEFAULT_INSTANCE_MEMORY,
-                sync=True,
-            )
+            instance_hash = await _create_agent_instance(client, agent_id, body.ssh_public_key)
 
         # Create agent in the database
         agent = Agent(
             agent_id=agent_id,
-            instance_hash=instance_message.item_hash,
+            instance_hash=instance_hash,
             name=body.name,
             user_address=user_address,
             ssh_public_key=body.ssh_public_key,
@@ -165,6 +172,77 @@ async def get_agent_public_info(agent_id: uuid.UUID) -> GetAgentResponse:
                 ip_address = None
             else:
                 ip_address = await fetch_instance_ip(agent.instance_hash)
+        except ValueError:
+            ip_address = None
+
+        return GetAgentResponse(
+            id=agent.id,
+            instance_hash=agent.instance_hash,
+            name=agent.name,
+            user_address=agent.user_address,
+            monthly_cost=agent.subscription.amount,
+            paid_until=agent.subscription.next_charge_at,
+            instance_ip=ip_address,
+            subscription_status=agent.subscription.status,
+            subscription_id=agent.subscription_id,
+        )
+
+
+@router.post("/{agent_id}/reallocate", description="Reallocate an agent instance")
+async def reallocate_agent(
+    agent_id: uuid.UUID,
+    user_address: str = Depends(get_current_address),
+) -> GetAgentResponse:
+    with SessionLocal() as db:
+        agent = (
+            db.query(Agent)
+            .join(Agent.subscription)
+            .filter(Agent.id == agent_id, Agent.user_address == user_address)
+            .first()
+        )
+
+        if not agent:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=f"Agent with ID {agent_id} not found.",
+            )
+
+        if agent.subscription.status == SubscriptionStatus.inactive:
+            raise HTTPException(
+                status_code=HTTPStatus.FORBIDDEN,
+                detail="Cannot reallocate agent with inactive subscription.",
+            )
+
+        if agent.instance_hash is None:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Agent has no active instance to reallocate.",
+            )
+
+        aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
+
+        async with AuthenticatedAlephHttpClient(account=aleph_account, api_server=config.ALEPH_API_URL) as client:
+            # Forget the previous instance
+            try:
+                await client.forget(
+                    address=config.ALEPH_OWNER,
+                    hashes=[agent.instance_hash],
+                    channel=config.ALEPH_AGENT_CHANNEL,
+                    reason="Agent reallocation requested",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to forget previous instance {agent.instance_hash}: {str(e)}")
+
+            # Create new instance
+            new_instance_hash = await _create_agent_instance(client, agent_id, agent.ssh_public_key)
+
+            # Update agent with new instance hash
+            agent.instance_hash = new_instance_hash
+            db.commit()
+
+        # Get IP address of new instance
+        try:
+            ip_address = await fetch_instance_ip(agent.instance_hash)
         except ValueError:
             ip_address = None
 
