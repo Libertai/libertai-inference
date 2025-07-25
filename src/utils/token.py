@@ -25,4 +25,4 @@ def get_token_price() -> float:
         return price
     except requests.RequestException as e:
         logger.error(f"Failed to fetch token price: {str(e)}")
-        raise e
+        raise

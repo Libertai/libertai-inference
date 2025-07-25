@@ -39,7 +39,7 @@ class CreditService:
         # Apply the boost for LTAI payments
         amount = (
             amount * 100 / 80
-            if provider in [CreditTransactionProvider.libertai, CreditTransactionProvider.solana]
+            if provider in [CreditTransactionProvider.base, CreditTransactionProvider.solana]
             else amount
         )
 
@@ -79,7 +79,7 @@ class CreditService:
                 return True
         except Exception as e:
             logger.error(f"Error adding credits to {address}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def use_credits(address: str, amount: float):
@@ -137,7 +137,7 @@ class CreditService:
                 return True
         except Exception as e:
             logger.error(f"Error using credits from {address}: {str(e)}", exc_info=True)
-            raise e
+            raise
 
     @staticmethod
     def get_balance(address: str) -> float:

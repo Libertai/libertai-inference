@@ -10,10 +10,10 @@ from src.utils.address import validate_and_format_address
 
 
 class CreditTransactionProvider(str, Enum):
-    libertai = "libertai"
+    base = "base"  # LTAI Base payments
     thirdweb = "thirdweb"
     voucher = "voucher"
-    solana = "solana"
+    solana = "solana"  # LTAI Solana payments
 
 
 class CreditBalanceResponse(BaseModel):
