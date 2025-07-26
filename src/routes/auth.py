@@ -2,7 +2,6 @@ import fastapi
 from fastapi import APIRouter, HTTPException, status, Cookie
 from libertai_utils.chains.ethereum import format_eth_address
 from libertai_utils.chains.index import is_signature_valid
-from libertai_utils.interfaces.subscription import SubscriptionChain
 
 from src.config import config
 from src.interfaces.auth import (
@@ -35,9 +34,7 @@ async def get_auth_message(request: AuthMessageRequest) -> AuthMessageResponse:
 @router.post("/login")
 async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Response) -> AuthLoginResponse:
     """Authenticate with a wallet signature."""
-    if not is_signature_valid(
-        SubscriptionChain.base, auth_message(request.address), request.signature, request.address
-    ):
+    if not is_signature_valid(request.chain, auth_message(request.address), request.signature, request.address):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signature",

@@ -1,13 +1,17 @@
+from libertai_utils.chains.index import is_address_valid
+from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel, field_validator
-from web3 import Web3
+from pydantic_core.core_schema import FieldValidationInfo
 
 
 class AuthMessageRequest(BaseModel):
+    chain: LibertaiChain
     address: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value, info: FieldValidationInfo):
+        chain: LibertaiChain = info.data.get("chain")
+        return is_address_valid(chain, value)
 
 
 class AuthMessageResponse(BaseModel):
@@ -15,12 +19,14 @@ class AuthMessageResponse(BaseModel):
 
 
 class AuthLoginRequest(BaseModel):
+    chain: LibertaiChain
     address: str
     signature: str
 
     @field_validator("address")
-    def validate_eth_address(cls, value):
-        return Web3.to_checksum_address(value)
+    def validate_address(cls, value, info: FieldValidationInfo):
+        chain: LibertaiChain = info.data.get("chain")
+        return is_address_valid(chain, value)
 
 
 class AuthLoginResponse(BaseModel):

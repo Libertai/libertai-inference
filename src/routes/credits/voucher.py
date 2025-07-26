@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException
+from libertai_utils.interfaces.blockchain import LibertaiChain
 
 from src.interfaces.credits import (
     VoucherAddCreditsRequest,
@@ -30,10 +31,10 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
 
 
 @router.get("/vouchers", description="Get all vouchers for a specific address")  # type: ignore
-async def get_vouchers(address: str, password: str) -> list[VoucherCreditsResponse]:
+async def get_vouchers(chain: LibertaiChain, address: str, password: str) -> list[VoucherCreditsResponse]:
     # Validate input using Pydantic model
     try:
-        params = GetVouchersRequest(address=address, password=password)
+        params = GetVouchersRequest(chain=chain, address=address, password=password)
     except ValueError as e:
         # This explicitly raises the validation error to be handled by FastAPI
         raise HTTPException(status_code=400, detail=str(e))

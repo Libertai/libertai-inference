@@ -15,12 +15,14 @@ from src.utils.token import get_token_price
 
 logger = logging.getLogger(__name__)
 
-class TransactionPoller:
+
+class SolanaService:
     def __init__(self):
         self.program_id = config.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA
         self.client = Client(config.SOLANA_RPC_URL)
 
-    def _get_last_signature_from_db(self, db: Session) -> str | None:
+    @staticmethod
+    def _get_last_signature_from_db(db: Session) -> str | None:
         """Get the last processed signature from database"""
         try:
             stmt = (
@@ -82,9 +84,7 @@ class TransactionPoller:
             new_signatures.append(sig_info)
         return new_signatures
 
-    async def _process_transaction(
-        self, tx_data, signature: str
-    ) -> list[str]:
+    async def _process_transaction(self, tx_data, signature: str) -> list[str]:
         """Process individual transaction"""
         try:
             # Safely parse transaction data
@@ -110,13 +110,12 @@ class TransactionPoller:
             # Process token balance changes
             ltai_amount = self._calculate_token_transfer_amount(meta)
 
-            tx_status = (
-                CreditTransactionStatus.completed
-                if "Ok" in tx_status_obj
-                else CreditTransactionStatus.error
-                if "Err" in tx_status_obj
-                else CreditTransactionStatus.pending
-            )
+            if "Ok" in tx_status_obj:
+                tx_status = CreditTransactionStatus.completed
+            elif "Err" in tx_status_obj:
+                tx_status = CreditTransactionStatus.error
+            else:
+                tx_status = CreditTransactionStatus.pending
 
             if ltai_amount > 0:
                 try:
@@ -139,7 +138,8 @@ class TransactionPoller:
 
         return []
 
-    def _calculate_token_transfer_amount(self, meta: dict) -> float:
+    @staticmethod
+    def _calculate_token_transfer_amount(meta: dict) -> float:
         """Calculate the amount of tokens transferred"""
         try:
             pre_balances = {
