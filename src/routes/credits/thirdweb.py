@@ -4,10 +4,9 @@ import time
 from typing import Any
 
 from fastapi import HTTPException, Header, Request
+from libertai_utils.chains.ethereum import format_eth_address
 from pydantic import BaseModel, Field
 from web3 import Web3
-
-from src.utils.address import validate_and_format_address
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook, CreditTransactionStatus
@@ -129,13 +128,10 @@ async def thirdweb_webhook(
             CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             return
 
-        # Validate and format the sender address
-        validated_sender_address = validate_and_format_address(sender_address)
-        
         # Add credits to the user's account with the appropriate status
         CreditService.add_credits(
             provider=CreditTransactionProvider.thirdweb,
-            address=validated_sender_address,
+            address=format_eth_address(sender_address),
             amount=amount_usd,
             transaction_hash=transaction_hash,
             block_number=None,  # Thirdweb doesn't provide block number

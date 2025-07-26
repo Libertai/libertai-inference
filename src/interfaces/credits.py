@@ -3,10 +3,12 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, Annotated
 
+from libertai_utils.chains.index import is_address_valid
+from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel, Field, field_validator
+from pydantic_core.core_schema import FieldValidationInfo
 
 from src.config import config
-from src.utils.address import validate_and_format_address
 
 
 class CreditTransactionProvider(str, Enum):
@@ -78,14 +80,16 @@ class ThirdwebBuyWithCryptoWebhook(BaseModel):
 
 
 class VoucherAddCreditsRequest(BaseModel):
+    chain: LibertaiChain
     address: str
     amount: Annotated[float, Field(gt=0)]
     expired_at: datetime | None = None
     password: str
 
     @field_validator("address")
-    def validate_address(cls, value):
-        return validate_and_format_address(value)
+    def validate_address(cls, value, info: FieldValidationInfo):
+        chain: LibertaiChain = info.data.get("chain")
+        return is_address_valid(chain, value)
 
     @field_validator("password")
     def valid_password(cls, password):
@@ -104,12 +108,14 @@ class VoucherCreditsResponse(BaseModel):
 
 
 class GetVouchersRequest(BaseModel):
+    chain: LibertaiChain
     address: str
     password: str
 
     @field_validator("address")
-    def validate_address(cls, value):
-        return validate_and_format_address(value)
+    def validate_address(cls, value, info: FieldValidationInfo):
+        chain: LibertaiChain = info.data.get("chain")
+        return is_address_valid(chain, value)
 
     @field_validator("password")
     def valid_password(cls, password):

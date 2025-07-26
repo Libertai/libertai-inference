@@ -13,7 +13,6 @@ class _Config:
     LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA: Pubkey
     BASE_RPC_URL: str
     SOLANA_RPC_URL: str
-    SOLANA_LTAI_MINT_ADDRESS: str
 
     DATABASE_URL: str
 
@@ -47,7 +46,6 @@ class _Config:
         )
         self.BASE_RPC_URL = os.getenv("BASE_RPC_URL")
         self.SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL")
-        self.SOLANA_LTAI_MINT_ADDRESS = os.getenv("SOLANA_LTAI_MINT_ADDRESS")
 
         self.DATABASE_URL = os.path.expandvars(os.getenv("DATABASE_URL", ""))
 
