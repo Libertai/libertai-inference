@@ -11,7 +11,9 @@ class AuthMessageRequest(BaseModel):
     @field_validator("address")
     def validate_address(cls, value, info: FieldValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
-        return is_address_valid(chain, value)
+        if not is_address_valid(chain, value):
+            raise ValueError(f"Invalid address for chain {chain}")
+        return value
 
 
 class AuthMessageResponse(BaseModel):
@@ -26,7 +28,9 @@ class AuthLoginRequest(BaseModel):
     @field_validator("address")
     def validate_address(cls, value, info: FieldValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
-        return is_address_valid(chain, value)
+        if not is_address_valid(chain, value):
+            raise ValueError(f"Invalid address for chain {chain}")
+        return value
 
 
 class AuthLoginResponse(BaseModel):

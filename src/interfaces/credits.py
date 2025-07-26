@@ -89,7 +89,9 @@ class VoucherAddCreditsRequest(BaseModel):
     @field_validator("address")
     def validate_address(cls, value, info: FieldValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
-        return is_address_valid(chain, value)
+        if not is_address_valid(chain, value):
+            raise ValueError(f"Invalid address for chain {chain}")
+        return value
 
     @field_validator("password")
     def valid_password(cls, password):
@@ -115,7 +117,9 @@ class GetVouchersRequest(BaseModel):
     @field_validator("address")
     def validate_address(cls, value, info: FieldValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
-        return is_address_valid(chain, value)
+        if not is_address_valid(chain, value):
+            raise ValueError(f"Invalid address for chain {chain}")
+        return value
 
     @field_validator("password")
     def valid_password(cls, password):
