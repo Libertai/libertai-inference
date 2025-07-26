@@ -10,12 +10,11 @@ import { getKeypair } from "../utils";
 import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
 import idl from "../../target/idl/libert_ai_payment_processor.json";
 import { program } from "..";
-import { TOKEN_PROGRAM_ID } from "@coral-xyz/anchor/dist/cjs/utils/token";
-import { getAssociatedTokenAddress } from "@solana/spl-token";
+import { getAssociatedTokenAddress, getMint, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const processPayment = async (
   payer: Keypair,
-  amount: number,
+  amount: BN,
   tokenMint: PublicKey,
   program: Program
 ) => {
@@ -32,12 +31,9 @@ const processPayment = async (
     program.programId
   );
 
-  console.log("User wallet (from private key):", userWallet.toString());
-  console.log("User token account (derived):", userTokenAccount.toString());
-  console.log("Program token account:", programTokenAccountPDA.toString());
-
+  
   const ix = await program.methods
-    .processPayment(new BN(amount))
+    .processPayment(amount)
     .accounts({
       user: payer.publicKey,
       userTokenAccount,
@@ -49,7 +45,7 @@ const processPayment = async (
 
   const tx = new Transaction().add(ix);
   const sig = await sendAndConfirmTransaction(program.provider.connection, tx, [payer]);
-  console.log("✅ Payment processed. Tx Signature:", sig);
+  console.log(`✅ Payment processed. Tx Signature: ${sig}`);
 };
 
 export const ProcessPaymentCommand = async () => {
@@ -65,8 +61,12 @@ export const ProcessPaymentCommand = async () => {
     connection,
   });
 
-  const amount = parseInt(opts.amount);
+  const humanAmount = parseFloat(opts.amount);
   const tokenMint = new PublicKey(opts.tokenMint);
+  const mintInfo = await getMint(connection, tokenMint);
+  const decimals = mintInfo.decimals;
+  const amount = new BN(humanAmount * Math.pow(10, decimals));
+
 
   await processPayment(
     payer,

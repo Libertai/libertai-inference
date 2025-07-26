@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-declare_id!("2RHgoS9Xdx8DcA9aCPzK9afQUJfZGip7w1VU4VkiTp2P");
+declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
+pub const ACCEPTED_MINT: Pubkey = pubkey!("3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k");
 
 #[program]
 pub mod libert_ai_payment_processor {
@@ -20,7 +21,6 @@ pub mod libert_ai_payment_processor {
     }
 
     pub fn process_payment(ctx: Context<ProcessPayment>, amount: u64) -> Result<()> {
-        // Transfer tokens from user to program
         let cpi_accounts = Transfer {
             from: ctx.accounts.user_token_account.to_account_info(),
             to: ctx.accounts.program_token_account.to_account_info(),
@@ -92,6 +92,73 @@ pub mod libert_ai_payment_processor {
         let program_state = &ctx.accounts.program_state;
         Ok(program_state.admins.clone())
     }
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let program_token_account = &ctx.accounts.program_token_account;
+        
+        require!(
+            program_token_account.amount >= amount,
+            PaymentProcessorError::InsufficientFunds
+        );
+
+        let token_mint_key = ctx.accounts.token_mint.key();
+        let seeds = &[
+            b"program_token_account",
+            token_mint_key.as_ref(),
+            &[ctx.bumps.program_token_account],
+        ];
+        let signer = &[&seeds[..]];
+
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.program_token_account.to_account_info(),
+            to: ctx.accounts.destination_token_account.to_account_info(),
+            authority: ctx.accounts.program_token_account.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(cpi_ctx, amount)?;
+
+        msg!("Withdrawal processed: {} tokens by {} to {}", 
+             amount, 
+             ctx.accounts.authority.key(), 
+             ctx.accounts.destination_token_account.owner);
+        
+        Ok(())
+    }
+
+    pub fn withdraw_sol(ctx: Context<WithdrawSol>, amount: u64) -> Result<()> {
+        let program_state_account = &ctx.accounts.program_state;
+        let rent = Rent::get()?;
+        let min_balance = rent.minimum_balance(program_state_account.to_account_info().data_len());
+
+        msg!("Program state balance: {}, Min balance needed: {}, Amount requested: {}", 
+            program_state_account.to_account_info().lamports(),
+            min_balance,
+            amount);
+
+        require!(
+            program_state_account.to_account_info().lamports() >= amount + min_balance,
+            PaymentProcessorError::InsufficientFunds
+        );
+
+        let seeds = &[
+            b"program_state".as_ref(),
+            &[program_state_account.bump],
+        ];
+        let _signer = &[&seeds[..]];
+
+        **program_state_account.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.destination.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        msg!("SOL withdrawal processed: {} lamports by {} to {}", 
+             amount, 
+             ctx.accounts.authority.key(), 
+             ctx.accounts.destination.key());
+        
+        Ok(())
+    }
 }
 
 #[account]
@@ -135,7 +202,6 @@ pub struct ProcessPayment<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     
-    /// User's token account for LTAI tokens
     #[account(
         mut,
         constraint = user_token_account.owner == user.key(),
@@ -143,7 +209,6 @@ pub struct ProcessPayment<'info> {
     )]
     pub user_token_account: Account<'info, TokenAccount>,
     
-    /// Program's token account to receive LTAI tokens
     #[account(
         mut,
         seeds = [b"program_token_account", token_mint.key().as_ref()],
@@ -151,6 +216,9 @@ pub struct ProcessPayment<'info> {
         constraint = program_token_account.mint == token_mint.key()
     )]
     pub program_token_account: Account<'info, TokenAccount>,
+    #[account(
+        constraint = token_mint.key() == ACCEPTED_MINT @ PaymentProcessorError::InvalidTokenMint
+    )]
     pub token_mint: Account<'info, token::Mint>,
     pub token_program: Program<'info, Token>,
 }
@@ -160,7 +228,6 @@ pub struct CreateProgramTokenAccount<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     
-    /// Program's PDA token account
     #[account(
         init,
         payer = payer,
@@ -235,6 +302,55 @@ pub struct GetAdmins<'info> {
     pub program_state: Account<'info, ProgramState>,
 }
 
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        seeds = [b"program_state"],
+        bump = program_state.bump,
+        constraint = program_state.is_owner_or_admin(&authority.key()) @PaymentProcessorError::UnauthorizedAccess
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    #[account(
+        mut,
+        seeds = [b"program_token_account", token_mint.key().as_ref()],
+        bump,
+        constraint = program_token_account.mint == token_mint.key()
+    )]
+    pub program_token_account: Account<'info, TokenAccount>,
+    
+    #[account(
+        mut,
+        constraint = destination_token_account.mint == token_mint.key()
+    )]
+    pub destination_token_account: Account<'info, TokenAccount>,
+    
+    pub token_mint: Account<'info, token::Mint>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawSol<'info> {
+    #[account(
+        mut,
+        seeds = [b"program_state"],
+        bump = program_state.bump,
+        constraint = program_state.is_owner_or_admin(&authority.key()) @PaymentProcessorError::UnauthorizedAccess
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    
+    /// CHECK 
+    #[account(mut)]
+    pub destination: AccountInfo<'info>,
+}
+
 #[event]
 pub struct PaymentEvent {
     pub user: Pubkey,
@@ -256,4 +372,10 @@ pub enum PaymentProcessorError {
     
     #[msg("Admin not found")]
     AdminNotFound,
+    
+    #[msg("Insufficient funds in program token account")]
+    InsufficientFunds,
+    
+    #[msg("Invalid token mint - only 3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k is accepted")]
+    InvalidTokenMint,
 }
