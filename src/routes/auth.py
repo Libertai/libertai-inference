@@ -53,8 +53,6 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
         secure=True,
     )
 
-    logger.debug(f"Generated access token for address {request.address}")
-
     return AuthLoginResponse(access_token=access_token, address=request.address)
 
 
