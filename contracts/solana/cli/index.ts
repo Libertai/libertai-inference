@@ -14,7 +14,7 @@ export const program = new Command();
 program
   .name("libert")
   .description("Libert AI Payment Processor CLI")
-  .option("--payer-key-filepath <path>", "Path to payer private key JSON file")
+  .option("--payer-key-filepath <path>", "Path to payer private key JSON file", "~/.config/solana/id.json")
   .option("--payer-private-key <key>", "Payer private key as JSON string")
   .option("--json-rpc-endpoint <url>", "Solana RPC endpoint", "https://api.devnet.solana.com")
   .option("--amount <amount>", "Amount of tokens to transfer (in human-readable format, e.g. 60 for 60 tokens)")
