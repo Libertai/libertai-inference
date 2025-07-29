@@ -14,8 +14,8 @@ export const program = new Command();
 const homeDir = os.homedir();
 
 program
-  .name("libert")
-  .description("Libert AI Payment Processor CLI")
+  .name("libertai")
+  .description("LibertAI Payment Processor CLI")
   .option("--payer-key-filepath <path>", "Path to payer private key JSON file", `${homeDir}/.config/solana/id.json`)
   .option("--payer-private-key <key>", "Payer private key as JSON string")
   .option("--json-rpc-endpoint <url>", "Solana RPC endpoint", "https://api.devnet.solana.com")
