@@ -1,9 +1,16 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
-pub const ACCEPTED_MINT: Pubkey = pubkey!("3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k");
+pub const ACCEPTED_MINT: Pubkey = pubkey!("9rjZcyhKTpAVYNBSQZ1eZ7rC8LQVt544rSYcBfNmRmaM");
+
+// Token program IDs
+pub const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub const TOKEN_2022_PROGRAM_ID: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
+fn is_valid_token_program(program_id: &Pubkey) -> bool {
+    *program_id == SPL_TOKEN_PROGRAM_ID || *program_id == TOKEN_2022_PROGRAM_ID
+}
 
 #[program]
 pub mod libert_ai_payment_processor {
@@ -21,16 +28,141 @@ pub mod libert_ai_payment_processor {
     }
 
     pub fn process_payment(ctx: Context<ProcessPayment>, amount: u64) -> Result<()> {
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.user_token_account.to_account_info(),
-            to: ctx.accounts.program_token_account.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
+        // Validate that the token program is either SPL Token or Token 2022
+        require!(
+            is_valid_token_program(&ctx.accounts.token_program.key()),
+            PaymentProcessorError::InvalidTokenProgram
+        );
+
+        // Validate user token account manually since it can be from either token program
+        require!(
+            ctx.accounts.user_token_account.owner == &ctx.accounts.token_program.key(),
+            PaymentProcessorError::InvalidTokenProgram
+        );
+
+        // Parse the token account data to validate mint and owner
+        {
+            let user_token_account_data = ctx.accounts.user_token_account.try_borrow_data()?;
+            require!(
+                user_token_account_data.len() >= 72, // Minimum size for both SPL Token and Token 2022 accounts
+                PaymentProcessorError::InvalidTokenAccount
+            );
+
+            // For both SPL Token and Token 2022, the mint is at bytes 0-32 and owner is at bytes 32-64
+            let mint_bytes = &user_token_account_data[0..32];
+            let owner_bytes = &user_token_account_data[32..64];
+            
+            let user_token_mint = Pubkey::try_from(mint_bytes).map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
+            let user_token_owner = Pubkey::try_from(owner_bytes).map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
+
+            require!(
+                user_token_mint == ctx.accounts.token_mint.key(),
+                PaymentProcessorError::InvalidTokenAccount
+            );
+            require!(
+                user_token_owner == ctx.accounts.user.key(),
+                PaymentProcessorError::InvalidTokenAccount
+            );
+        }
+
+        // Check if program token account needs initialization
+        let needs_initialization = {
+            let program_token_account_data = ctx.accounts.program_token_account.try_borrow_data()?;
+            program_token_account_data.len() == 0 || program_token_account_data[0] == 0
+        };
+        
+        if needs_initialization {
+            // Initialize the program token account
+            let initialize_account_ix = anchor_lang::solana_program::instruction::Instruction {
+                program_id: ctx.accounts.token_program.key(),
+                accounts: vec![
+                    anchor_lang::solana_program::instruction::AccountMeta::new(
+                        ctx.accounts.program_token_account.key(),
+                        false,
+                    ),
+                    anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                        ctx.accounts.token_mint.key(),
+                        false,
+                    ),
+                    anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                        ctx.accounts.program_token_account.key(),
+                        false,
+                    ),
+                    anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                        ctx.accounts.rent.key(),
+                        false,
+                    ),
+                ],
+                data: vec![1], // InitializeAccount instruction discriminator
+            };
+            
+            anchor_lang::solana_program::program::invoke(
+                &initialize_account_ix,
+                &[
+                    ctx.accounts.program_token_account.to_account_info(),
+                    ctx.accounts.token_mint.to_account_info(),
+                    ctx.accounts.program_token_account.to_account_info(),
+                    ctx.accounts.rent.to_account_info(),
+                    ctx.accounts.token_program.to_account_info(),
+                ],
+            )?;
+
+            msg!("Program token account initialized for mint: {}", ctx.accounts.token_mint.key());
+        } else {
+            // Validate existing program token account
+            require!(
+                ctx.accounts.program_token_account.owner == &ctx.accounts.token_program.key(),
+                PaymentProcessorError::InvalidTokenProgram
+            );
+
+            let program_token_account_data = ctx.accounts.program_token_account.try_borrow_data()?;
+            require!(
+                program_token_account_data.len() >= 72,
+                PaymentProcessorError::InvalidTokenAccount
+            );
+
+            let program_token_mint = Pubkey::try_from(&program_token_account_data[0..32])
+                .map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
+            
+            require!(
+                program_token_mint == ctx.accounts.token_mint.key(),
+                PaymentProcessorError::InvalidTokenAccount
+            );
+        }
+
+        // Create manual transfer instruction for Token-2022 compatibility
+        let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: ctx.accounts.token_program.key(),
+            accounts: vec![
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.user_token_account.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.program_token_account.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.user.key(),
+                    true,
+                ),
+            ],
+            data: {
+                let mut data = vec![3]; // Transfer instruction discriminator
+                data.extend_from_slice(&amount.to_le_bytes());
+                data
+            },
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        token::transfer(cpi_ctx, amount)?;
+        anchor_lang::solana_program::program::invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.user_token_account.to_account_info(),
+                ctx.accounts.program_token_account.to_account_info(),
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+            ],
+        )?;
 
         emit!(PaymentEvent {
             user: ctx.accounts.user.key(),
@@ -44,10 +176,6 @@ pub mod libert_ai_payment_processor {
         Ok(())
     }
     
-    pub fn create_program_token_account(ctx: Context<CreateProgramTokenAccount>) -> Result<()> {
-        msg!("Program token account created for mint: {}", ctx.accounts.token_mint.key());
-        Ok(())
-    }
 
     pub fn add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
         let program_state = &mut ctx.accounts.program_state;
@@ -94,12 +222,58 @@ pub mod libert_ai_payment_processor {
     }
 
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-        let program_token_account = &ctx.accounts.program_token_account;
-        
+        // Validate that the token program is either SPL Token or Token 2022
         require!(
-            program_token_account.amount >= amount,
-            PaymentProcessorError::InsufficientFunds
+            is_valid_token_program(&ctx.accounts.token_program.key()),
+            PaymentProcessorError::InvalidTokenProgram
         );
+
+        // Validate program token account manually
+        require!(
+            ctx.accounts.program_token_account.owner == &ctx.accounts.token_program.key(),
+            PaymentProcessorError::InvalidTokenProgram
+        );
+
+        {
+            let program_token_account_data = ctx.accounts.program_token_account.try_borrow_data()?;
+            require!(
+                program_token_account_data.len() >= 72,
+                PaymentProcessorError::InvalidTokenAccount
+            );
+
+            // Parse token account data to get amount (at bytes 64-72)
+            let amount_bytes = &program_token_account_data[64..72];
+            let program_token_amount = u64::from_le_bytes(
+                amount_bytes.try_into().map_err(|_| PaymentProcessorError::InvalidTokenAccount)?
+            );
+            
+            require!(
+                program_token_amount >= amount,
+                PaymentProcessorError::InsufficientFunds
+            );
+        }
+
+        // Validate destination token account manually
+        require!(
+            ctx.accounts.destination_token_account.owner == &ctx.accounts.token_program.key(),
+            PaymentProcessorError::InvalidTokenProgram
+        );
+
+        {
+            let destination_token_account_data = ctx.accounts.destination_token_account.try_borrow_data()?;
+            require!(
+                destination_token_account_data.len() >= 72,
+                PaymentProcessorError::InvalidTokenAccount
+            );
+
+            let destination_token_mint = Pubkey::try_from(&destination_token_account_data[0..32])
+                .map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
+            
+            require!(
+                destination_token_mint == ctx.accounts.token_mint.key(),
+                PaymentProcessorError::InvalidTokenAccount
+            );
+        }
 
         let token_mint_key = ctx.accounts.token_mint.key();
         let seeds = &[
@@ -109,21 +283,45 @@ pub mod libert_ai_payment_processor {
         ];
         let signer = &[&seeds[..]];
 
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.program_token_account.to_account_info(),
-            to: ctx.accounts.destination_token_account.to_account_info(),
-            authority: ctx.accounts.program_token_account.to_account_info(),
+        // Create manual transfer instruction for Token-2022 compatibility
+        let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: ctx.accounts.token_program.key(),
+            accounts: vec![
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.program_token_account.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.destination_token_account.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.program_token_account.key(),
+                    true,
+                ),
+            ],
+            data: {
+                let mut data = vec![3]; // Transfer instruction discriminator
+                data.extend_from_slice(&amount.to_le_bytes());
+                data
+            },
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-
-        token::transfer(cpi_ctx, amount)?;
+        anchor_lang::solana_program::program::invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.program_token_account.to_account_info(),
+                ctx.accounts.destination_token_account.to_account_info(),
+                ctx.accounts.program_token_account.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+            ],
+            signer,
+        )?;
 
         msg!("Withdrawal processed: {} tokens by {} to {}", 
              amount, 
              ctx.accounts.authority.key(), 
-             ctx.accounts.destination_token_account.owner);
+             ctx.accounts.destination_token_account.key());
         
         Ok(())
     }
@@ -202,46 +400,31 @@ pub struct ProcessPayment<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     
-    #[account(
-        mut,
-        constraint = user_token_account.owner == user.key(),
-        constraint = user_token_account.mint == token_mint.key()
-    )]
-    pub user_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    /// CHECK: Token account can be from either SPL Token or Token 2022 program - validated manually
+    pub user_token_account: AccountInfo<'info>,
     
     #[account(
-        mut,
+        init_if_needed,
+        payer = user,
+        space = 165, // Token account size (both SPL Token and Token 2022)
         seeds = [b"program_token_account", token_mint.key().as_ref()],
         bump,
-        constraint = program_token_account.mint == token_mint.key()
+        owner = token_program.key(),
     )]
-    pub program_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Token account can be from either SPL Token or Token 2022 program - validated manually  
+    pub program_token_account: AccountInfo<'info>,
     #[account(
         constraint = token_mint.key() == ACCEPTED_MINT @ PaymentProcessorError::InvalidTokenMint
     )]
-    pub token_mint: Account<'info, token::Mint>,
-    pub token_program: Program<'info, Token>,
+    /// CHECK: Token mint can be from either SPL Token or Token 2022 program
+    pub token_mint: AccountInfo<'info>,
+    /// CHECK: Token program can be either SPL Token or Token 2022
+    pub token_program: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
-#[derive(Accounts)]
-pub struct CreateProgramTokenAccount<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    
-    #[account(
-        init,
-        payer = payer,
-        seeds = [b"program_token_account", token_mint.key().as_ref()],
-        bump,
-        token::mint = token_mint,
-        token::authority = program_token_account,
-    )]
-    pub program_token_account: Account<'info, TokenAccount>,
-    
-    pub token_mint: Account<'info, token::Mint>,
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-}
 
 #[derive(Accounts)]
 pub struct AddAdmin<'info> {
@@ -317,19 +500,19 @@ pub struct Withdraw<'info> {
     #[account(
         mut,
         seeds = [b"program_token_account", token_mint.key().as_ref()],
-        bump,
-        constraint = program_token_account.mint == token_mint.key()
+        bump
     )]
-    pub program_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Token account can be from either SPL Token or Token 2022 program - validated manually
+    pub program_token_account: AccountInfo<'info>,
     
-    #[account(
-        mut,
-        constraint = destination_token_account.mint == token_mint.key()
-    )]
-    pub destination_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    /// CHECK: Token account can be from either SPL Token or Token 2022 program - validated manually
+    pub destination_token_account: AccountInfo<'info>,
     
-    pub token_mint: Account<'info, token::Mint>,
-    pub token_program: Program<'info, Token>,
+    /// CHECK: Token mint can be from either SPL Token or Token 2022 program
+    pub token_mint: AccountInfo<'info>,
+    /// CHECK: Token program can be either SPL Token or Token 2022
+    pub token_program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -376,6 +559,12 @@ pub enum PaymentProcessorError {
     #[msg("Insufficient funds in program token account")]
     InsufficientFunds,
     
-    #[msg("Invalid token mint - only 3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k is accepted")]
+    #[msg("Invalid token mint - only 9rjZcyhKTpAVYNBSQZ1eZ7rC8LQVt544rSYcBfNmRmaM is accepted")]
     InvalidTokenMint,
+    
+    #[msg("Invalid token program - only SPL Token and Token 2022 programs are accepted")]
+    InvalidTokenProgram,
+    
+    #[msg("Invalid token account - account data is malformed or constraints not met")]
+    InvalidTokenAccount,
 }

@@ -1,10 +1,10 @@
 import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { program } from "..";
-import { getKeypair } from "../utils";
-import { Program, BN, AnchorProvider } from "@coral-xyz/anchor";
+import { getKeypair, getTokenProgramId } from "../utils";
+import { Program, BN } from "@coral-xyz/anchor";
 import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
 import idl from "../../target/idl/libert_ai_payment_processor.json";
-import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, getMint } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getMint } from "@solana/spl-token";
 
 interface SolanaRpcResponse {
   jsonrpc: string;
@@ -99,7 +99,8 @@ const withdraw = async (
     return;
   }
 
-  const destinationTokenAccount = getAssociatedTokenAddressSync(tokenMint, destinationWallet);
+  const tokenProgramId = await getTokenProgramId(program.provider.connection, tokenMint);
+  const destinationTokenAccount = getAssociatedTokenAddressSync(tokenMint, destinationWallet, false, tokenProgramId);
   
   const [programState] = PublicKey.findProgramAddressSync(
     [Buffer.from("program_state")],
@@ -111,6 +112,8 @@ const withdraw = async (
     program.programId
   );
   
+  console.log(`📍 State program token account address: ${programTokenAccount.toString()}`);
+  
   const ix = await program.methods
     .withdraw(amount)
     .accounts({
@@ -119,7 +122,7 @@ const withdraw = async (
       programTokenAccount: programTokenAccount,
       destinationTokenAccount: destinationTokenAccount,
       tokenMint: tokenMint,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram: tokenProgramId,
     })
     .instruction();
 
@@ -163,8 +166,11 @@ export const WithdrawCommand = async () => {
   const destinationWallet = new PublicKey(opts.destination);
   const tokenMint = new PublicKey(opts.tokenMint);
 
+  // Get the correct token program ID first
+  const tokenProgramId = await getTokenProgramId(connection, tokenMint);
+  
   // Get token mint info to determine decimals
-  const mintInfo = await getMint(connection, tokenMint);
+  const mintInfo = await getMint(connection, tokenMint, undefined, tokenProgramId);
   const decimals = mintInfo.decimals;
   
   // Convert amount from human-readable format to smallest units

@@ -2,7 +2,6 @@ import { Command } from "commander";
 import { InitializeCommand } from "./commands/initialize";
 import { AddAdminCommand } from "./commands/addAdmin";
 import { ProcessPaymentCommand } from "./commands/processPayment";
-import { CreateProgramTokenAccountCommand } from "./commands/createProgramTokenAccount";
 import { RemoveAdminCommand } from "./commands/removeAdmin";
 import { ChangeOwnerCommand } from "./commands/changeOwner";
 import { GetAdminsCommand } from "./commands/getAdmins";
@@ -34,11 +33,6 @@ program
   .command("process-payment")
   .description("Process a payment and emit an event")
   .action(ProcessPaymentCommand);
-
-program
-  .command("create-program-token-account")
-  .description("Creates program token account")
-  .action(CreateProgramTokenAccountCommand)
 
 program
   .command("add-admin")

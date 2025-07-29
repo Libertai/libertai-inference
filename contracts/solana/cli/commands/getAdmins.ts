@@ -1,6 +1,5 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { program } from "..";
-import { getKeypair } from "../utils";
 import { Program } from "@coral-xyz/anchor";
 import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
 import idl from "../../target/idl/libert_ai_payment_processor.json";
