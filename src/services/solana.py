@@ -144,7 +144,7 @@ class SolanaService:
             if not payment_event:
                return []
             amount_after = payment_event['amount'] / (10 ** 9)
-            print(f"💰 Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
+            logger.info(f"💰 Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
             amount = token_price * amount_after
 
             CreditService.add_credits(
