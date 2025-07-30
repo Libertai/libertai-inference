@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
-pub const ACCEPTED_MINT: Pubkey = pubkey!("mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u");
+pub const ACCEPTED_MINT: Pubkey = pubkey!("Df3shQQ3qZ9qyLfrWTqfjP2TSSAqMvM5zxb2NXQQKaXh");
 
 // Token program IDs
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -559,7 +559,7 @@ pub enum PaymentProcessorError {
     #[msg("Insufficient funds in program token account")]
     InsufficientFunds,
     
-    #[msg("Invalid token mint - only mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u is accepted")]
+    #[msg("Invalid token mint - only Df3shQQ3qZ9qyLfrWTqfjP2TSSAqMvM5zxb2NXQQKaXh is accepted")]
     InvalidTokenMint,
     
     #[msg("Invalid token program - only SPL Token and Token 2022 programs are accepted")]
