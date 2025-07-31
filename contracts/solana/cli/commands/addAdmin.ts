@@ -1,7 +1,7 @@
 import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { program } from "..";
 import { getKeypair } from "../utils";
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
 import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
 import idl from "../../target/idl/libert_ai_payment_processor.json";
 

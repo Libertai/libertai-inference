@@ -8,7 +8,6 @@ A command-line interface for managing the LibertAI Payment Processor Solana prog
 - [Global Options](#global-options)
 - [Commands](#commands)
   - [initialize](#initialize)
-  - [create-program-token-account](#create-program-token-account)
   - [process-payment](#process-payment)
   - [add-admin](#add-admin)
   - [remove-admin](#remove-admin)
@@ -68,27 +67,6 @@ npm run cli initialize --payer-private-key '[123,45,67,...]'
 
 # Initialize on mainnet
 npm run cli initialize --payer-key-filepath ./keys/payer.json --json-rpc-endpoint https://api.mainnet-beta.solana.com
-```
-
-### create-program-token-account
-
-Create a program token account for holding tokens. This must be done before processing payments.
-
-**Usage:**
-```bash
-npm run cli create-program-token-account [options]
-```
-
-**Required Options:**
-- `--payer-key-filepath <path>` OR `--payer-private-key <key>`
-
-**Examples:**
-```bash
-# Create program token account
-npm run cli create-program-token-account --payer-key-filepath ./keys/payer.json
-
-# Create with custom token mint
-npm run cli create-program-token-account --payer-key-filepath ./keys/payer.json --token-mint 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM
 ```
 
 ### process-payment
@@ -237,19 +215,16 @@ npm run cli withdraw --payer-key-filepath ./keys/admin.json --destination 9WzDXw
 # 1. Initialize the program
 npm run cli initialize --payer-key-filepath ./keys/owner.json
 
-# 2. Create program token account
-npm run cli create-program-token-account --payer-key-filepath ./keys/owner.json
-
-# 3. Add an admin
+# 2. Add an admin
 npm run cli add-admin --payer-key-filepath ./keys/owner.json --admin AdminPublicKeyHere
 
-# 4. Process a payment
+# 3. Process a payment (token account will be auto-created)
 npm run cli process-payment --payer-key-filepath ./keys/user.json --amount 100
 
-# 5. Check current admins
+# 4. Check current admins
 npm run cli get-admins
 
-# 6. Withdraw tokens (admin only)
+# 5. Withdraw tokens (admin only)
 npm run cli withdraw --payer-key-filepath ./keys/admin.json --destination DestinationWalletAddress --amount 50
 ```
 

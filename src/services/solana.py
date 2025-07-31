@@ -1,10 +1,14 @@
 import json
 import logging
 
+import base64
+import struct
+
 from solana.rpc.api import Client
-from solders.rpc.responses import RpcConfirmedTransactionStatusWithSignature
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
+from solders.pubkey import Pubkey
+
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
@@ -20,150 +24,138 @@ class SolanaService:
     def __init__(self):
         self.program_id = config.LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA
         self.client = Client(config.SOLANA_RPC_URL)
+        self.last_processed_slot = None
 
     @staticmethod
-    def _get_last_signature_from_db(db: Session) -> str | None:
-        """Get the last processed signature from database"""
+    def _get_last_block_from_db(db: Session) -> int | None:
+        """Get the last processed block from database"""
         try:
             stmt = (
-                select(CreditTransaction.transaction_hash)
+                select(CreditTransaction.block_number)
                 .where(CreditTransaction.provider == CreditTransactionProvider.solana)
-                .order_by(desc(CreditTransaction.created_at))
+                .order_by(desc(CreditTransaction.block_number))
                 .limit(1)
             )
             result = db.execute(stmt).scalar_one_or_none()
             return result if result else None
         except Exception as e:
-            logger.error(f"Error getting last signature from DB: {e}")
+            logger.error(f"Error getting last block from DB: {e}")
             return None
+
+    def extract_payment_event(self, meta):
+        """Extract PaymentEvent data from transaction metadata"""
+
+        status = CreditTransactionStatus.completed if meta.get("err") is None else CreditTransactionStatus.error
+
+        log_messages = meta.get("logMessages", [])
+        for msg in log_messages:
+            # Anchor events are logged as "Program data: <base64_data>"
+            if msg.startswith("Program data: "):
+                try:
+                    event_data = base64.b64decode(msg[14:])  # Remove "Program data: " prefix
+                    
+                    # Check if this is a PaymentEvent (first 8 bytes are discriminator)
+                    # PaymentEvent discriminator can be computed from event name hash
+                    if len(event_data) >= 72:  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp) + 32 (token_mint)
+                        # Skip discriminator (first 8 bytes) and parse the event data
+                        offset = 8
+                        
+                        # Parse user (32 bytes)
+                        user_bytes = event_data[offset:offset+32]
+                        user = str(Pubkey(user_bytes))
+                        offset += 32
+                        
+                        # Parse amount (8 bytes, little endian)
+                        amount = struct.unpack('<Q', event_data[offset:offset+8])[0]
+                        offset += 8
+                        
+                        # Skip timestamp (8 bytes, little endian)
+                        offset += 8
+                        
+                        return {
+                            "user": user,
+                            "amount": amount,
+                            "status": status,
+                        }
+                except Exception as e:
+                    print(f"Error parsing event data: {e}")
+                    continue
+        
+        return None
 
     async def poll_transactions(self) -> list[str]:
         """Poll for new transactions"""
-        processed_txs: list[str] = []
+        processed_signatures: list[str] = []
 
         try:
             with SessionLocal() as db:
-                last_signature = self._get_last_signature_from_db(db)
+                self.last_processed_slot = self._get_last_block_from_db(db)
 
                 # Get recent transactions
-                response = self.client.get_signatures_for_address(self.program_id, limit=1000)
+                signatures = self.client.get_signatures_for_address(
+                    self.program_id,
+                    limit=50
+                )
 
-                if not response.value:
-                    return processed_txs
+                if not signatures.value:
+                    return processed_signatures
+                new_transactions = []
+                token_price = get_token_price()
 
-                new_signatures = self._filter_new_signatures(response.value, last_signature)
-
-                # Process transactions
-                for sig_info in new_signatures:
+                for sig_info in signatures.value:
                     signature_str = str(sig_info.signature)
 
-                    tx_response = self.client.get_transaction(
-                        sig_info.signature, encoding="json", max_supported_transaction_version=0
+                    existing_tx = db.scalar(
+                        select(CreditTransaction).where(
+                            CreditTransaction.transaction_hash == signature_str,
+                            CreditTransaction.provider == CreditTransactionProvider.solana
+                        )
                     )
+                    if existing_tx:
+                        continue
 
-                    if tx_response.value:
-                        processed_sigs = await self._process_transaction(tx_response.value, signature_str)
-                        processed_txs.extend(processed_sigs)
+                    if self.last_processed_slot and sig_info.slot <= self.last_processed_slot:
+                        continue
+                    new_transactions.append((sig_info, signature_str))
+
+                for sig_info, signature_str in reversed(new_transactions):
+                    tx = self.client.get_transaction(
+                        sig_info.signature,
+                        encoding="json",
+                        max_supported_transaction_version=0
+                    )
+                    if tx.value:
+                        await self._process_transaction(tx.value, signature_str, token_price, sig_info.slot)
+                        self.last_processed_slot = sig_info.slot
 
         except Exception as e:
             logger.error(f"Polling error: {e}")
 
-        return processed_txs
+        return processed_signatures
 
-    def _filter_new_signatures(
-        self, signatures: list[RpcConfirmedTransactionStatusWithSignature], last_signature: str | None
-    ) -> list:
-        """Filter out already processed signatures"""
-        if not last_signature:
-            return signatures
-
-        new_signatures = []
-        for sig_info in signatures:
-            if str(sig_info.signature) == last_signature:
-                break
-            new_signatures.append(sig_info)
-        return new_signatures
-
-    async def _process_transaction(self, tx_data, signature: str) -> list[str]:
-        """Process individual transaction"""
+    async def _process_transaction(self, value, signature: str, token_price: float, slot: int) -> list[str]:
+        """Process individual transaction if it contains PaymentEvent"""
         try:
-            # Safely parse transaction data
-            if not hasattr(tx_data, "transaction"):
-                logger.warning(f"Transaction {signature} has no transaction data")
-                return []
+            tx = value.transaction
+            tx_json = json.loads(tx.to_json())
+            meta = tx_json["meta"]
 
-            tx_data_json = json.loads(tx_data.to_json())
-            tx_block_slot = tx_data_json.get("slot", 0)
-            tx_json = json.loads(tx_data.transaction.to_json())
-            transaction = tx_json.get("transaction", {})
-            meta = tx_json.get("meta", {})
-            tx_status_obj = meta.get("status", {})
-            message = transaction.get("message", {})
-            account_keys = message.get("accountKeys", [])
+            payment_event = self.extract_payment_event(meta)
+            if not payment_event:
+               return []
+            amount_after = payment_event['amount'] / (10 ** 9)
+            logger.info(f"💰 Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
+            amount = token_price * amount_after
 
-            if not account_keys:
-                logger.warning(f"Transaction {signature} has no account keys")
-                return []
-
-            sender = account_keys[0]
-
-            # Process token balance changes
-            ltai_amount = self._calculate_token_transfer_amount(meta)
-
-            if "Ok" in tx_status_obj:
-                tx_status = CreditTransactionStatus.completed
-            elif "Err" in tx_status_obj:
-                tx_status = CreditTransactionStatus.error
-            else:
-                tx_status = CreditTransactionStatus.pending
-
-            if ltai_amount > 0:
-                try:
-                    token_price = get_token_price()
-                    amount = token_price * ltai_amount
-                    CreditService.add_credits(
-                        provider=CreditTransactionProvider.solana,
-                        address=sender,
-                        amount=amount,
-                        transaction_hash=signature,
-                        block_number=tx_block_slot,
-                        status=tx_status,
-                    )
-                except Exception as e:
-                    logger.error(f"Error storing transaction in DB: {e}")
-                    return []
+            CreditService.add_credits(
+                provider=CreditTransactionProvider.solana,
+                address=payment_event["user"],
+                amount=amount,
+                transaction_hash=signature,
+                block_number=slot,
+                status=payment_event["status"],
+            )
 
         except Exception as e:
-            logger.error(f"Error processing transaction {signature}: {e}")
-
+            logger.error(f"Error processing transaction: {e}")
         return []
-
-    @staticmethod
-    def _calculate_token_transfer_amount(meta: dict) -> float:
-        """Calculate the amount of tokens transferred"""
-        try:
-            pre_balances = {
-                b["accountIndex"]: int(b["uiTokenAmount"]["amount"]) for b in meta.get("preTokenBalances", [])
-            }
-            post_balances = {
-                b["accountIndex"]: int(b["uiTokenAmount"]["amount"]) for b in meta.get("postTokenBalances", [])
-            }
-
-            for index in pre_balances:
-                if index in post_balances:
-                    diff = pre_balances[index] - post_balances[index]
-                    if diff > 0:
-                        # Get decimals from pre_token_balances
-                        decimals = None
-                        for balance in meta.get("preTokenBalances", []):
-                            if balance["accountIndex"] == index:
-                                decimals = balance["uiTokenAmount"]["decimals"]
-                                break
-
-                        if decimals is not None:
-                            return diff / (10**decimals)
-
-        except (KeyError, ValueError, TypeError) as e:
-            logger.error(f"Error calculating token transfer amount: {e}")
-
-        return 0.0

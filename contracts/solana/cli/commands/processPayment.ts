@@ -6,11 +6,11 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { Program, BN } from "@coral-xyz/anchor";
-import { getKeypair } from "../utils";
+import { getKeypair, getTokenProgramId } from "../utils";
 import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
 import idl from "../../target/idl/libert_ai_payment_processor.json";
 import { program } from "..";
-import { getAssociatedTokenAddress, getMint, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { getAssociatedTokenAddress, getMint} from "@solana/spl-token";
 
 const processPayment = async (
   payer: Keypair,
@@ -19,9 +19,12 @@ const processPayment = async (
   program: Program
 ) => {
   const userWallet = payer.publicKey;
+  const tokenProgramId = await getTokenProgramId(program.provider.connection, tokenMint);
   const userTokenAccount = await getAssociatedTokenAddress(
     tokenMint,
-    userWallet
+    userWallet,
+    false,
+    tokenProgramId
   );
   const [programTokenAccountPDA] = PublicKey.findProgramAddressSync(
     [
@@ -39,7 +42,7 @@ const processPayment = async (
       userTokenAccount,
       programTokenAccount: programTokenAccountPDA,
       tokenMint,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram: tokenProgramId,
     })
     .instruction();
 
@@ -63,7 +66,8 @@ export const ProcessPaymentCommand = async () => {
 
   const humanAmount = parseFloat(opts.amount);
   const tokenMint = new PublicKey(opts.tokenMint);
-  const mintInfo = await getMint(connection, tokenMint);
+  const tokenProgramId = await getTokenProgramId(connection, tokenMint);
+  const mintInfo = await getMint(connection, tokenMint, "confirmed", tokenProgramId);
   const decimals = mintInfo.decimals;
   const amount = new BN(humanAmount * Math.pow(10, decimals));
 
