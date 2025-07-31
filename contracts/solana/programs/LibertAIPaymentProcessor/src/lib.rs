@@ -174,6 +174,33 @@ pub mod libert_ai_payment_processor {
 
         Ok(())
     }
+    
+    pub fn proces_payment_sol(ctx: Context<ProcessPaymentSol>, amount: u64) -> Result<()> {
+        require!(
+            ctx.accounts.user.lamports() >= amount,
+            PaymentProcessorError::InsufficientFunds
+        );
+        
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.program_state.to_account_info(),
+            }
+        );
+        
+        anchor_lang::system_program::transfer(cpi_context, amount)?;
+        
+        emit!(SolPaymentEvent {
+            user: ctx.accounts.user.key(),
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("SOL payment processed: {} lamports from {}", amount, ctx.accounts.user.key());
+        
+        Ok(())
+    }
 
     pub fn add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
         let program_state = &mut ctx.accounts.program_state;
@@ -423,6 +450,21 @@ pub struct ProcessPayment<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ProcessPaymentSol<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    
+    #[account(
+        mut,
+        seeds = [b"program_state"],
+        bump = program_state.bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct AddAdmin<'info> {
     #[account(
         mut,
@@ -535,6 +577,13 @@ pub struct PaymentEvent {
     pub amount: u64,
     pub timestamp: i64,
     pub token_mint: Pubkey,
+}
+
+#[event]
+pub struct SolPaymentEvent {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
 }
 
 #[error_code]
