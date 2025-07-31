@@ -4,7 +4,6 @@ declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
 pub const ACCEPTED_MINT: Pubkey = pubkey!("Df3shQQ3qZ9qyLfrWTqfjP2TSSAqMvM5zxb2NXQQKaXh");
 
-// Token program IDs
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub const TOKEN_2022_PROGRAM_ID: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
@@ -51,7 +50,7 @@ pub mod libert_ai_payment_processor {
             // For both SPL Token and Token 2022, the mint is at bytes 0-32 and owner is at bytes 32-64
             let mint_bytes = &user_token_account_data[0..32];
             let owner_bytes = &user_token_account_data[32..64];
-            
+
             let user_token_mint = Pubkey::try_from(mint_bytes).map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
             let user_token_owner = Pubkey::try_from(owner_bytes).map_err(|_| PaymentProcessorError::InvalidTokenAccount)?;
 
@@ -70,7 +69,7 @@ pub mod libert_ai_payment_processor {
             let program_token_account_data = ctx.accounts.program_token_account.try_borrow_data()?;
             program_token_account_data.len() == 0 || program_token_account_data[0] == 0
         };
-        
+
         if needs_initialization {
             // Initialize the program token account
             let initialize_account_ix = anchor_lang::solana_program::instruction::Instruction {
@@ -95,7 +94,7 @@ pub mod libert_ai_payment_processor {
                 ],
                 data: vec![1], // InitializeAccount instruction discriminator
             };
-            
+
             anchor_lang::solana_program::program::invoke(
                 &initialize_account_ix,
                 &[
@@ -170,12 +169,11 @@ pub mod libert_ai_payment_processor {
             timestamp: Clock::get()?.unix_timestamp,
             token_mint: ctx.accounts.token_mint.key(),
         });
-    
+
         msg!("Payment processed: {} tokens from {}", amount, ctx.accounts.user.key());
-        
+
         Ok(())
     }
-    
 
     pub fn add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
         let program_state = &mut ctx.accounts.program_state;
@@ -186,11 +184,11 @@ pub mod libert_ai_payment_processor {
         );
 
         program_state.admins.push(new_admin);
-        
+
         msg!("Admin added: {}", new_admin);
         Ok(())
     }
-    
+
     pub fn remove_admin(ctx: Context<RemoveAdmin>, admin_to_remove: Pubkey) -> Result<()> {
         let program_state = &mut ctx.accounts.program_state;
         let admin_position = program_state.admins.iter().position(|&x| x == admin_to_remove);
@@ -201,7 +199,7 @@ pub mod libert_ai_payment_processor {
         );
 
         program_state.admins.remove(admin_position.unwrap());
-        
+
         msg!("Admin removed: {}", admin_to_remove);
         Ok(())
     }
@@ -211,7 +209,7 @@ pub mod libert_ai_payment_processor {
         let old_owner = program_state.owner;
         
         program_state.owner = new_owner;
-        
+
         msg!("Owner changed from {} to {}", old_owner, new_owner);
         Ok(())
     }
@@ -322,7 +320,7 @@ pub mod libert_ai_payment_processor {
              amount, 
              ctx.accounts.authority.key(), 
              ctx.accounts.destination_token_account.key());
-        
+
         Ok(())
     }
 
@@ -354,7 +352,7 @@ pub mod libert_ai_payment_processor {
              amount, 
              ctx.accounts.authority.key(), 
              ctx.accounts.destination.key());
-        
+
         Ok(())
     }
 }
@@ -394,7 +392,6 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-
 #[derive(Accounts)]
 pub struct ProcessPayment<'info> {
     #[account(mut)]
@@ -424,7 +421,6 @@ pub struct ProcessPayment<'info> {
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
-
 
 #[derive(Accounts)]
 pub struct AddAdmin<'info> {
@@ -527,8 +523,7 @@ pub struct WithdrawSol<'info> {
     
     #[account(mut)]
     pub authority: Signer<'info>,
-    
-    
+
     /// CHECK 
     #[account(mut)]
     pub destination: AccountInfo<'info>,
