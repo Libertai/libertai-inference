@@ -188,7 +188,7 @@ async def get_agent_public_info(agent_id: uuid.UUID) -> GetAgentResponse:
         )
 
 
-@router.post("/{agent_id}/reallocate", description="Reallocate an agent instance")
+@router.post("/{agent_id}/reallocate", description="Reallocate an agent instance")  # type: ignore
 async def reallocate_agent(
     agent_id: uuid.UUID,
     user_address: str = Depends(get_current_address),
