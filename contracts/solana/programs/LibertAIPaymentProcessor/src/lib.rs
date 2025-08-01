@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
 
-pub const ACCEPTED_MINT: Pubkey = pubkey!("mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u");
+pub const ACCEPTED_MINT: Pubkey = pubkey!("3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k");
 
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub const TOKEN_2022_PROGRAM_ID: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -172,6 +172,33 @@ pub mod libert_ai_payment_processor {
 
         msg!("Payment processed: {} tokens from {}", amount, ctx.accounts.user.key());
 
+        Ok(())
+    }
+    
+    pub fn proces_payment_sol(ctx: Context<ProcessPaymentSol>, amount: u64) -> Result<()> {
+        require!(
+            ctx.accounts.user.lamports() >= amount,
+            PaymentProcessorError::InsufficientFunds
+        );
+        
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.program_state.to_account_info(),
+            }
+        );
+        
+        anchor_lang::system_program::transfer(cpi_context, amount)?;
+        
+        emit!(SolPaymentEvent {
+            user: ctx.accounts.user.key(),
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        msg!("SOL payment processed: {} lamports from {}", amount, ctx.accounts.user.key());
+        
         Ok(())
     }
 
@@ -423,6 +450,21 @@ pub struct ProcessPayment<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ProcessPaymentSol<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    
+    #[account(
+        mut,
+        seeds = [b"program_state"],
+        bump = program_state.bump
+    )]
+    pub program_state: Account<'info, ProgramState>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct AddAdmin<'info> {
     #[account(
         mut,
@@ -537,6 +579,13 @@ pub struct PaymentEvent {
     pub token_mint: Pubkey,
 }
 
+#[event]
+pub struct SolPaymentEvent {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
 #[error_code]
 pub enum PaymentProcessorError {
     #[msg("Unauthorized access - only owner or admin can perform this action")]
@@ -554,7 +603,7 @@ pub enum PaymentProcessorError {
     #[msg("Insufficient funds in program token account")]
     InsufficientFunds,
     
-    #[msg("Invalid token mint - only mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u is accepted")]
+    #[msg("Invalid token mint - only 3onmcmVmxyuhKyprEw4LyfdpqTPW6fRA7JQhopbiph5k is accepted")]
     InvalidTokenMint,
     
     #[msg("Invalid token program - only SPL Token and Token 2022 programs are accepted")]

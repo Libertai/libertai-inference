@@ -8,6 +8,7 @@ import { GetAdminsCommand } from "./commands/getAdmins";
 import { WithdrawCommand } from "./commands/withdraw";
 import { WithdrawSolCommand } from "./commands/withdraw_sol";
 import * as os from "os";
+import { SolProcessPaymentCommand } from "./commands/solProcessPayment";
 
 export const program = new Command();
 const homeDir = os.homedir();
@@ -33,6 +34,11 @@ program
   .command("process-payment")
   .description("Process a payment and emit an event")
   .action(ProcessPaymentCommand);
+
+program
+  .command("process-payment-sol")
+  .description("Process a payment for $SOL token and emit an event")
+  .action(SolProcessPaymentCommand);
 
 program
   .command("add-admin")
