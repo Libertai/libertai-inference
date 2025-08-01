@@ -57,7 +57,7 @@ export const SolProcessPaymentCommand = async () => {
   const lamports = new BN(humanAmount * 1e9); // Convert SOL to lamports
 
   console.log(`Processing SOL payment of ${humanAmount} SOL (${lamports.toString()} lamports)...`);
-  
+
   try {
     const signature = await solProcessPayment(payer, lamports, anchorProgram);
     console.log(`✅ SOL payment completed successfully!`);
