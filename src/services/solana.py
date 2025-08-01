@@ -15,7 +15,7 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
-from src.utils.token import get_token_price
+from src.utils.token import get_token_price, get_sol_token_price
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,8 @@ class SolanaService:
                 if not signatures.value:
                     return processed_signatures
                 new_transactions = []
-                token_price = get_token_price()
+                ltai_token_price = get_token_price()
+                sol_token_price = get_sol_token_price()
 
                 for sig_info in signatures.value:
                     signature_str = str(sig_info.signature)
@@ -150,7 +151,7 @@ class SolanaService:
                         max_supported_transaction_version=0
                     )
                     if tx.value:
-                        await self._process_transaction(tx.value, signature_str, token_price, sig_info.slot)
+                        await self._process_transaction(tx.value, signature_str, ltai_token_price, sol_token_price, sig_info.slot)
                         self.last_processed_slot = sig_info.slot
 
         except Exception as e:
@@ -158,7 +159,7 @@ class SolanaService:
 
         return processed_signatures
 
-    async def _process_transaction(self, value, signature: str, token_price: float, slot: int) -> list[str]:
+    async def _process_transaction(self, value, signature: str, ltai_token_price: float, sol_token_price: float,  slot: int) -> list[str]:
         """Process individual transaction if it contains PaymentEvent or SolPaymentEvent"""
         try:
             tx = value.transaction
@@ -170,18 +171,13 @@ class SolanaService:
                return []
             
             if payment_event['event_type'] == 'token_payment':
-                # Handle token payments (existing logic)
                 amount_after = payment_event['amount'] / (10 ** 9)
                 logger.info(f"💰 Token Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
-                amount = token_price * amount_after
+                amount = ltai_token_price * amount_after
             elif payment_event['event_type'] == 'sol_payment':
-                # Handle SOL payments (amount is in lamports, convert to SOL)
-                amount_after = payment_event['amount'] / (10 ** 9)  # Convert lamports to SOL
+                amount_after = payment_event['amount'] / (10 ** 9)
                 logger.info(f"💰 SOL Payment: {amount_after} SOL from {payment_event['user']} | Tx: {signature}")
-                # For SOL payments, we need to get SOL price and convert to credits
-                # You might want to add a get_sol_price function or use a different conversion rate
-                # For now, using the same token_price - you may need to adjust this
-                amount = token_price * amount_after
+                amount = sol_token_price * amount_after
             else:
                 logger.warning(f"Unknown payment event type: {payment_event['event_type']}")
                 return []
