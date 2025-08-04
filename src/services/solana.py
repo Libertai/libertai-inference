@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import logging
 import struct
@@ -44,57 +45,49 @@ class SolanaService:
             logger.error(f"Error getting last block from DB: {e}")
             return None
 
+    @staticmethod
+    def _get_event_discriminator(event_name: str) -> bytes:
+        """Calculates the 8-byte Anchor event discriminator."""
+        return hashlib.sha256(f"event:{event_name}".encode("utf-8")).digest()[:8]
+
     def extract_payment_event(self, meta):
         """Extract PaymentEvent or SolPaymentEvent data from transaction metadata"""
+
+        # Calculate event discriminators once
+        payment_event_discriminator = self._get_event_discriminator("PaymentEvent")
+        sol_payment_event_discriminator = self._get_event_discriminator("SolPaymentEvent")
 
         status = CreditTransactionStatus.completed if meta.get("err") is None else CreditTransactionStatus.error
 
         log_messages = meta.get("logMessages", [])
         for msg in log_messages:
-            # Anchor events are logged as "Program data: <base64_data>"
             if msg.startswith("Program data: "):
                 try:
-                    event_data = base64.b64decode(msg[14:])  # Remove "Program data: " prefix
+                    event_data = base64.b64decode(msg[14:])
 
-                    # Check if this is a PaymentEvent (token payment)
-                    if (
-                        len(event_data) >= 72
-                    ):  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp) + 32 (token_mint)
-                        # Skip discriminator (first 8 bytes) and parse the event data
-                        offset = 8
+                    # Check for PaymentEvent discriminator
+                    if event_data.startswith(payment_event_discriminator):
+                        # Ensure data is long enough
+                        if len(event_data) >= 72:
+                            offset = 8
+                            user = str(Pubkey(event_data[offset : offset + 32]))
+                            offset += 32
+                            amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
+                            # skip timestamp and token_mint
 
-                        # Parse user (32 bytes)
-                        user_bytes = event_data[offset : offset + 32]
-                        user = str(Pubkey(user_bytes))
-                        offset += 32
+                            return {"user": user, "amount": amount, "status": status, "event_type": "token_payment"}
 
-                        # Parse amount (8 bytes, little endian)
-                        amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
-                        offset += 8
+                    # Check for SolPaymentEvent discriminator
+                    elif event_data.startswith(sol_payment_event_discriminator):
+                        # Ensure data is long enough
+                        if len(event_data) >= 56:
+                            offset = 8
+                            user = str(Pubkey(event_data[offset : offset + 32]))
+                            offset += 32
+                            amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
+                            # skip timestamp
 
-                        # Skip timestamp (8 bytes, little endian)
-                        offset += 8
-
-                        return {"user": user, "amount": amount, "status": status, "event_type": "token_payment"}
-
-                    # Check if this is a SolPaymentEvent (SOL payment)
-                    elif len(event_data) >= 56:  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp)
-                        # Skip discriminator (first 8 bytes) and parse the event data
-                        offset = 8
-
-                        # Parse user (32 bytes)
-                        user_bytes = event_data[offset : offset + 32]
-                        user = str(Pubkey(user_bytes))
-                        offset += 32
-
-                        # Parse amount (8 bytes, little endian)
-                        amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
-                        offset += 8
-
-                        # Skip timestamp (8 bytes, little endian)
-                        offset += 8
-
-                        return {"user": user, "amount": amount, "status": status, "event_type": "sol_payment"}
+                            return {"user": user, "amount": amount, "status": status, "event_type": "sol_payment"}
 
                 except Exception as e:
                     print(f"Error parsing event data: {e}")
@@ -172,7 +165,6 @@ class SolanaService:
             payment_event = self.extract_payment_event(meta)
             if not payment_event:
                 return []
-            provider = ""
 
             if payment_event["event_type"] == "token_payment":
                 amount_after = payment_event["amount"] / (10**9)
