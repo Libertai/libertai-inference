@@ -1,21 +1,19 @@
+import base64
 import json
 import logging
-
-import base64
 import struct
 
 from solana.rpc.api import Client
+from solders.pubkey import Pubkey
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
-from solders.pubkey import Pubkey
-
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
-from src.utils.token import get_token_price
+from src.utils.token import get_token_price, get_sol_token_price
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,11 @@ class SolanaService:
         try:
             stmt = (
                 select(CreditTransaction.block_number)
-                .where(CreditTransaction.provider == CreditTransactionProvider.solana)
+                .where(
+                    CreditTransaction.provider.in_(
+                        [CreditTransactionProvider.ltai_solana.value, CreditTransactionProvider.sol_solana.value]
+                    )
+                )
                 .order_by(desc(CreditTransaction.block_number))
                 .limit(1)
             )
@@ -43,7 +45,7 @@ class SolanaService:
             return None
 
     def extract_payment_event(self, meta):
-        """Extract PaymentEvent data from transaction metadata"""
+        """Extract PaymentEvent or SolPaymentEvent data from transaction metadata"""
 
         status = CreditTransactionStatus.completed if meta.get("err") is None else CreditTransactionStatus.error
 
@@ -53,34 +55,51 @@ class SolanaService:
             if msg.startswith("Program data: "):
                 try:
                     event_data = base64.b64decode(msg[14:])  # Remove "Program data: " prefix
-                    
-                    # Check if this is a PaymentEvent (first 8 bytes are discriminator)
-                    # PaymentEvent discriminator can be computed from event name hash
-                    if len(event_data) >= 72:  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp) + 32 (token_mint)
+
+                    # Check if this is a PaymentEvent (token payment)
+                    if (
+                        len(event_data) >= 72
+                    ):  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp) + 32 (token_mint)
                         # Skip discriminator (first 8 bytes) and parse the event data
                         offset = 8
-                        
+
                         # Parse user (32 bytes)
-                        user_bytes = event_data[offset:offset+32]
+                        user_bytes = event_data[offset : offset + 32]
                         user = str(Pubkey(user_bytes))
                         offset += 32
-                        
+
                         # Parse amount (8 bytes, little endian)
-                        amount = struct.unpack('<Q', event_data[offset:offset+8])[0]
+                        amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
                         offset += 8
-                        
+
                         # Skip timestamp (8 bytes, little endian)
                         offset += 8
-                        
-                        return {
-                            "user": user,
-                            "amount": amount,
-                            "status": status,
-                        }
+
+                        return {"user": user, "amount": amount, "status": status, "event_type": "token_payment"}
+
+                    # Check if this is a SolPaymentEvent (SOL payment)
+                    elif len(event_data) >= 56:  # 8 (discriminator) + 32 (user) + 8 (amount) + 8 (timestamp)
+                        # Skip discriminator (first 8 bytes) and parse the event data
+                        offset = 8
+
+                        # Parse user (32 bytes)
+                        user_bytes = event_data[offset : offset + 32]
+                        user = str(Pubkey(user_bytes))
+                        offset += 32
+
+                        # Parse amount (8 bytes, little endian)
+                        amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
+                        offset += 8
+
+                        # Skip timestamp (8 bytes, little endian)
+                        offset += 8
+
+                        return {"user": user, "amount": amount, "status": status, "event_type": "sol_payment"}
+
                 except Exception as e:
                     print(f"Error parsing event data: {e}")
                     continue
-        
+
         return None
 
     async def poll_transactions(self) -> list[str]:
@@ -92,15 +111,11 @@ class SolanaService:
                 self.last_processed_slot = self._get_last_block_from_db(db)
 
                 # Get recent transactions
-                signatures = self.client.get_signatures_for_address(
-                    self.program_id,
-                    limit=50
-                )
+                signatures = self.client.get_signatures_for_address(self.program_id, limit=50)
 
                 if not signatures.value:
                     return processed_signatures
                 new_transactions = []
-                token_price = get_token_price()
 
                 for sig_info in signatures.value:
                     signature_str = str(sig_info.signature)
@@ -108,7 +123,12 @@ class SolanaService:
                     existing_tx = db.scalar(
                         select(CreditTransaction).where(
                             CreditTransaction.transaction_hash == signature_str,
-                            CreditTransaction.provider == CreditTransactionProvider.solana
+                            CreditTransaction.provider.in_(
+                                [
+                                    CreditTransactionProvider.ltai_solana.value,
+                                    CreditTransactionProvider.sol_solana.value,
+                                ]
+                            ),
                         )
                     )
                     if existing_tx:
@@ -118,23 +138,32 @@ class SolanaService:
                         continue
                     new_transactions.append((sig_info, signature_str))
 
+                if not new_transactions:
+                    return processed_signatures
+
+                ltai_token_price = get_token_price()
+                sol_token_price = get_sol_token_price()
+
                 for sig_info, signature_str in reversed(new_transactions):
                     tx = self.client.get_transaction(
-                        sig_info.signature,
-                        encoding="json",
-                        max_supported_transaction_version=0
+                        sig_info.signature, encoding="json", max_supported_transaction_version=0
                     )
                     if tx.value:
-                        await self._process_transaction(tx.value, signature_str, token_price, sig_info.slot)
+                        await self._process_transaction(
+                            tx.value, signature_str, ltai_token_price, sol_token_price, sig_info.slot
+                        )
                         self.last_processed_slot = sig_info.slot
+                        processed_signatures.append(signature_str)
 
         except Exception as e:
             logger.error(f"Polling error: {e}")
 
         return processed_signatures
 
-    async def _process_transaction(self, value, signature: str, token_price: float, slot: int) -> list[str]:
-        """Process individual transaction if it contains PaymentEvent"""
+    async def _process_transaction(
+        self, value, signature: str, ltai_token_price: float, sol_token_price: float, slot: int
+    ) -> list[str]:
+        """Process individual transaction if it contains PaymentEvent or SolPaymentEvent"""
         try:
             tx = value.transaction
             tx_json = json.loads(tx.to_json())
@@ -142,13 +171,25 @@ class SolanaService:
 
             payment_event = self.extract_payment_event(meta)
             if not payment_event:
-               return []
-            amount_after = payment_event['amount'] / (10 ** 9)
-            logger.info(f"💰 Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
-            amount = token_price * amount_after
+                return []
+            provider = ""
+
+            if payment_event["event_type"] == "token_payment":
+                amount_after = payment_event["amount"] / (10**9)
+                logger.info(f"💰 Token Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
+                amount = ltai_token_price * amount_after
+                provider = CreditTransactionProvider.ltai_solana
+            elif payment_event["event_type"] == "sol_payment":
+                amount_after = payment_event["amount"] / (10**9)
+                logger.info(f"💰 SOL Payment: {amount_after} SOL from {payment_event['user']} | Tx: {signature}")
+                amount = sol_token_price * amount_after
+                provider = CreditTransactionProvider.sol_solana
+            else:
+                logger.warning(f"Unknown payment event type: {payment_event['event_type']}")
+                return []
 
             CreditService.add_credits(
-                provider=CreditTransactionProvider.solana,
+                provider=provider,
                 address=payment_event["user"],
                 amount=amount,
                 transaction_hash=signature,

@@ -38,7 +38,7 @@ async def process_base_ltai_transactions() -> list[str]:
 
             last_db_block = (
                 db.query(CreditTransaction)
-                .filter(CreditTransaction.provider == CreditTransactionProvider.base)
+                .filter(CreditTransaction.provider == CreditTransactionProvider.ltai_base)
                 .order_by(CreditTransaction.block_number.desc())
                 .first()
             )
@@ -102,5 +102,5 @@ def handle_payment_event(event) -> str:
 
     token_price = get_token_price()  # Get token/USD price
     amount = token_price * ltai_amount  # Calculate USD value
-    CreditService.add_credits(CreditTransactionProvider.base, sender, amount, transaction_hash, block_number)
+    CreditService.add_credits(CreditTransactionProvider.ltai_base, sender, amount, transaction_hash, block_number)
     return transaction_hash
