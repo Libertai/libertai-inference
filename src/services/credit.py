@@ -39,7 +39,7 @@ class CreditService:
         # Apply the boost for LTAI payments
         amount = (
             amount * 100 / 80
-            if provider in [CreditTransactionProvider.base]
+            if provider in [CreditTransactionProvider.ltai_base, CreditTransactionProvider.ltai_solana]
             else amount
         )
 

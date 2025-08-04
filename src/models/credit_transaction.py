@@ -78,8 +78,8 @@ class CreditTransaction(Base):
         CheckConstraint("amount_left >= 0", name="check_amount_left_non_negative"),
         CheckConstraint("amount_left <= amount", name="check_amount_left_not_exceeding_value"),
         CheckConstraint(
-            "(provider::text = 'thirdweb' OR provider::text = 'voucher') OR (provider::text = 'base' AND block_number IS NOT NULL) OR (provider::text = 'solana' AND block_number IS NOT NULL)",
-            name="check_block_number_required_for_provider_libertai",
+            "(provider::text = 'thirdweb' OR provider::text = 'voucher') OR (provider::text = 'ltai_base' AND block_number IS NOT NULL) OR (provider::text = 'ltai_solana' AND block_number IS NOT NULL) OR (provider::text = 'sol_solana' AND block_number IS NOT NULL)",
+            name="check_block_number_required",
         ),
     )
 
