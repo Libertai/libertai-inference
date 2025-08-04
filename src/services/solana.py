@@ -32,7 +32,7 @@ class SolanaService:
         try:
             stmt = (
                 select(CreditTransaction.block_number)
-                .where(CreditTransaction.provider == CreditTransactionProvider.solana)
+                .where(CreditTransaction.provider.in_([CreditTransactionProvider.ltai_solana.value, CreditTransactionProvider.sol_solana.value]))
                 .order_by(desc(CreditTransaction.block_number))
                 .limit(1)
             )
@@ -134,7 +134,7 @@ class SolanaService:
                     existing_tx = db.scalar(
                         select(CreditTransaction).where(
                             CreditTransaction.transaction_hash == signature_str,
-                            CreditTransaction.provider == CreditTransactionProvider.solana
+                            CreditTransaction.provider.in_([CreditTransactionProvider.ltai_solana.value, CreditTransactionProvider.sol_solana.value])
                         )
                     )
                     if existing_tx:
@@ -169,21 +169,24 @@ class SolanaService:
             payment_event = self.extract_payment_event(meta)
             if not payment_event:
                return []
-            
+            provider = ""
+
             if payment_event['event_type'] == 'token_payment':
                 amount_after = payment_event['amount'] / (10 ** 9)
                 logger.info(f"💰 Token Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
                 amount = ltai_token_price * amount_after
+                provider = CreditTransactionProvider.ltai_solana
             elif payment_event['event_type'] == 'sol_payment':
                 amount_after = payment_event['amount'] / (10 ** 9)
                 logger.info(f"💰 SOL Payment: {amount_after} SOL from {payment_event['user']} | Tx: {signature}")
                 amount = sol_token_price * amount_after
+                provider = CreditTransactionProvider.sol_solana
             else:
                 logger.warning(f"Unknown payment event type: {payment_event['event_type']}")
                 return []
 
             CreditService.add_credits(
-                provider=CreditTransactionProvider.solana,
+                provider=provider,
                 address=payment_event["user"],
                 amount=amount,
                 transaction_hash=signature,
