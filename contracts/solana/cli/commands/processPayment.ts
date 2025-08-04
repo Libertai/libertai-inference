@@ -1,3 +1,5 @@
+import { BN, Program } from "@coral-xyz/anchor";
+import { getAssociatedTokenAddress, getMint } from "@solana/spl-token";
 import {
   Connection,
   Keypair,
@@ -5,12 +7,10 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { Program, BN } from "@coral-xyz/anchor";
-import { getKeypair, getTokenProgramId } from "../utils";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
 import { program } from "..";
-import { getAssociatedTokenAddress, getMint} from "@solana/spl-token";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
+import { getKeypair, getTokenProgramId } from "../utils";
 
 const processPayment = async (
   payer: Keypair,
@@ -34,7 +34,7 @@ const processPayment = async (
     program.programId
   );
 
-  
+
   const ix = await program.methods
     .processPayment(amount)
     .accounts({
@@ -60,7 +60,7 @@ export const ProcessPaymentCommand = async () => {
   });
 
   const connection = new Connection(opts.jsonRpcEndpoint, "confirmed");
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, {
     connection,
   });
 

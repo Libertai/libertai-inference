@@ -1,16 +1,16 @@
-import { program } from "..";
-import { getKeypair } from "../utils";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import { Program, BN } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import {
   Connection,
   Keypair,
   PublicKey,
-  Transaction,
   sendAndConfirmTransaction,
   SystemProgram,
+  Transaction,
 } from "@solana/web3.js";
+import { program } from "..";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
+import { getKeypair } from "../utils";
 
 const solProcessPayment = async (
   payer: Keypair,
@@ -18,14 +18,14 @@ const solProcessPayment = async (
   program: Program
 ) => {
   const userWallet = payer.publicKey;
-  
+
   const [programState] = PublicKey.findProgramAddressSync(
     [Buffer.from("program_state")],
     program.programId
   );
 
   const ix = await program.methods
-    .procesPaymentSol(amount)
+    .processPaymentSol(amount)
     .accounts({
       user: userWallet,
       programState: programState,
@@ -36,23 +36,23 @@ const solProcessPayment = async (
   const tx = new Transaction().add(ix);
   const sig = await sendAndConfirmTransaction(program.provider.connection, tx, [payer]);
   console.log(`✅ SOL payment processed. Tx Signature: ${sig}`);
-  
+
   return sig;
 }
 
 export const SolProcessPaymentCommand = async () => {
   const opts = program.opts();
-  
+
   const payer = getKeypair({
     filepath: opts.payerKeyFilepath,
     key: opts.payerPrivateKey,
   });
-  
+
   const connection = new Connection(opts.jsonRpcEndpoint, "confirmed");
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, {
     connection,
   });
-  
+
   const humanAmount = parseFloat(opts.amount);
   const lamports = new BN(humanAmount * 1e9); // Convert SOL to lamports
 

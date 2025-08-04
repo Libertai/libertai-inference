@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu");
+declare_id!("21tHgbgC8Q6hoXyHx5pp3Gtp97B3HxrS2yH832ryeNSw");
 
 pub const ACCEPTED_MINT: Pubkey = pubkey!("mntpN8z1d29f3MWhMD7VqZFpeYmbD88MgwS3Bkz8y7u");
 
@@ -12,7 +12,7 @@ fn is_valid_token_program(program_id: &Pubkey) -> bool {
 }
 
 #[program]
-pub mod libert_ai_payment_processor {
+pub mod libertai_payment_processor {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, owner: Pubkey) -> Result<()> {
@@ -175,7 +175,7 @@ pub mod libert_ai_payment_processor {
         Ok(())
     }
     
-    pub fn proces_payment_sol(ctx: Context<ProcessPaymentSol>, amount: u64) -> Result<()> {
+    pub fn process_payment_sol(ctx: Context<ProcessPaymentSol>, amount: u64) -> Result<()> {
         require!(
             ctx.accounts.user.lamports() >= amount,
             PaymentProcessorError::InsufficientFunds
@@ -612,3 +612,19 @@ pub enum PaymentProcessorError {
     #[msg("Invalid token account - account data is malformed or constraints not met")]
     InvalidTokenAccount,
 }
+
+#[cfg(not(feature = "no-entrypoint"))]
+use {solana_security_txt::security_txt};
+
+#[cfg(not(feature = "no-entrypoint"))]
+security_txt! {
+    // Required fields
+    name: "LibertAI",
+    project_url: "https://libertai.io",
+    contacts: "email:hello@libertai.io",
+    policy: "none",
+
+    preferred_languages: "en,fr",
+    source_code: "https://github.com/libertai"
+}
+

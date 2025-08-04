@@ -1,9 +1,9 @@
-import { program } from "..";
-import { getKeypair } from "../utils";
-import { Connection, Keypair, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
+import { Connection, Keypair, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import { program } from "..";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
+import { getKeypair } from "../utils";
 
 const initialize = async (payer: Keypair, program: Program) => {
   const initializeIx = await program.methods
@@ -34,7 +34,7 @@ export const InitializeCommand = async () => {
   });
 
   const connection = new Connection(opts.jsonRpcEndpoint, "confirmed");
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, {
     connection,
   });
 

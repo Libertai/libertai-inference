@@ -1,9 +1,9 @@
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { AnchorProvider, BN, Program, Wallet } from "@coral-xyz/anchor";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { program } from "..";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
 import { getKeypair } from "../utils";
-import { Program, BN, AnchorProvider, Wallet } from "@coral-xyz/anchor";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
 
 const getSolBalance = async (programId: PublicKey, networkURL: string): Promise<number> => {
   // Check both program_state and program account balances
@@ -11,7 +11,7 @@ const getSolBalance = async (programId: PublicKey, networkURL: string): Promise<
     [Buffer.from("program_state")],
     programId
   );
-  
+
   const body = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -23,7 +23,7 @@ const getSolBalance = async (programId: PublicKey, networkURL: string): Promise<
       }
     ],
   };
-  
+
   try {
     const response = await fetch(networkURL, {
       method: "POST",
@@ -33,10 +33,10 @@ const getSolBalance = async (programId: PublicKey, networkURL: string): Promise<
       }
     });
     const json = await response.json() as any;
-    
+
     let programStateBalance = 0;
     let programAccountBalance = 0;
-    
+
     if (json?.result?.value?.[0]?.lamports !== undefined) {
       programStateBalance = json.result.value[0].lamports / LAMPORTS_PER_SOL;
     }
@@ -115,13 +115,13 @@ export const WithdrawSolCommand = async () => {
     key: opts.payerPrivateKey,
   });
   const connection = new Connection(opts.jsonRpcEndpoint, "confirmed");
-  
+
   const wallet = new Wallet(payer);
   const provider = new AnchorProvider(connection, wallet, {});
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, provider);
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, provider);
 
   const destinationWallet = new PublicKey(opts.destination);
-  
+
   // Convert amount from SOL to lamports
   const humanAmount = parseFloat(opts.amount);
   const amount = new BN(humanAmount * LAMPORTS_PER_SOL);

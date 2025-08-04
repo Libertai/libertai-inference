@@ -6,14 +6,17 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-LibertAIPaymentProcessor = "AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu"
+LibertaiPaymentProcessor = "AnAYnLu4gaHK6usSXybni24154Qg4DQuLUvkyPCJMvXu"
+
+[programs.mainnet]
+LibertaiPaymentProcessor = "21tHgbgC8Q6hoXyHx5pp3Gtp97B3HxrS2yH832ryeNSw"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "mainnet"
-wallet = "~/.config/solana/id.json"
+wallet = "~/.config/solana/ledger.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

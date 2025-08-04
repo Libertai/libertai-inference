@@ -1,10 +1,10 @@
+import { BN, Program } from "@coral-xyz/anchor";
+import { getAssociatedTokenAddressSync, getMint } from "@solana/spl-token";
 import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { program } from "..";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
 import { getKeypair, getTokenProgramId } from "../utils";
-import { Program, BN } from "@coral-xyz/anchor";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
-import { getAssociatedTokenAddressSync, getMint } from "@solana/spl-token";
 
 interface SolanaRpcResponse {
   jsonrpc: string;
@@ -31,7 +31,7 @@ const getBalance = async (tokenMint: PublicKey, programId: PublicKey, networkURL
     [Buffer.from("program_token_account"), tokenMint.toBuffer()],
     programId
   );
-  
+
   const body = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -52,7 +52,7 @@ const getBalance = async (tokenMint: PublicKey, programId: PublicKey, networkURL
       }
     });
     const json = await response.json() as SolanaRpcResponse;
-    
+
     let balance = 0.0;
     if (json?.result?.value?.data?.parsed?.info?.tokenAmount?.uiAmount !== undefined) {
       balance = json.result.value.data.parsed.info.tokenAmount.uiAmount;
@@ -101,19 +101,19 @@ const withdraw = async (
 
   const tokenProgramId = await getTokenProgramId(program.provider.connection, tokenMint);
   const destinationTokenAccount = getAssociatedTokenAddressSync(tokenMint, destinationWallet, false, tokenProgramId);
-  
+
   const [programState] = PublicKey.findProgramAddressSync(
     [Buffer.from("program_state")],
     program.programId
   );
-  
+
   const [programTokenAccount] = PublicKey.findProgramAddressSync(
     [Buffer.from("program_token_account"), tokenMint.toBuffer()],
     program.programId
   );
-  
+
   console.log(`📍 State program token account address: ${programTokenAccount.toString()}`);
-  
+
   const ix = await program.methods
     .withdraw(amount)
     .accounts({
@@ -128,10 +128,10 @@ const withdraw = async (
 
   const balanceBefore = await getBalance(tokenMint, program.programId, networkURL)
   console.log(`Program balance before withdraw is ${balanceBefore}`)
-  
+
   const tx = new Transaction().add(ix);
   const sig = await sendAndConfirmTransaction(program.provider.connection, tx, [payer]);
-  
+
   console.log("Waiting for balance update...");
   const balanceAfter = await waitForBalanceChange(tokenMint, program.programId, networkURL, balanceBefore);
   console.log(`Program balance after withdraw is ${balanceAfter}`)
@@ -157,8 +157,8 @@ export const WithdrawCommand = async () => {
       return txs;
     },
   };
-  
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
+
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, {
     connection,
     publicKey: wallet.publicKey,
   });
@@ -168,11 +168,11 @@ export const WithdrawCommand = async () => {
 
   // Get the correct token program ID first
   const tokenProgramId = await getTokenProgramId(connection, tokenMint);
-  
+
   // Get token mint info to determine decimals
   const mintInfo = await getMint(connection, tokenMint, undefined, tokenProgramId);
   const decimals = mintInfo.decimals;
-  
+
   // Convert amount from human-readable format to smallest units
   const humanAmount = parseFloat(opts.amount);
   const amount = new BN(humanAmount * Math.pow(10, decimals));

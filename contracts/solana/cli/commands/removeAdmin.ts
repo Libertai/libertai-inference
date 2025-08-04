@@ -1,9 +1,9 @@
+import { Program } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import { program } from "..";
+import idl from "../../target/idl/libertai_payment_processor.json";
+import { LibertaiPaymentProcessor } from "../../target/types/libertai_payment_processor";
 import { getKeypair } from "../utils";
-import { Program } from "@coral-xyz/anchor";
-import { LibertAiPaymentProcessor } from "../../target/types/libert_ai_payment_processor";
-import idl from "../../target/idl/libert_ai_payment_processor.json";
 
 const removeAdmin = async (
   payer: Keypair,
@@ -24,7 +24,7 @@ const removeAdmin = async (
 
 export const RemoveAdminCommand = async () => {
   const opts = program.opts();
-  
+
   const payer = getKeypair({
     filepath: opts.payerKeyFilepath,
     key: opts.payerPrivateKey,
@@ -41,7 +41,7 @@ export const RemoveAdminCommand = async () => {
       return txs;
     },
   };
-  const anchorProgram = new Program(idl as LibertAiPaymentProcessor, {
+  const anchorProgram = new Program(idl as LibertaiPaymentProcessor, {
     connection,
     publicKey: wallet.publicKey,
   });
