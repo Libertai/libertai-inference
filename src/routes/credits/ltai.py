@@ -70,7 +70,7 @@ async def process_base_ltai_transactions() -> list[str]:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@scheduler.scheduled_job("interval", seconds=30)
+@scheduler.scheduled_job("interval", seconds=100)
 @router.post("/ltai/solana/process", description="Process credit purchase with $LTAI in solana blockchain")  # type: ignore
 async def process_solana_ltai_transactions() -> list[str]:
     processed_transactions: list[str] = []

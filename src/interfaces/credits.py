@@ -12,7 +12,7 @@ from src.config import config
 
 
 class CreditTransactionProvider(str, Enum):
-    ltai_base = "base"  # LTAI Base payments
+    ltai_base = "ltai_base"  # LTAI Base payments
     ltai_solana = "ltai_solana"  # LTAI Solana payments
     thirdweb = "thirdweb"
     voucher = "voucher"
