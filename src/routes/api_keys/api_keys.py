@@ -120,7 +120,7 @@ async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_c
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
-@router.post("/admin/usage", dependencies=[Depends(verify_admin_token)])  # type: ignore
+@router.post("/admin/usage")  # type: ignore
 async def register_inference_call(usage_log: InferenceCallData) -> None:
     """Log API key usage.
 
