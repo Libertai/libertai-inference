@@ -1,15 +1,20 @@
 import hashlib
 import hmac
 import time
-from typing import Any
 
 from fastapi import HTTPException, Header, Request
-from libertai_utils.chains.ethereum import format_eth_address
-from pydantic import BaseModel, Field
+from libertai_utils.chains.index import format_address
+from libertai_utils.interfaces.blockchain import LibertaiChain
+from pydantic import BaseModel
 from web3 import Web3
 
 from src.config import config
-from src.interfaces.credits import CreditTransactionProvider, ThirdwebBuyWithCryptoWebhook, CreditTransactionStatus
+from src.interfaces.credits import (
+    CreditTransactionProvider,
+    ThirdwebOnchainTransactionData,
+    ThirdwebOnrampTransactionData,
+    CreditTransactionStatus,
+)
 from src.models.base import SessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
@@ -23,12 +28,28 @@ MAX_WEBHOOK_AGE = 300
 
 
 class ThirdwebWebhookPayload(BaseModel):
-    data: dict[str, Any] = Field(...)
+    version: int
+    type: str
+    data: ThirdwebOnchainTransactionData | ThirdwebOnrampTransactionData
 
     @property
-    def buy_with_crypto_status(self) -> ThirdwebBuyWithCryptoWebhook | None:
-        if "buyWithCryptoStatus" in self.data:
-            return ThirdwebBuyWithCryptoWebhook(**self.data["buyWithCryptoStatus"])
+    def is_onchain_transaction(self) -> bool:
+        return self.type == "pay.onchain-transaction"
+
+    @property
+    def is_onramp_transaction(self) -> bool:
+        return self.type == "pay.onramp-transaction"
+
+    @property
+    def onchain_data(self) -> ThirdwebOnchainTransactionData | None:
+        if self.is_onchain_transaction:
+            return self.data  # type: ignore
+        return None
+
+    @property
+    def onramp_data(self) -> ThirdwebOnrampTransactionData | None:
+        if self.is_onramp_transaction:
+            return self.data  # type: ignore
         return None
 
 
@@ -41,7 +62,7 @@ async def thirdweb_webhook(
 ) -> None:
     """
     Process webhooks from Thirdweb.
-    Currently only supports buyWithCryptoStatus events.
+    Currently only supports onchain-transaction events.
 
     Verifies the webhook signature using the THIRDWEB_WEBHOOK_SECRET and validates
     the timestamp to prevent replay attacks.
@@ -92,25 +113,40 @@ async def thirdweb_webhook(
 
     logger.debug(f"Received Thirdweb webhook: {payload.model_dump_json()}")
 
-    data = payload.buy_with_crypto_status
-    if data is None:
-        raise HTTPException(status_code=400, detail="Unsupported webhook type")
-
-    if data.destination is None:
-        logger.debug(f"Ignoring transaction without destination: {data.status}")
+    # Only handle onchain transactions for now
+    if not payload.is_onchain_transaction:
+        logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
         return
 
-    if Web3.to_checksum_address(data.toAddress) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
-        logger.warning(f"Transaction not destined for LTAI payment processor ({data.toAddress}), ignoring it")
+    data = payload.onchain_data
+    if data is None:
+        raise HTTPException(status_code=400, detail="Missing onchain transaction data")
+
+    # Check if transaction is destined for our payment processor
+    if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
+        logger.warning(f"Transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
 
     try:
-        # Extract transaction details
-        transaction_hash = data.source.transactionHash
+        # Extract transaction details from the last transaction (assuming Base chain)
+        base_transaction = next((tx for tx in data.transactions[::-1] if tx.chainId == 8453), None)
+        if base_transaction is None:
+            logger.warning("No Base chain transaction found in onchain transaction")
+            return
+
+        transaction_hash = base_transaction.transactionHash
         sender_address = data.purchaseData.userAddress
 
-        # Convert amount from cents to dollars
-        amount_usd = data.destination.amountUSDCents / 100
+        # Convert amount from destination token amount to USD
+        # destinationAmount is in token's smallest unit (e.g., USDC has 6 decimals)
+        amount_usd = int(data.destinationAmount) / (10**data.destinationToken.decimals)
+
+        if data.destinationToken.symbol != "USDC":
+            logger.warning(f"Unsupported destination token: {data.destinationToken.symbol}")
+            return
+        if data.destinationToken.chainId != 8453:
+            logger.warning(f"Unsupported destination token chain: {data.destinationToken.chainId}")
+            return
 
         # First, check if transaction already exists
         with SessionLocal() as db:
@@ -131,7 +167,7 @@ async def thirdweb_webhook(
         # Add credits to the user's account with the appropriate status
         CreditService.add_credits(
             provider=CreditTransactionProvider.thirdweb,
-            address=format_eth_address(sender_address),
+            address=format_address(LibertaiChain.base, sender_address),
             amount=amount_usd,
             transaction_hash=transaction_hash,
             block_number=None,  # Thirdweb doesn't provide block number
