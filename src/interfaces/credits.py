@@ -71,12 +71,51 @@ class ThirdwebPurchaseData(BaseModel):
     userAddress: str
 
 
-class ThirdwebBuyWithCryptoWebhook(BaseModel):
-    swapType: str
-    source: ThirdwebTransactionDetails
+# Token definition used in both webhook types
+class ThirdwebToken(BaseModel):
+    chainId: int
+    address: str
+    symbol: str
+    name: str
+    decimals: int
+    priceUsd: float
+    iconUri: str
+
+
+# Transaction reference for onchain transactions
+class ThirdwebTransactionReference(BaseModel):
+    chainId: int
+    transactionHash: str
+
+
+# Onchain transaction webhook payload
+class ThirdwebOnchainTransactionData(BaseModel):
+    transactionId: str
+    paymentId: str
+    clientId: str
+    action: Literal["BUY", "SELL"]
     status: Literal["COMPLETED", "PENDING"]
-    toAddress: str
-    destination: ThirdwebTransactionDetails | None = None
+    originToken: ThirdwebToken
+    originAmount: str
+    destinationToken: ThirdwebToken
+    destinationAmount: str
+    sender: str
+    receiver: str
+    type: str
+    transactions: list[ThirdwebTransactionReference]
+    purchaseData: ThirdwebPurchaseData
+
+
+# Onramp transaction webhook payload
+class ThirdwebOnrampTransactionData(BaseModel):
+    id: str
+    onramp: str
+    token: ThirdwebToken
+    amount: str
+    currency: str
+    currencyAmount: float
+    receiver: str
+    status: Literal["PENDING", "COMPLETED"]
     purchaseData: ThirdwebPurchaseData
 
 

@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException
+from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 
 from src.interfaces.credits import (
@@ -22,7 +23,7 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
     # Add credits using the voucher provider
     success = CreditService.add_credits(
         provider=CreditTransactionProvider.voucher,
-        address=voucher_request.address,
+        address=format_address(voucher_request.chain, voucher_request.address),
         amount=voucher_request.amount,
         expired_at=voucher_request.expired_at,
     )

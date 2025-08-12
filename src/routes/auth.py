@@ -41,7 +41,7 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
         )
 
     # Create access token
-    access_token = create_access_token(address=request.address)
+    access_token = create_access_token(address=request.address, chain=request.chain)
 
     # Set the token as an HTTP-only cookie
     response.set_cookie(

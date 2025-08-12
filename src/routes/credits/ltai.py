@@ -2,6 +2,8 @@ import json
 import os
 
 from fastapi import HTTPException
+from libertai_utils.chains.index import format_address
+from libertai_utils.interfaces.blockchain import LibertaiChain
 from web3 import Web3
 
 from src.config import config
@@ -84,7 +86,7 @@ async def process_solana_ltai_transactions() -> list[str]:
 
 
 def handle_payment_event(event) -> str:
-    """Handle a PaymentProcessed event from the LTAI Payment Processor contract
+    """Handle a PaymentProcessed event from the Base LTAI Payment Processor contract
 
     Args:
         event: The event object
@@ -102,5 +104,11 @@ def handle_payment_event(event) -> str:
 
     token_price = get_token_price()  # Get token/USD price
     amount = token_price * ltai_amount  # Calculate USD value
-    CreditService.add_credits(CreditTransactionProvider.ltai_base, sender, amount, transaction_hash, block_number)
+    CreditService.add_credits(
+        CreditTransactionProvider.ltai_base,
+        format_address(LibertaiChain.base, sender),
+        amount,
+        transaction_hash,
+        block_number,
+    )
     return transaction_hash
