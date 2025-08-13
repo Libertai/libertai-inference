@@ -62,7 +62,7 @@ async def thirdweb_webhook(
 ) -> None:
     """
     Process webhooks from Thirdweb.
-    Currently only supports onchain-transaction events.
+    Supports both onchain-transaction and onramp-transaction events.
 
     Verifies the webhook signature using the THIRDWEB_WEBHOOK_SECRET and validates
     the timestamp to prevent replay attacks.
@@ -113,12 +113,17 @@ async def thirdweb_webhook(
 
     logger.debug(f"Received Thirdweb webhook: {payload.model_dump_json()}")
 
-    # Only handle onchain transactions for now
-    if not payload.is_onchain_transaction:
+    # Handle both onchain and onramp transactions
+    if payload.is_onchain_transaction:
+        _handle_onchain_transaction(payload.onchain_data)
+    elif payload.is_onramp_transaction:
+        _handle_onramp_transaction(payload.onramp_data)
+    else:
         logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
-        return
 
-    data = payload.onchain_data
+
+def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
+    """Handle onchain transaction webhook data."""
     if data is None:
         raise HTTPException(status_code=400, detail="Missing onchain transaction data")
 
@@ -175,5 +180,63 @@ async def thirdweb_webhook(
         )
 
     except Exception as e:
-        logger.error(f"Error processing Thirdweb webhook: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing webhook: {str(e)}")
+        logger.error(f"Error processing Thirdweb onchain webhook: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing onchain webhook: {str(e)}")
+
+
+def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> None:
+    """Handle onramp transaction webhook data."""
+    if data is None:
+        raise HTTPException(status_code=400, detail="Missing onramp transaction data")
+
+    # Check if transaction is destined for our payment processor
+    if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
+        logger.warning(f"Onramp transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
+        return
+
+    try:
+        # For onramp transactions, we use the onramp transaction ID as the hash
+        transaction_hash = data.id
+        sender_address = data.purchaseData.userAddress
+
+        # Convert amount from token amount to USD
+        # amount is in token's smallest unit (e.g., USDC has 6 decimals)
+        amount_usd = int(data.amount) / (10**data.token.decimals)
+
+        if data.token.symbol != "USDC":
+            logger.warning(f"Unsupported onramp token: {data.token.symbol}")
+            return
+        if data.token.chainId != 8453:
+            logger.warning(f"Unsupported onramp token chain: {data.token.chainId}")
+            return
+
+        # First, check if transaction already exists
+        with SessionLocal() as db:
+            existing_transaction = (
+                db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+            )
+
+        # Determine transaction status based on the webhook status
+        tx_status = (
+            CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
+        )
+
+        # If the transaction already exists and status is completed, update it
+        if existing_transaction is not None:
+            if data.status == "COMPLETED":
+                CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
+            return
+
+        # Add credits to the user's account with the appropriate status
+        CreditService.add_credits(
+            provider=CreditTransactionProvider.thirdweb,
+            address=format_address(LibertaiChain.base, sender_address),
+            amount=amount_usd,
+            transaction_hash=transaction_hash,
+            block_number=None,  # Onramp transactions don't have block numbers
+            status=tx_status,
+        )
+
+    except Exception as e:
+        logger.error(f"Error processing Thirdweb onramp webhook: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing onramp webhook: {str(e)}")
