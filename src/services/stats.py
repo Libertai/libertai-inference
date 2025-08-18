@@ -6,10 +6,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
 from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, GlobalCreditsStats, \
-    CreditsUsage, GlobalApiStats, ModelApiUsage
+    CreditsUsage, GlobalApiStats, ModelApiUsage, GlobalAgentStats, AgentUsage
+from src.models import CreditTransaction, Subscription
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
+from src.models.agent import Agent
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -368,6 +370,46 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving api stats: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
+
+    @staticmethod
+    def get_global_agent_stats(start_date: date, end_date: date) -> GlobalAgentStats:
+        try:
+            with (SessionLocal() as db):
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_agents = db.query(func.count(Agent.id)).scalar()
+                total_vouchers = db.query(func.count(CreditTransaction.id)).scalar()
+                total_subscriptions = db.query(func.count(Subscription.id)).scalar()
+                agents = (
+                    db.query(Agent)
+                    .filter(
+                        Agent.created_at >= start_datetime,
+                        Agent.created_at <= end_datetime
+                    )
+                    .all()
+                )
+
+                got_agents = [
+                    AgentUsage(
+                        name=agent.name,
+                        created_at=agent.created_at.strftime('%Y-%m-%d'),
+                    )
+                    for agent in agents
+                ]
+
+                return GlobalAgentStats(
+                    total_agents_created =total_agents,
+                    total_vouchers=total_vouchers,
+                    total_subscriptions=total_subscriptions,
+                    agents=got_agents
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving agent stats: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail="Internal server error"

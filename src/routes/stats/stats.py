@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi import Depends, Query
 
-from src.interfaces.stats import DashboardStats, UsageStats, GlobalCreditsStats, GlobalApiStats
+from src.interfaces.stats import DashboardStats, UsageStats, GlobalCreditsStats, GlobalApiStats, GlobalAgentStats
 from src.routes.stats import router
 from src.services.auth import get_current_address
 from src.services.stats import StatsService
@@ -61,7 +61,7 @@ async def get_credits_stats(
         - Credits used per model
         - Tokens used per model
         - Which model has been used
-        """
+    """
 
     try:
         return StatsService.get_global_credits_stats(start_date, end_date)
@@ -80,10 +80,30 @@ async def get_api_stats(
         Statistics include:
         - Total API calls for the entire models
         - List with API calls for each model
-        """
+    """
 
     try:
         return StatsService.get_global_api_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
+        raise
+
+@router.get("/global/agents", response_model=GlobalAgentStats) # type: ignore
+async def get_agent_stats(
+        start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+        end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalAgentStats:
+    """
+        Get detailed agent usage statistics for a specific date range.
+
+        Statistics include:
+        - Total agents created
+        - Total given vouchers
+        - Total subscriptions to the agents
+        - List with the agents creations dates
+    """
+    try:
+        return StatsService.get_global_agent_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in agent stats route: {str(e)}", exc_info=True)
         raise
