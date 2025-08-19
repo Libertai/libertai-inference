@@ -2,7 +2,8 @@ from datetime import date
 
 from fastapi import Depends, Query
 
-from src.interfaces.stats import DashboardStats, UsageStats, GlobalCreditsStats, GlobalApiStats, GlobalAgentStats
+from src.interfaces.stats import DashboardStats, UsageStats, GlobalCreditsStats, GlobalApiStats, GlobalAgentStats, \
+    GlobalTokensStats
 from src.routes.stats import router
 from src.services.auth import get_current_address
 from src.services.stats import StatsService
@@ -106,4 +107,24 @@ async def get_agent_stats(
         return StatsService.get_global_agent_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in agent stats route: {str(e)}", exc_info=True)
+        raise
+
+@router.get("/global/tokens", response_model=GlobalTokensStats) # type: ignore
+async def get_tokens_stats(
+        start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+        end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalTokensStats:
+    """
+        Get detailed tokens usage statistics for a specific date range.
+
+        Statistics include:
+        - Total user input tokens
+        - Total model output vouchers
+        - Total subscriptions to the agents
+        - List with the agents creations dates
+    """
+    try:
+        return StatsService.get_global_tokens_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in token stats route: {str(e)}", exc_info=True)
         raise

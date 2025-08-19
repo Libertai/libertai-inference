@@ -1,3 +1,5 @@
+from enum import Enum
+
 from pydantic import BaseModel
 
 
@@ -76,3 +78,14 @@ class GlobalApiStats(BaseModel):
     """Api usage statistics for a date range."""
     total_calls: int
     api_usage: list[ModelApiUsage]
+
+
+class Call(BaseModel):
+    date: str
+    nb_input_tokens: int
+    nb_output_tokens: int
+
+class GlobalTokensStats(BaseModel):
+    total_input_tokens: int
+    total_output_tokens: int
+    calls: list[Call]

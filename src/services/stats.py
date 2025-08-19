@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
 from src.interfaces.stats import DashboardStats, TokenStats, UsageStats, DailyTokens, UsageByEntity, GlobalCreditsStats, \
-    CreditsUsage, GlobalApiStats, ModelApiUsage, GlobalAgentStats, AgentUsage
+    CreditsUsage, GlobalApiStats, ModelApiUsage, GlobalAgentStats, AgentUsage, GlobalTokensStats, Call
 from src.models import CreditTransaction, Subscription
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
@@ -403,13 +403,51 @@ class StatsService:
                 ]
 
                 return GlobalAgentStats(
-                    total_agents_created =total_agents,
+                    total_agents_created=total_agents,
                     total_vouchers=total_vouchers,
                     total_subscriptions=total_subscriptions,
                     agents=got_agents
                 )
         except Exception as e:
             logger.error(f"Error retrieving agent stats: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
+
+    @staticmethod
+    def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+        try:
+            with (SessionLocal() as db):
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                total_input_tokens = db.query(func.sum(InferenceCall.input_tokens)).scalar()
+                total_output_tokens = db.query(func.sum(InferenceCall.output_tokens)).scalar()
+                inference_calls = (
+                    db.query(InferenceCall)
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime
+                    )
+                    .all()
+                )
+
+                calls = [
+                    Call(
+                        date=call.used_at.strftime('%Y-%m-%d'),
+                        nb_input_tokens=call.input_tokens,
+                        nb_output_tokens=call.output_tokens,
+                    )
+                    for call in inference_calls
+                ]
+
+                return GlobalTokensStats(
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    calls=calls
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving token stats: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail="Internal server error"
