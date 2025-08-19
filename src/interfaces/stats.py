@@ -1,7 +1,4 @@
-from enum import Enum
-
 from pydantic import BaseModel
-
 
 class TokenStats(BaseModel):
     """Stats about token usage for the current month."""
