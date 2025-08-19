@@ -84,6 +84,7 @@ class Call(BaseModel):
     date: str
     nb_input_tokens: int
     nb_output_tokens: int
+    model_name: str
 
 class GlobalTokensStats(BaseModel):
     total_input_tokens: int

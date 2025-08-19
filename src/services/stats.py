@@ -437,6 +437,7 @@ class StatsService:
                         date=call.used_at.strftime('%Y-%m-%d'),
                         nb_input_tokens=call.input_tokens,
                         nb_output_tokens=call.output_tokens,
+                        model_name=call.model_name,
                     )
                     for call in inference_calls
                 ]
