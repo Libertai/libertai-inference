@@ -1,6 +1,5 @@
 from pydantic import BaseModel
 
-
 class TokenStats(BaseModel):
     """Stats about token usage for the current month."""
 
@@ -57,6 +56,17 @@ class GlobalCreditsStats(BaseModel):
     total_credits_used: float
     credits_usage: list[CreditsUsage]
 
+class AgentUsage(BaseModel):
+    name: str
+    created_at: str
+
+class GlobalAgentStats(BaseModel):
+    """Agent usage statistics for a date range."""
+    total_agents_created: int
+    total_vouchers: int
+    total_subscriptions: int
+    agents: list[AgentUsage]
+
 class ModelApiUsage(BaseModel):
     model_name: str
     used_at: str
@@ -65,3 +75,15 @@ class GlobalApiStats(BaseModel):
     """Api usage statistics for a date range."""
     total_calls: int
     api_usage: list[ModelApiUsage]
+
+
+class Call(BaseModel):
+    date: str
+    nb_input_tokens: int
+    nb_output_tokens: int
+    model_name: str
+
+class GlobalTokensStats(BaseModel):
+    total_input_tokens: int
+    total_output_tokens: int
+    calls: list[Call]
