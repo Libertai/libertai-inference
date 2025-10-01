@@ -348,10 +348,11 @@ class ApiKeyService:
                 # Filter keys with sufficient credits available
                 result = []
                 for key in api_keys:
-                    # Check if the key has at least 0.02 credits available
-                    effective_limit = key.effective_limit_remaining
-                    if effective_limit < 0.02:
-                        continue
+                    if key.type == ApiKeyType.api:
+                        # Check if the key has at least 0.02 credits available
+                        effective_limit = key.effective_limit_remaining
+                        if effective_limit < 0.02:
+                            continue
 
                     # Add the unmasked key to the result
                     result.append(key.key)
