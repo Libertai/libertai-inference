@@ -1,6 +1,6 @@
 import uuid
 
-from src.interfaces.api_keys import ApiKey, FullApiKey
+from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import SessionLocal
 from src.models.inference_call import InferenceCall
@@ -13,7 +13,9 @@ logger = setup_logger(__name__)
 
 class ApiKeyService:
     @staticmethod
-    def create_api_key(address: str, name: str, monthly_limit: float | None = None) -> FullApiKey:
+    def create_api_key(
+        address: str, name: str, monthly_limit: float | None = None, key_type: ApiKeyType = ApiKeyType.api
+    ) -> FullApiKey:
         """
         Create a new API key for a user.
 
@@ -21,6 +23,7 @@ class ApiKeyService:
             address: User's blockchain address
             name: Name for the API key
             monthly_limit: Optional monthly usage limit in credits
+            key_type: Category/type of the API key
 
         Returns:
             Newly created ApiKey object with all properties eagerly loaded
@@ -53,6 +56,7 @@ class ApiKeyService:
                     name=name,
                     user_address=address,
                     monthly_limit=monthly_limit,
+                    type=key_type,
                 )
                 db.add(api_key)
                 db.commit()
@@ -69,10 +73,82 @@ class ApiKeyService:
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
                     monthly_limit=api_key.monthly_limit,
+                    type=api_key.type,
                 )
 
         except Exception as e:
             logger.error(f"Error creating API key for {address}: {str(e)}", exc_info=True)
+            raise
+
+    @staticmethod
+    def get_or_create_chat_api_key(address: str) -> FullApiKey:
+        """
+        Get the chat API key for a user, or create one if it doesn't exist.
+
+        Args:
+            address: User's blockchain address
+
+        Returns:
+            FullApiKey object with the chat API key (full key returned only on creation)
+        """
+        logger.debug(f"Getting or creating chat API key for address {address}")
+
+        try:
+            with SessionLocal() as db:
+                # Get or create user
+                user = db.query(User).filter(User.address == address).first()
+                if not user:
+                    user = User(address=address)
+                    db.add(user)
+                    db.flush()
+
+                # Check if chat API key already exists
+                existing_key = (
+                    db.query(ApiKeyDB)
+                    .filter(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.chat)
+                    .first()
+                )
+
+                if existing_key:
+                    # Return existing key (masked)
+                    return FullApiKey(
+                        id=existing_key.id,
+                        key=existing_key.masked_key,
+                        full_key=existing_key.key,  # Return full key
+                        name=existing_key.name,
+                        user_address=existing_key.user_address,
+                        created_at=existing_key.created_at,
+                        is_active=existing_key.is_active,
+                        monthly_limit=existing_key.monthly_limit,
+                        type=existing_key.type,
+                    )
+
+                # Create new chat API key
+                key = ApiKeyDB.generate_key()
+                api_key = ApiKeyDB(
+                    key=key,
+                    name="Chat API Key",
+                    user_address=address,
+                    monthly_limit=None,
+                    type=ApiKeyType.chat,
+                )
+                db.add(api_key)
+                db.commit()
+
+                return FullApiKey(
+                    id=api_key.id,
+                    key=api_key.masked_key,
+                    full_key=key,
+                    name=api_key.name,
+                    user_address=api_key.user_address,
+                    created_at=api_key.created_at,
+                    is_active=api_key.is_active,
+                    monthly_limit=api_key.monthly_limit,
+                    type=api_key.type,
+                )
+
+        except Exception as e:
+            logger.error(f"Error getting or creating chat API key for {address}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
@@ -92,7 +168,9 @@ class ApiKeyService:
         try:
             with SessionLocal() as db:
                 # Get all API keys for the user
-                api_keys = db.query(ApiKeyDB).filter(ApiKeyDB.user_address == address).all()
+                api_keys = (
+                    db.query(ApiKeyDB).filter(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.api).all()
+                )
 
                 # Create fully detached copies
                 result = []
@@ -106,6 +184,7 @@ class ApiKeyService:
                         id=key.id,
                         created_at=key.created_at,
                         is_active=key.is_active,
+                        type=key.type,
                     )
                     result.append(detached_key)
 
@@ -144,6 +223,7 @@ class ApiKeyService:
                     id=api_key.id,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    type=api_key.type,
                 )
 
         except Exception as e:
@@ -214,6 +294,7 @@ class ApiKeyService:
                     id=api_key.id,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    type=api_key.type,
                 )
 
         except Exception as e:

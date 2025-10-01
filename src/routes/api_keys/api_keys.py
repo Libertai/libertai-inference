@@ -7,14 +7,19 @@ from src.interfaces.api_keys import (
     ApiKeyAdminListResponse,
     ApiKeyCreate,
     ApiKeyListResponse,
+    ApiKeyType,
     ApiKeyUpdate,
+    ChatApiKeyResponse,
     FullApiKey,
     InferenceCallData,
 )
+from src.models.api_key import ApiKey as ApiKeyDB
+from src.models.base import SessionLocal
 from src.routes.api_keys import router
 from src.services.aleph import aleph_service
 from src.services.api_key import ApiKeyService
 from src.services.auth import get_current_address, verify_admin_token
+from src.services.chat_request import ChatRequestService
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -49,6 +54,22 @@ async def get_api_keys(current_address: str = Depends(get_current_address)) -> A
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
+@router.get("/chat")  # type: ignore
+async def get_chat_api_key(current_address: str = Depends(get_current_address)) -> ChatApiKeyResponse:
+    """
+    Get the chat API key for the authenticated user.
+
+    If the user doesn't have a chat API key, one will be automatically created.
+    Returns only the full API key string.
+    """
+    try:
+        chat_api_key = ApiKeyService.get_or_create_chat_api_key(address=current_address)
+        return ChatApiKeyResponse(key=chat_api_key.full_key)
+    except Exception as e:
+        logger.error(f"Error getting or creating chat API key: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+
+
 @router.put("/{key_id}")  # type: ignore
 async def update_api_key(
     key_id: uuid.UUID, api_key_update: ApiKeyUpdate, current_address: str = Depends(get_current_address)
@@ -79,6 +100,7 @@ async def update_api_key(
         return ApiKey(
             id=api_key.id,
             key=api_key.key,  # Already masked by the service
+            type=api_key.type,
             name=api_key.name,
             user_address=api_key.user_address,
             created_at=api_key.created_at,
@@ -126,28 +148,52 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
 
     This endpoint is protected by admin authorization and requires
     the X-Admin-Token header to match the ADMIN_SECRET environment variable.
+
+    For chat-type API keys, logs usage to chat_requests without deducting credits.
+    For api-type API keys, logs usage to inference_calls and deducts credits.
     """
 
     try:
-        credits_used = await aleph_service.calculate_price(
-            model_id=usage_log.model_name,
-            input_tokens=usage_log.input_tokens,
-            output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
-        )
-        logger.debug(f"Calculated {credits_used} credits for model {usage_log.model_name}")
+        # Check API key type
+        with SessionLocal() as db:
+            api_key = db.query(ApiKeyDB).filter(ApiKeyDB.key == usage_log.key).first()
 
-        # Now log the usage
-        success = ApiKeyService.register_inference_call(
-            key=usage_log.key,
-            credits_used=credits_used,
-            input_tokens=usage_log.input_tokens,
-            output_tokens=usage_log.output_tokens,
-            cached_tokens=usage_log.cached_tokens,
-            model_name=usage_log.model_name,
-        )
+            if not api_key:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found")
 
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found")
+            # Handle based on API key type
+            if api_key.type == ApiKeyType.chat:
+                # For chat keys: log to chat_requests without deducting credits
+                logger.debug(f"Logging chat request for key {usage_log.key}")
+                ChatRequestService.add_chat_request(
+                    api_key_id=api_key.id,
+                    input_tokens=usage_log.input_tokens,
+                    output_tokens=usage_log.output_tokens,
+                    cached_tokens=usage_log.cached_tokens,
+                    model_name=usage_log.model_name,
+                )
+            else:
+                # For API keys: calculate credits, log to inference_calls, and deduct credits
+                credits_used = await aleph_service.calculate_price(
+                    model_id=usage_log.model_name,
+                    input_tokens=usage_log.input_tokens,
+                    output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                )
+                logger.debug(f"Calculated {credits_used} credits for model {usage_log.model_name}")
+
+                success = ApiKeyService.register_inference_call(
+                    key=usage_log.key,
+                    credits_used=credits_used,
+                    input_tokens=usage_log.input_tokens,
+                    output_tokens=usage_log.output_tokens,
+                    cached_tokens=usage_log.cached_tokens,
+                    model_name=usage_log.model_name,
+                )
+
+                if not success:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
+                    )
 
         return None
     except HTTPException:

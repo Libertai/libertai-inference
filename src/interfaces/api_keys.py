@@ -1,7 +1,13 @@
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel
+
+
+class ApiKeyType(str, Enum):
+    api = "api"
+    chat = "chat"
 
 
 class ApiKeyCreate(BaseModel):
@@ -31,6 +37,7 @@ class ApiKey(BaseModel):
     created_at: datetime
     is_active: bool
     monthly_limit: float | None = None
+    type: ApiKeyType
 
 
 class FullApiKey(ApiKey):
@@ -43,3 +50,7 @@ class ApiKeyListResponse(BaseModel):
 
 class ApiKeyAdminListResponse(BaseModel):
     keys: list[str]
+
+
+class ChatApiKeyResponse(BaseModel):
+    key: str

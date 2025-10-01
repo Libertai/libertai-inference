@@ -36,6 +36,9 @@ class _Config:
 
     ALEPH_AGENT_CHANNEL: str
 
+    LIBERTAI_CHAT_API_KEY: str
+    LIBERTAI_CHAT_API_BASE_URL: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
@@ -70,6 +73,9 @@ class _Config:
         self.ALEPH_SENDER_PK = os.getenv("ALEPH_SENDER_PK")  # type: ignore
 
         self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_AGENT_CHANNEL")
+
+        self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
+        self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
 
 
 config = _Config()
