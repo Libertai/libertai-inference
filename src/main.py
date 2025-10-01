@@ -21,7 +21,12 @@ app.openapi_components = {  # type: ignore
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://console.libertai.io", "https://analytics.libertai.io"]
+    allow_origins=[
+        "https://console.libertai.io",
+        "https://analytics.libertai.io",
+        "https://test.libertai.io",
+        "https://chat.libertai.io",
+    ]
     + (["http://localhost:5173", "http://localhost:3000"] if config.IS_DEVELOPMENT else []),
     allow_methods=["*"],
     allow_headers=["*"],
