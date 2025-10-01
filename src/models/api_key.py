@@ -3,15 +3,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID
+from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID, Enum
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql.expression import func as sql_func
 
+from src.interfaces.api_keys import ApiKeyType
 from src.models.base import Base, SessionLocal
 
 if TYPE_CHECKING:
     from src.models.user import User
     from src.models.inference_call import InferenceCall
+    from src.models.chat_request import ChatRequest
 
 
 class ApiKey(Base):
@@ -24,19 +26,31 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
+    type: Mapped[ApiKeyType] = mapped_column(Enum(ApiKeyType), nullable=False, default=ApiKeyType.api)
 
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
     usages: Mapped[list["InferenceCall"]] = relationship(
         "InferenceCall", back_populates="api_key", cascade="all, delete-orphan"
     )
+    chat_requests: Mapped[list["ChatRequest"]] = relationship(
+        "ChatRequest", back_populates="api_key", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (UniqueConstraint("user_address", "name", name="unique_api_key_name_per_user"),)
 
-    def __init__(self, key: str, name: str, user_address: str, monthly_limit: float | None = None):
+    def __init__(
+        self,
+        key: str,
+        name: str,
+        user_address: str,
+        monthly_limit: float | None = None,
+        type: ApiKeyType = ApiKeyType.api,
+    ):
         self.key = key
         self.name = name
         self.user_address = user_address
         self.monthly_limit = monthly_limit
+        self.type = type
 
     @property
     def masked_key(self) -> str:
