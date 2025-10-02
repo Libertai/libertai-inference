@@ -11,6 +11,7 @@ from src.models.agent import Agent  # noqa
 # Import all models that should be included in migrations
 from src.models.api_key import ApiKey  # noqa
 from src.models.base import Base  # Import the Base from your models
+from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.inference_call import InferenceCall  # noqa
 from src.models.subscription import Subscription  # noqa
