@@ -7,8 +7,9 @@ from src.interfaces.stats import (
     UsageStats,
     GlobalCreditsStats,
     GlobalApiStats,
-    GlobalAgentStats,
     GlobalTokensStats,
+    GlobalChatCallsStats,
+    GlobalChatTokensStats,
 )
 from src.routes.stats import router
 from src.services.auth import get_current_address
@@ -57,7 +58,7 @@ async def get_usage_stats(
         raise
 
 
-@router.get("/global/credits", response_model=GlobalCreditsStats)  # type: ignore
+@router.get("/global/api/credits", response_model=GlobalCreditsStats)  # type: ignore
 async def get_credits_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -78,7 +79,7 @@ async def get_credits_stats(
         raise
 
 
-@router.get("/global/api", response_model=GlobalApiStats)  # type: ignore
+@router.get("/global/api/calls", response_model=GlobalApiStats)  # type: ignore
 async def get_api_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -98,28 +99,7 @@ async def get_api_stats(
         raise
 
 
-@router.get("/global/agents", response_model=GlobalAgentStats)  # type: ignore
-async def get_agent_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalAgentStats:
-    """
-    Get detailed agent usage statistics for a specific date range.
-
-    Statistics include:
-    - Total agents created
-    - Total given vouchers
-    - Total subscriptions to the agents
-    - List with the agents creations dates
-    """
-    try:
-        return StatsService.get_global_agent_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in agent stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/tokens", response_model=GlobalTokensStats)  # type: ignore
+@router.get("/global/api/tokens", response_model=GlobalTokensStats)  # type: ignore
 async def get_tokens_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -137,4 +117,44 @@ async def get_tokens_stats(
         return StatsService.get_global_tokens_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in token stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/chat/calls", response_model=GlobalChatCallsStats)  # type: ignore
+async def get_chat_calls_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalChatCallsStats:
+    """
+    Get detailed chat API call statistics for a specific date range.
+
+    Statistics include:
+    - Total number of chat API calls
+    - Daily breakdown by model of chat API calls
+    """
+    try:
+        return StatsService.get_global_chat_calls_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in chat calls stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/chat/tokens", response_model=GlobalChatTokensStats)  # type: ignore
+async def get_chat_tokens_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalChatTokensStats:
+    """
+    Get detailed chat token usage statistics for a specific date range.
+
+    Statistics include:
+    - Total input tokens
+    - Total output tokens
+    - Total cached tokens
+    - Daily breakdown by model of token usage
+    """
+    try:
+        return StatsService.get_global_chat_tokens_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in chat tokens stats route: {str(e)}", exc_info=True)
         raise

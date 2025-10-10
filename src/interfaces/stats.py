@@ -70,6 +70,7 @@ class GlobalAgentStats(BaseModel):
 class ModelApiUsage(BaseModel):
     model_name: str
     used_at: str
+    call_count: int
 
 class GlobalApiStats(BaseModel):
     """Api usage statistics for a date range."""
@@ -87,3 +88,27 @@ class GlobalTokensStats(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     calls: list[Call]
+
+class ChatCallUsage(BaseModel):
+    model_name: str
+    used_at: str
+    call_count: int
+
+class GlobalChatCallsStats(BaseModel):
+    """Chat API calls statistics for a date range."""
+    total_calls: int
+    chat_usage: list[ChatCallUsage]
+
+class ChatTokenUsage(BaseModel):
+    date: str
+    nb_input_tokens: int
+    nb_output_tokens: int
+    nb_cached_tokens: int
+    model_name: str
+
+class GlobalChatTokensStats(BaseModel):
+    """Chat token usage statistics for a date range."""
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cached_tokens: int
+    token_usage: list[ChatTokenUsage]

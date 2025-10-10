@@ -15,15 +15,18 @@ from src.interfaces.stats import (
     CreditsUsage,
     GlobalApiStats,
     ModelApiUsage,
-    GlobalAgentStats,
-    AgentUsage,
     GlobalTokensStats,
     Call,
+    GlobalChatCallsStats,
+    ChatCallUsage,
+    GlobalChatTokensStats,
+    ChatTokenUsage,
 )
 from src.models import CreditTransaction, Subscription
 from src.models.agent import Agent
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
+from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.utils.logger import setup_logger
 
@@ -289,45 +292,55 @@ class StatsService:
     @staticmethod
     def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         """
-        Get model credits usage for a specific date range.
+        Get model credits usage for a specific date range, grouped by day.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
             end_date: End date for the statistics period (inclusive)
 
         Returns:
-            GlobalCreditsStats object containing detailed credits usage statistics
+            GlobalCreditsStats object containing detailed credits usage statistics grouped by day
         """
         try:
             with SessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-                total_credits_used: float = db.query(func.sum(InferenceCall.credits_used)).scalar() or 0
+                total_credits_used: float = (
+                    db.query(func.sum(InferenceCall.credits_used))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
 
+                # Get data grouped by date and model to reduce data size
                 model_stats = (
                     db.query(
-                        InferenceCall.credits_used.label("credits"),
-                        InferenceCall.used_at.label("used_at"),
-                        InferenceCall.model_name.label("name"),
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.credits_used).label("credits"),
                     )
                     .filter(
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                     .all()
                 )
 
                 credits_usage = [
                     CreditsUsage(
-                        credits_used=ai_model.credits,
-                        used_at=ai_model.used_at.strftime("%Y-%m-%d"),
-                        model_name=ai_model.name,
+                        credits_used=float(stat.credits or 0),
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        model_name=stat.model_name,
                     )
-                    for ai_model in model_stats
+                    for stat in model_stats
                 ]
 
-                return GlobalCreditsStats(total_credits_used=total_credits_used, credits_usage=credits_usage)
+                return GlobalCreditsStats(total_credits_used=float(total_credits_used), credits_usage=credits_usage)
         except Exception as e:
             logger.error(f"Error retrieving credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
@@ -335,40 +348,53 @@ class StatsService:
     @staticmethod
     def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
         """
-        Get model api usage for a specific date range.
+        Get model api usage for a specific date range, grouped by day.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
             end_date: End date for the statistics period (inclusive)
 
         Returns:
-            GlobalApiStats object containing detailed api usage statistics
+            GlobalApiStats object containing api usage statistics grouped by day
         """
         try:
             with SessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-                total_calls = db.query(func.count(InferenceCall.id)).scalar()
+                total_calls = (
+                    db.query(func.count(InferenceCall.id))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                )
 
+                # Group by date and model
                 model_stats = (
                     db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
                         InferenceCall.model_name.label("name"),
-                        InferenceCall.used_at.label("used_at"),
+                        func.count(InferenceCall.id).label("count"),
                     )
                     .filter(
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                     .all()
                 )
 
+                # Create one entry per day per model with aggregated counts
                 api_usage = [
                     ModelApiUsage(
-                        model_name=ai_model.name,
-                        used_at=ai_model.used_at.strftime("%Y-%m-%d"),
+                        model_name=stat.name,
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        call_count=stat.count,
                     )
-                    for ai_model in model_stats
+                    for stat in model_stats
                 ]
 
                 return GlobalApiStats(total_calls=total_calls, api_usage=api_usage)
@@ -377,59 +403,61 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_agent_stats(start_date: date, end_date: date) -> GlobalAgentStats:
-        try:
-            with SessionLocal() as db:
-                start_datetime = datetime.combine(start_date, datetime.min.time())
-                end_datetime = datetime.combine(end_date, datetime.max.time())
-
-                total_agents = db.query(func.count(Agent.id)).scalar()
-                total_vouchers = db.query(func.count(CreditTransaction.id)).scalar()
-                total_subscriptions = db.query(func.count(Subscription.id)).scalar()
-                agents = (
-                    db.query(Agent).filter(Agent.created_at >= start_datetime, Agent.created_at <= end_datetime).all()
-                )
-
-                got_agents = [
-                    AgentUsage(
-                        name=agent.name,
-                        created_at=agent.created_at.strftime("%Y-%m-%d"),
-                    )
-                    for agent in agents
-                ]
-
-                return GlobalAgentStats(
-                    total_agents_created=total_agents,
-                    total_vouchers=total_vouchers,
-                    total_subscriptions=total_subscriptions,
-                    agents=got_agents,
-                )
-        except Exception as e:
-            logger.error(f"Error retrieving agent stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
     def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+        """
+        Get token usage statistics for a specific date range, grouped by day and model.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            GlobalTokensStats object containing token usage statistics grouped by day and model
+        """
         try:
             with SessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
-                total_input_tokens: int = db.query(func.sum(InferenceCall.input_tokens)).scalar() or 0
-                total_output_tokens: int = db.query(func.sum(InferenceCall.output_tokens)).scalar() or 0
-                inference_calls = (
-                    db.query(InferenceCall)
+
+                total_input_tokens: int = (
+                    db.query(func.sum(InferenceCall.input_tokens))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
+                total_output_tokens: int = (
+                    db.query(func.sum(InferenceCall.output_tokens))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
+
+                # Group by date and model to reduce data size
+                inference_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    )
                     .filter(InferenceCall.used_at >= start_datetime, InferenceCall.used_at <= end_datetime)
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                     .all()
                 )
 
                 calls = [
                     Call(
-                        date=call.used_at.strftime("%Y-%m-%d"),
-                        nb_input_tokens=call.input_tokens,
-                        nb_output_tokens=call.output_tokens,
-                        model_name=call.model_name,
+                        date=stat.date.strftime("%Y-%m-%d"),
+                        nb_input_tokens=stat.input_tokens or 0,
+                        nb_output_tokens=stat.output_tokens or 0,
+                        model_name=stat.model_name,
                     )
-                    for call in inference_calls
+                    for stat in inference_stats
                 ]
 
                 return GlobalTokensStats(
@@ -437,4 +465,138 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving token stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_chat_calls_stats(start_date: date, end_date: date) -> GlobalChatCallsStats:
+        """
+        Get chat API call statistics for a specific date range, grouped by day and model.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            GlobalChatCallsStats object containing chat call statistics grouped by day
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_calls = (
+                    db.query(func.count(ChatRequest.id))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar()
+                )
+
+                # Group by date and model
+                chat_stats = (
+                    db.query(
+                        cast(ChatRequest.created_at, Date).label("date"),
+                        ChatRequest.model_name.label("name"),
+                        func.count(ChatRequest.id).label("count"),
+                    )
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
+                    .order_by(cast(ChatRequest.created_at, Date))
+                    .all()
+                )
+
+                chat_usage = [
+                    ChatCallUsage(
+                        model_name=stat.name,
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        call_count=stat.count,
+                    )
+                    for stat in chat_stats
+                ]
+
+                return GlobalChatCallsStats(total_calls=total_calls or 0, chat_usage=chat_usage)
+        except Exception as e:
+            logger.error(f"Error retrieving chat calls stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_chat_tokens_stats(start_date: date, end_date: date) -> GlobalChatTokensStats:
+        """
+        Get chat token usage statistics for a specific date range, grouped by day and model.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            GlobalChatTokensStats object containing chat token usage statistics grouped by day and model
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_input_tokens: int = (
+                    db.query(func.sum(ChatRequest.input_tokens))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
+                total_output_tokens: int = (
+                    db.query(func.sum(ChatRequest.output_tokens))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
+                total_cached_tokens: int = (
+                    db.query(func.sum(ChatRequest.cached_tokens))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar() or 0
+                )
+
+                # Group by date and model to reduce data size
+                chat_stats = (
+                    db.query(
+                        cast(ChatRequest.created_at, Date).label("date"),
+                        ChatRequest.model_name.label("model_name"),
+                        func.sum(ChatRequest.input_tokens).label("input_tokens"),
+                        func.sum(ChatRequest.output_tokens).label("output_tokens"),
+                        func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                    )
+                    .filter(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
+                    .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
+                    .order_by(cast(ChatRequest.created_at, Date))
+                    .all()
+                )
+
+                token_usage = [
+                    ChatTokenUsage(
+                        date=stat.date.strftime("%Y-%m-%d"),
+                        nb_input_tokens=stat.input_tokens or 0,
+                        nb_output_tokens=stat.output_tokens or 0,
+                        nb_cached_tokens=stat.cached_tokens or 0,
+                        model_name=stat.model_name,
+                    )
+                    for stat in chat_stats
+                ]
+
+                return GlobalChatTokensStats(
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    total_cached_tokens=total_cached_tokens,
+                    token_usage=token_usage,
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving chat token stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
