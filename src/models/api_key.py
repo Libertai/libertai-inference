@@ -24,7 +24,10 @@ class ApiKey(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     user_address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
+
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
     type: Mapped[ApiKeyType] = mapped_column(Enum(ApiKeyType), nullable=False, default=ApiKeyType.api)
 
