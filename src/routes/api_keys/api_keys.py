@@ -91,6 +91,7 @@ async def update_api_key(
             key_id=key_id,
             name=api_key_update.name,
             is_active=api_key_update.is_active,
+            is_deleted=api_key_update.is_deleted,
             monthly_limit=api_key_update.monthly_limit,
         )
 
@@ -105,6 +106,7 @@ async def update_api_key(
             user_address=api_key.user_address,
             created_at=api_key.created_at,
             is_active=api_key.is_active,
+            is_deleted=api_key.is_deleted,
             monthly_limit=api_key.monthly_limit,
         )
     except HTTPException:
