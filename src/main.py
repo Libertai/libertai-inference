@@ -24,7 +24,7 @@ app.add_middleware(
     allow_origins=[
         "https://console.libertai.io",
         "https://analytics.libertai.io",
-        "https://test.libertai.io",
+        "https://beta.chat.libertai.io",
         "https://chat.libertai.io",
     ]
     + (["http://localhost:5173", "http://localhost:3000"] if config.IS_DEVELOPMENT else []),

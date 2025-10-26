@@ -22,8 +22,6 @@ from src.interfaces.stats import (
     GlobalChatTokensStats,
     ChatTokenUsage,
 )
-from src.models import CreditTransaction, Subscription
-from src.models.agent import Agent
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
 from src.models.chat_request import ChatRequest
