@@ -29,6 +29,8 @@ python-dateutil = "^2.9.0.post0"
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
 ruff = "^0.6.0"
+sqlalchemy = {extras = ["mypy"], version = "^2.0.45"}
+sqlalchemy-stubs = "^0.4"
 
 [build-system]
 requires = ["poetry-core"]

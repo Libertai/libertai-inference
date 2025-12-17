@@ -72,6 +72,7 @@ class ApiKeyService:
                     user_address=api_key.user_address,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    is_deleted=api_key.is_deleted,
                     monthly_limit=api_key.monthly_limit,
                     type=api_key.type,
                 )
@@ -119,6 +120,7 @@ class ApiKeyService:
                         user_address=existing_key.user_address,
                         created_at=existing_key.created_at,
                         is_active=existing_key.is_active,
+                        is_deleted=existing_key.is_deleted,
                         monthly_limit=existing_key.monthly_limit,
                         type=existing_key.type,
                     )
@@ -143,6 +145,7 @@ class ApiKeyService:
                     user_address=api_key.user_address,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    is_deleted=api_key.is_deleted,
                     monthly_limit=api_key.monthly_limit,
                     type=api_key.type,
                 )
@@ -184,6 +187,7 @@ class ApiKeyService:
                         id=key.id,
                         created_at=key.created_at,
                         is_active=key.is_active,
+                        is_deleted=key.is_deleted,
                         type=key.type,
                     )
                     result.append(detached_key)
@@ -223,6 +227,7 @@ class ApiKeyService:
                     id=api_key.id,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    is_deleted=api_key.is_deleted,
                     type=api_key.type,
                 )
 
@@ -235,6 +240,7 @@ class ApiKeyService:
         key_id: uuid.UUID,
         name: str | None = None,
         is_active: bool | None = None,
+        is_deleted: bool | None = None,
         monthly_limit: float | None = None,
     ) -> ApiKey | None:
         """
@@ -294,6 +300,7 @@ class ApiKeyService:
                     id=api_key.id,
                     created_at=api_key.created_at,
                     is_active=api_key.is_active,
+                    is_deleted=api_key.is_deleted,
                     type=api_key.type,
                 )
 
