@@ -7,6 +7,9 @@ jobs:
   mypy:
     name: mypy
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ 3.12 ]
     steps:
       - uses: actions/checkout@v4
       - name: Install poetry
