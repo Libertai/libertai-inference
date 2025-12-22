@@ -310,7 +310,8 @@ class StatsService:
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
 
                 # Get data grouped by date and model to reduce data size
@@ -390,7 +391,7 @@ class StatsService:
                     ModelApiUsage(
                         model_name=stat.name,
                         used_at=stat.date.strftime("%Y-%m-%d"),
-                        call_count=stat.count,
+                        call_count=stat.count,  # type: ignore
                     )
                     for stat in model_stats
                 ]
@@ -423,7 +424,8 @@ class StatsService:
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
                 total_output_tokens: int = (
                     db.query(func.sum(InferenceCall.output_tokens))
@@ -431,7 +433,8 @@ class StatsService:
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
 
                 # Group by date and model to reduce data size
@@ -511,7 +514,7 @@ class StatsService:
                     ChatCallUsage(
                         model_name=stat.name,
                         used_at=stat.date.strftime("%Y-%m-%d"),
-                        call_count=stat.count,
+                        call_count=stat.count,  # type: ignore
                     )
                     for stat in chat_stats
                 ]
@@ -544,7 +547,8 @@ class StatsService:
                         ChatRequest.created_at >= start_datetime,
                         ChatRequest.created_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
                 total_output_tokens: int = (
                     db.query(func.sum(ChatRequest.output_tokens))
@@ -552,7 +556,8 @@ class StatsService:
                         ChatRequest.created_at >= start_datetime,
                         ChatRequest.created_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
                 total_cached_tokens: int = (
                     db.query(func.sum(ChatRequest.cached_tokens))
@@ -560,7 +565,8 @@ class StatsService:
                         ChatRequest.created_at >= start_datetime,
                         ChatRequest.created_at <= end_datetime,
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
 
                 # Group by date and model to reduce data size

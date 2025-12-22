@@ -24,7 +24,7 @@ async def shutdown_event():
     await client.aclose()
 
 
-@router.post("/completions")
+@router.post("/completions")  # type: ignore
 async def proxy_chat_request(
     request: Request,
     chat_request_data: ChatRequest,
