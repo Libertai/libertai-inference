@@ -2,7 +2,7 @@ import time
 
 import aiohttp
 
-from src.interfaces.aleph import AlephAPIResponse, ImagePricing, ModelInfo, TextPricing
+from src.interfaces.aleph import AlephAPIResponse, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -104,9 +104,9 @@ class AlephService:
                 raise ValueError(f"Image model {model_id} cannot process tokens")
 
             pricing = model.pricing["image"]
-            if not isinstance(pricing, ImagePricing):
+            if not isinstance(pricing, (int, float)):
                 raise ValueError(f"Invalid image pricing format for model: {model_id}")
-            total_price = image_count * pricing.price_per_image
+            total_price = image_count * pricing
 
         else:
             raise ValueError(f"Pricing information unavailable for model: {model_id}")

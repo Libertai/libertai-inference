@@ -13,6 +13,7 @@ from src.interfaces.api_keys import (
     FullApiKey,
     ImageInferenceCallData,
     InferenceCallData,
+    TextInferenceCallData,
 )
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import SessionLocal
@@ -165,6 +166,10 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
             # Handle based on API key type
             if api_key.type == ApiKeyType.chat:
                 # For chat keys: log to chat_requests without deducting credits
+                # Chat only supports text
+                if not isinstance(usage_log, TextInferenceCallData):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chat keys only support text")
+
                 logger.debug(f"Logging chat request for key {usage_log.key}")
                 ChatRequestService.add_chat_request(
                     api_key_id=api_key.id,
