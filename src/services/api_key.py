@@ -339,7 +339,6 @@ class ApiKeyService:
         Returns:
             List of API key strings (unmasked) that meet the requirements
         """
-        logger.debug("Getting all API keys (admin request)")
 
         try:
             with SessionLocal() as db:
