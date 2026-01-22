@@ -12,12 +12,20 @@ class TextPricing(BaseModel):
     price_per_million_output_tokens: float
 
 
+class ImageCapability(BaseModel):
+    enabled: bool
+
+
+class ImagePricing(BaseModel):
+    price_per_image: float
+
+
 class ModelInfo(BaseModel):
     id: str
     name: str
     hf_id: str
-    capabilities: dict[str, TextCapability]
-    pricing: dict[str, TextPricing]
+    capabilities: dict[str, TextCapability | ImageCapability]
+    pricing: dict[str, TextPricing | ImagePricing]
 
 
 class ModelsResponse(BaseModel):

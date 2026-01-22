@@ -2,7 +2,7 @@ import time
 
 import aiohttp
 
-from src.interfaces.aleph import AlephAPIResponse, ModelInfo
+from src.interfaces.aleph import AlephAPIResponse, ImagePricing, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -63,36 +63,53 @@ class AlephService:
 
         return None
 
-    async def calculate_price(self, model_id: str, input_tokens: int, output_tokens: int) -> float:
+    async def calculate_price(
+        self, model_id: str, input_tokens: int = 0, output_tokens: int = 0, image_count: int = 0
+    ) -> float:
         """
-        Calculate the price for a given model, input tokens and output tokens
+        Calculate the price for a given model
 
         Args:
             model_id: The ID of the model to use
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
+            input_tokens: Number of input tokens (for text models)
+            output_tokens: Number of output tokens (for text models)
+            image_count: Number of images (for image models)
 
         Returns:
             Price in credits
 
         Raises:
-            ValueError: If the model ID is invalid or pricing information is unavailable
+            ValueError: If the model ID is invalid, pricing unavailable, or wrong modality used
         """
         model = await self.get_model_info(model_id)
 
         if not model:
             raise ValueError(f"Invalid model ID: {model_id}")
 
-        if "text" not in model.pricing:
+        # Text model pricing
+        if "text" in model.pricing:
+            if image_count > 0:
+                raise ValueError(f"Text model {model_id} cannot process images")
+
+            pricing = model.pricing["text"]
+            if not isinstance(pricing, TextPricing):
+                raise ValueError(f"Invalid text pricing format for model: {model_id}")
+            input_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
+            output_price = output_tokens / 1_000_000 * pricing.price_per_million_output_tokens
+            total_price = input_price + output_price
+
+        # Image model pricing
+        elif "image" in model.pricing:
+            if input_tokens > 0 or output_tokens > 0:
+                raise ValueError(f"Image model {model_id} cannot process tokens")
+
+            pricing = model.pricing["image"]
+            if not isinstance(pricing, ImagePricing):
+                raise ValueError(f"Invalid image pricing format for model: {model_id}")
+            total_price = image_count * pricing.price_per_image
+
+        else:
             raise ValueError(f"Pricing information unavailable for model: {model_id}")
-
-        pricing = model.pricing["text"]
-
-        # Calculate price based on tokens
-        input_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
-        output_price = output_tokens / 1_000_000 * pricing.price_per_million_output_tokens
-
-        total_price = input_price + output_price
 
         # Round to 5 decimal places for consistency
         return round(total_price, 5)

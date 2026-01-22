@@ -10,6 +10,11 @@ class ApiKeyType(str, Enum):
     chat = "chat"
 
 
+class InferenceCallType(str, Enum):
+    text = "text"
+    image = "image"
+
+
 class ApiKeyCreate(BaseModel):
     name: str
     monthly_limit: float | None = None
@@ -21,12 +26,24 @@ class ApiKeyUpdate(BaseModel):
     monthly_limit: float | None = None
 
 
-class InferenceCallData(BaseModel):
+class TextInferenceCallData(BaseModel):
     key: str
+    model_name: str
     input_tokens: int
     output_tokens: int
     cached_tokens: int = 0
+    type: InferenceCallType | None = None  # Optional for backward compatibility
+
+
+class ImageInferenceCallData(BaseModel):
+    key: str
     model_name: str
+    image_count: int
+    type: InferenceCallType = InferenceCallType.image
+
+
+# Union type for the API endpoint
+InferenceCallData = TextInferenceCallData | ImageInferenceCallData
 
 
 class ApiKey(BaseModel):

@@ -365,7 +365,13 @@ class ApiKeyService:
 
     @staticmethod
     def register_inference_call(
-        key: str, credits_used: float, input_tokens: int, output_tokens: int, cached_tokens: int, model_name: str
+        key: str,
+        credits_used: float,
+        model_name: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        image_count: int = 0,
     ) -> bool:
         """
         Log usage of an API key and deduct credits from the user's balance.
@@ -379,6 +385,7 @@ class ApiKeyService:
             output_tokens: Number of output tokens generated
             cached_tokens: Number of output tokens cached
             model_name: Name of the model used
+            image_count: Number of images processed
 
         Returns:
             Boolean indicating if the operation was successful
@@ -398,10 +405,11 @@ class ApiKeyService:
                 usage = InferenceCall(
                     api_key_id=api_key.id,
                     credits_used=credits_used,
+                    model_name=model_name,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     cached_tokens=cached_tokens,
-                    model_name=model_name,
+                    image_count=image_count,
                 )
                 db.add(usage)
                 db.commit()

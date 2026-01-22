@@ -28,6 +28,7 @@ class InferenceCall(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    image_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     used_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     model_name: Mapped[str] = mapped_column(String, nullable=False)
 
@@ -37,13 +38,19 @@ class InferenceCall(Base):
     __table_args__ = (CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),)
 
     def __init__(
-            self, api_key_id: uuid.UUID, credits_used: float,
-            input_tokens: int, output_tokens: int, cached_tokens: int,
-            model_name: str
+            self,
+            api_key_id: uuid.UUID,
+            credits_used: float,
+            model_name: str,
+            input_tokens: int = 0,
+            output_tokens: int = 0,
+            cached_tokens: int = 0,
+            image_count: int = 0,
     ):
         self.api_key_id = api_key_id
         self.credits_used = credits_used
+        self.model_name = model_name
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cached_tokens = cached_tokens
-        self.model_name = model_name
+        self.image_count = image_count

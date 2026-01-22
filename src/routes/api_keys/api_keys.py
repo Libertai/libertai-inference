@@ -11,6 +11,7 @@ from src.interfaces.api_keys import (
     ApiKeyUpdate,
     ChatApiKeyResponse,
     FullApiKey,
+    ImageInferenceCallData,
     InferenceCallData,
 )
 from src.models.api_key import ApiKey as ApiKeyDB
@@ -174,21 +175,38 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                 )
             else:
                 # For API keys: calculate credits, log to inference_calls, and deduct credits
-                credits_used = await aleph_service.calculate_price(
-                    model_id=usage_log.model_name,
-                    input_tokens=usage_log.input_tokens,
-                    output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
-                )
-                logger.debug(f"Calculated {credits_used} credits for model {usage_log.model_name}")
+                # Determine if text or image based on type
+                if isinstance(usage_log, ImageInferenceCallData):
+                    # Image model
+                    credits_used = await aleph_service.calculate_price(
+                        model_id=usage_log.model_name,
+                        image_count=usage_log.image_count,
+                    )
+                    logger.debug(f"Calculated {credits_used} credits for image model {usage_log.model_name}")
 
-                success = ApiKeyService.register_inference_call(
-                    key=usage_log.key,
-                    credits_used=credits_used,
-                    input_tokens=usage_log.input_tokens,
-                    output_tokens=usage_log.output_tokens,
-                    cached_tokens=usage_log.cached_tokens,
-                    model_name=usage_log.model_name,
-                )
+                    success = ApiKeyService.register_inference_call(
+                        key=usage_log.key,
+                        credits_used=credits_used,
+                        model_name=usage_log.model_name,
+                        image_count=usage_log.image_count,
+                    )
+                else:
+                    # Text model (backward compatible)
+                    credits_used = await aleph_service.calculate_price(
+                        model_id=usage_log.model_name,
+                        input_tokens=usage_log.input_tokens,
+                        output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                    )
+                    logger.debug(f"Calculated {credits_used} credits for text model {usage_log.model_name}")
+
+                    success = ApiKeyService.register_inference_call(
+                        key=usage_log.key,
+                        credits_used=credits_used,
+                        model_name=usage_log.model_name,
+                        input_tokens=usage_log.input_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
+                    )
 
                 if not success:
                     raise HTTPException(
