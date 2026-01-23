@@ -62,7 +62,7 @@ class FullApiKey(ApiKey):
 
 
 class ApiKeyListResponse(BaseModel):
-    keys: list[ApiKey]
+    keys: list[FullApiKey]
 
 
 class ApiKeyAdminListResponse(BaseModel):

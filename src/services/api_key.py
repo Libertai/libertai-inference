@@ -152,7 +152,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def get_api_keys(address: str) -> list[ApiKey]:
+    def get_api_keys(address: str) -> list[FullApiKey]:
         """
         Get all API keys for a user with usage statistics.
 
@@ -176,8 +176,9 @@ class ApiKeyService:
                 result = []
                 for key in api_keys:
                     # Create a detached copy with all needed attributes
-                    detached_key = ApiKey(
+                    detached_key = FullApiKey(
                         key=key.masked_key,  # Masked key for display
+                        full_key=key.key,
                         name=key.name,
                         user_address=key.user_address,
                         monthly_limit=key.monthly_limit,
