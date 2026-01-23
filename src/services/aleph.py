@@ -34,16 +34,16 @@ class AlephService:
                     parsed_data = AlephAPIResponse.model_validate(data)
 
                     # Update cache
-                    self._models_data = parsed_data
-                    self._last_fetch_time = current_time
+                    self.__models_data = parsed_data
+                    self.__last_fetch_time = current_time
 
                     return parsed_data
         except Exception as e:
             logger.error(f"Error fetching Aleph models data: {str(e)}", exc_info=True)
             # If we have cached data, return it even if expired
-            if self._models_data is not None:
+            if self.__models_data is not None:
                 logger.warning("Using expired cached data due to fetch error")
-                return self._models_data
+                return self.__models_data
             # Re-raise if we have no cached data
             raise
 
