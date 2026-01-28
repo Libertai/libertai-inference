@@ -13,7 +13,6 @@ from src.interfaces.api_keys import (
     FullApiKey,
     ImageInferenceCallData,
     InferenceCallData,
-    TextInferenceCallData,
 )
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import SessionLocal
@@ -166,18 +165,24 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
             # Handle based on API key type
             if api_key.type == ApiKeyType.chat:
                 # For chat keys: log to chat_requests without deducting credits
-                # Chat only supports text
-                if not isinstance(usage_log, TextInferenceCallData):
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chat keys only support text")
-
                 logger.debug(f"Logging chat request for key {usage_log.key}")
-                ChatRequestService.add_chat_request(
-                    api_key_id=api_key.id,
-                    input_tokens=usage_log.input_tokens,
-                    output_tokens=usage_log.output_tokens,
-                    cached_tokens=usage_log.cached_tokens,
-                    model_name=usage_log.model_name,
-                )
+                if isinstance(usage_log, ImageInferenceCallData):
+                    ChatRequestService.add_chat_request(
+                        api_key_id=api_key.id,
+                        input_tokens=0,
+                        output_tokens=0,
+                        cached_tokens=0,
+                        model_name=usage_log.model_name,
+                        image_count=usage_log.image_count,
+                    )
+                else:
+                    ChatRequestService.add_chat_request(
+                        api_key_id=api_key.id,
+                        input_tokens=usage_log.input_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
+                        model_name=usage_log.model_name,
+                    )
             else:
                 # For API keys: calculate credits, log to inference_calls, and deduct credits
                 # Determine if text or image based on type

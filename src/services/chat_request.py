@@ -15,6 +15,7 @@ class ChatRequestService:
         output_tokens: int,
         cached_tokens: int,
         model_name: str,
+        image_count: int = 0,
     ) -> bool:
         """
         Record a chat request.
@@ -25,13 +26,14 @@ class ChatRequestService:
             output_tokens: Number of output tokens generated
             cached_tokens: Number of cached tokens used
             model_name: Name of the model used
+            image_count: Number of images generated
 
         Returns:
             Boolean indicating if the operation was successful
         """
         logger.debug(
             f"Recording chat request: model={model_name}, input_tokens={input_tokens}, "
-            f"output_tokens={output_tokens}, cached_tokens={cached_tokens}, api_key_id={api_key_id}"
+            f"output_tokens={output_tokens}, cached_tokens={cached_tokens}, image_count={image_count}, api_key_id={api_key_id}"
         )
 
         try:
@@ -42,6 +44,7 @@ class ChatRequestService:
                     output_tokens=output_tokens,
                     cached_tokens=cached_tokens,
                     model_name=model_name,
+                    image_count=image_count,
                 )
                 db.add(chat_request)
                 db.commit()

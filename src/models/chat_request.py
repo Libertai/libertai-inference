@@ -26,6 +26,7 @@ class ChatRequest(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    image_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     model_name: Mapped[str] = mapped_column(String, nullable=False)
 
@@ -38,9 +39,11 @@ class ChatRequest(Base):
         output_tokens: int,
         cached_tokens: int,
         model_name: str,
+        image_count: int = 0,
     ):
         self.api_key_id = api_key_id
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cached_tokens = cached_tokens
         self.model_name = model_name
+        self.image_count = image_count
