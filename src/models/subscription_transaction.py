@@ -26,11 +26,9 @@ class SubscriptionTransaction(Base):
         UUID, ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
     )
     amount: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[SubscriptionTransactionStatus] = mapped_column(
-        Enum(SubscriptionTransactionStatus), nullable=False
-    )
+    status: Mapped[SubscriptionTransactionStatus] = mapped_column(Enum(SubscriptionTransactionStatus), nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
-    
+
     # Optional notes about the transaction
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 

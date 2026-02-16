@@ -84,7 +84,7 @@ async def update_api_key(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {key_id} not found")
 
         # Verify the API key belongs to the authenticated user
-        if existing_api_key.user_address.lower() != current_address.lower():
+        if not existing_api_key.user_address or existing_api_key.user_address.lower() != current_address.lower():
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own API keys")
 
         # Now update the API key
@@ -126,7 +126,7 @@ async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_c
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key with ID {key_id} not found")
 
         # Verify the API key belongs to the authenticated user
-        if existing_api_key.user_address.lower() != current_address.lower():
+        if not existing_api_key.user_address or existing_api_key.user_address.lower() != current_address.lower():
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own API keys")
 
         # Now delete the API key
@@ -182,6 +182,37 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
                         model_name=usage_log.model_name,
+                    )
+            elif api_key.type == ApiKeyType.liberclaw:
+                # For liberclaw keys: log usage like API keys but skip credit deduction
+                if isinstance(usage_log, ImageInferenceCallData):
+                    credits_used = await aleph_service.calculate_price(
+                        model_id=usage_log.model_name,
+                        image_count=usage_log.image_count,
+                    )
+                    success = ApiKeyService.register_inference_call(
+                        key=usage_log.key,
+                        credits_used=credits_used,
+                        model_name=usage_log.model_name,
+                        image_count=usage_log.image_count,
+                    )
+                else:
+                    credits_used = await aleph_service.calculate_price(
+                        model_id=usage_log.model_name,
+                        input_tokens=usage_log.input_tokens,
+                        output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                    )
+                    success = ApiKeyService.register_inference_call(
+                        key=usage_log.key,
+                        credits_used=credits_used,
+                        model_name=usage_log.model_name,
+                        input_tokens=usage_log.input_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
+                    )
+                if not success:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
             else:
                 # For API keys: calculate credits, log to inference_calls, and deduct credits

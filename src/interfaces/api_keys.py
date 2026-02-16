@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class ApiKeyType(str, Enum):
     api = "api"
     chat = "chat"
+    liberclaw = "liberclaw"
 
 
 class InferenceCallType(str, Enum):
@@ -50,7 +51,7 @@ class ApiKey(BaseModel):
     id: uuid.UUID
     key: str  # Masked key for display
     name: str
-    user_address: str
+    user_address: str | None = None
     created_at: datetime
     is_active: bool
     monthly_limit: float | None = None

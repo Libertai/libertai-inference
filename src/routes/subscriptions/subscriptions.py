@@ -15,6 +15,7 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+
 @router.get("/{subscription_id}/transactions", description="Get subscription transactions")  # type: ignore
 async def get_subscription_transactions(
     subscription_id: str, user_address: str = Depends(get_current_address)

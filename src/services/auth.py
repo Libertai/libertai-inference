@@ -97,3 +97,20 @@ def verify_admin_token(x_admin_token: str = Header(...)) -> None:
         )
 
     # If we got here, the token is valid
+
+
+def verify_liberclaw_token(x_liberclaw_token: str = Header(...)) -> None:
+    """Verify the Liberclaw token from header."""
+    if not config.LIBERCLAW_SECRET:
+        logger.error("LIBERCLAW_SECRET not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Liberclaw authentication not configured",
+        )
+
+    if x_liberclaw_token != config.LIBERCLAW_SECRET:
+        logger.warning("Invalid Liberclaw token attempt")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Liberclaw credentials",
+        )

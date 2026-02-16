@@ -27,6 +27,7 @@ def get_token_price() -> float:
         logger.error(f"Failed to fetch token price: {str(e)}")
         raise
 
+
 def get_sol_token_price() -> float:
     """Get the current price of $SOL in USD from Coingecko"""
     try:

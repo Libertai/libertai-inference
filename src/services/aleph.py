@@ -9,7 +9,7 @@ logger = setup_logger(__name__)
 
 
 class AlephService:
-    __last_fetch_time = 0
+    __last_fetch_time: float = 0
     __cache_ttl = 300  # 5 minutes
     __models_data: AlephAPIResponse | None = None
     __api_url = (

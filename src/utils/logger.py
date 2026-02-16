@@ -35,7 +35,7 @@ def setup_logger(name: str, level: int | None = None) -> logging.Logger:
             log_dir = os.path.dirname(config.LOG_FILE)
             if log_dir and not os.path.exists(log_dir):
                 os.makedirs(log_dir)
-                
+
             file_handler = logging.FileHandler(config.LOG_FILE)
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)

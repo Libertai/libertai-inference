@@ -9,6 +9,7 @@ from sqlalchemy.sql.expression import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
 from src.models.base import Base, SessionLocal
+from src.models.liberclaw_user import LiberclawUser  # noqa: F401 - must be imported for FK resolution
 
 if TYPE_CHECKING:
     from src.models.user import User
@@ -22,11 +23,16 @@ class ApiKey(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    user_address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
+    user_address: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.address", ondelete="CASCADE"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
     type: Mapped[ApiKeyType] = mapped_column(Enum(ApiKeyType), nullable=False, default=ApiKeyType.api)
+    liberclaw_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, ForeignKey("liberclaw_users.id", ondelete="CASCADE"), nullable=True
+    )
 
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
     usages: Mapped[list["InferenceCall"]] = relationship(
@@ -35,6 +41,7 @@ class ApiKey(Base):
     chat_requests: Mapped[list["ChatRequest"]] = relationship(
         "ChatRequest", back_populates="api_key", cascade="all, delete-orphan"
     )
+    liberclaw_user: Mapped["LiberclawUser | None"] = relationship("LiberclawUser", back_populates="api_keys")
 
     __table_args__ = (UniqueConstraint("user_address", "name", name="unique_api_key_name_per_user"),)
 
@@ -42,15 +49,17 @@ class ApiKey(Base):
         self,
         key: str,
         name: str,
-        user_address: str,
+        user_address: str | None = None,
         monthly_limit: float | None = None,
         type: ApiKeyType = ApiKeyType.api,
+        liberclaw_user_id: uuid.UUID | None = None,
     ):
         self.key = key
         self.name = name
         self.user_address = user_address
         self.monthly_limit = monthly_limit
         self.type = type
+        self.liberclaw_user_id = liberclaw_user_id
 
     @property
     def masked_key(self) -> str:
@@ -98,6 +107,9 @@ class ApiKey(Base):
         This combines the monthly limit of the API key with the user's current balance
         to determine how many credits can actually be used.
         """
+        if not self.user_address:
+            return 0.0
+
         from src.services.credit import CreditService
 
         # Get user's current balance

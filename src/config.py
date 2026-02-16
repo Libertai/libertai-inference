@@ -26,6 +26,7 @@ class _Config:
     IS_DEVELOPMENT: bool
 
     ADMIN_SECRET: str
+    LIBERCLAW_SECRET: str
     VOUCHERS_PASSWORDS: list[str]
 
     ALEPH_API_URL: str | None
@@ -64,6 +65,7 @@ class _Config:
         self.IS_DEVELOPMENT = os.getenv("IS_DEVELOPMENT", "False").lower() == "true"
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+        self.LIBERCLAW_SECRET: str = os.getenv("LIBERCLAW_SECRET", "")
         self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
 
         self.ALEPH_API_URL = os.getenv("ALEPH_API_URL")

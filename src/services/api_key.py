@@ -1,5 +1,10 @@
 import uuid
 
+from datetime import datetime, timedelta
+
+from sqlalchemy.sql import func as sql_func
+
+from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import SessionLocal
@@ -348,13 +353,29 @@ class ApiKeyService:
                 # Filter keys with sufficient credits available
                 result = []
                 for key in api_keys:
-                    if key.type == ApiKeyType.api:
-                        # Check if the key has at least 0.02 credits available
+                    if key.type == ApiKeyType.liberclaw:
+                        # Check rolling window usage against tier limit
+                        if key.liberclaw_user_id is None:
+                            continue
+                        lc_user = key.liberclaw_user
+                        if lc_user is None:
+                            continue
+                        tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+                        cutoff = datetime.now() - timedelta(days=tier_config["rolling_window_days"])
+                        usage = float(
+                            db.query(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0))
+                            .filter(InferenceCall.api_key_id == key.id, InferenceCall.used_at >= cutoff)
+                            .scalar()
+                        )
+                        if usage >= tier_config["credits_limit"]:
+                            continue
+                    elif key.type == ApiKeyType.api:
+                        # Existing check: at least 0.02 credits available
                         effective_limit = key.effective_limit_remaining
                         if effective_limit < 0.02:
                             continue
 
-                    # Add the unmasked key to the result
+                    # chat keys and valid liberclaw/api keys pass through
                     result.append(key.key)
 
                 return result
@@ -414,12 +435,12 @@ class ApiKeyService:
                 db.add(usage)
                 db.commit()
 
-                # Deduct credits from user's balance
-                # This may result in a negative balance, but that's handled by the credit service
-                success = CreditService.use_credits(api_key.user_address, credits_used)
+                # Deduct credits from user's balance (skip for liberclaw keys — no wallet credits)
+                if api_key.type != ApiKeyType.liberclaw and api_key.user_address:
+                    success = CreditService.use_credits(api_key.user_address, credits_used)
 
-                if not success:
-                    logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
+                    if not success:
+                        logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
 
                 return True
 

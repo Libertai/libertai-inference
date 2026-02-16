@@ -38,14 +38,14 @@ class InferenceCall(Base):
     __table_args__ = (CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),)
 
     def __init__(
-            self,
-            api_key_id: uuid.UUID,
-            credits_used: float,
-            model_name: str,
-            input_tokens: int = 0,
-            output_tokens: int = 0,
-            cached_tokens: int = 0,
-            image_count: int = 0,
+        self,
+        api_key_id: uuid.UUID,
+        credits_used: float,
+        model_name: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        image_count: int = 0,
     ):
         self.api_key_id = api_key_id
         self.credits_used = credits_used

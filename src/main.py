@@ -7,6 +7,7 @@ from src.routes.api_keys import router as api_keys_router
 from src.routes.auth import router as auth_router
 from src.routes.chat import router as chat_router
 from src.routes.credits import router as credits_router
+from src.routes.liberclaw import router as liberclaw_router
 from src.routes.stats import router as stats_router
 from src.routes.subscriptions import router as subscriptions_router
 from src.utils.cron import lifespan
@@ -41,3 +42,4 @@ app.include_router(subscriptions_router)
 app.include_router(agents_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
+app.include_router(liberclaw_router)

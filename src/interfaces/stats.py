@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class TokenStats(BaseModel):
     """Stats about token usage for the current month."""
 
@@ -46,34 +47,43 @@ class UsageStats(BaseModel):
     usage_by_model: list[UsageByEntity]
     usage_by_api_key: list[UsageByEntity]
 
+
 class CreditsUsage(BaseModel):
     credits_used: float
     used_at: str
     model_name: str
 
+
 class GlobalCreditsStats(BaseModel):
     """Credit usage statistics for a date range."""
+
     total_credits_used: float
     credits_usage: list[CreditsUsage]
+
 
 class AgentUsage(BaseModel):
     name: str
     created_at: str
 
+
 class GlobalAgentStats(BaseModel):
     """Agent usage statistics for a date range."""
+
     total_agents_created: int
     total_vouchers: int
     total_subscriptions: int
     agents: list[AgentUsage]
+
 
 class ModelApiUsage(BaseModel):
     model_name: str
     used_at: str
     call_count: int
 
+
 class GlobalApiStats(BaseModel):
     """Api usage statistics for a date range."""
+
     total_calls: int
     api_usage: list[ModelApiUsage]
 
@@ -84,20 +94,25 @@ class Call(BaseModel):
     nb_output_tokens: int
     model_name: str
 
+
 class GlobalTokensStats(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     calls: list[Call]
+
 
 class ChatCallUsage(BaseModel):
     model_name: str
     used_at: str
     call_count: int
 
+
 class GlobalChatCallsStats(BaseModel):
     """Chat API calls statistics for a date range."""
+
     total_calls: int
     chat_usage: list[ChatCallUsage]
+
 
 class ChatTokenUsage(BaseModel):
     date: str
@@ -106,8 +121,10 @@ class ChatTokenUsage(BaseModel):
     nb_cached_tokens: int
     model_name: str
 
+
 class GlobalChatTokensStats(BaseModel):
     """Chat token usage statistics for a date range."""
+
     total_input_tokens: int
     total_output_tokens: int
     total_cached_tokens: int
