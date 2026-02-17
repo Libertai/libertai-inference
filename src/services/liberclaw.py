@@ -41,7 +41,7 @@ class LiberclawService:
             )
 
             if existing_key:
-                return LiberclawApiKeyResponse(key=existing_key.masked_key, is_new=False)
+                return LiberclawApiKeyResponse(key=existing_key.key, is_new=False)
 
             key = ApiKeyDB.generate_key()
             api_key = ApiKeyDB(
