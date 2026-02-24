@@ -15,9 +15,9 @@ class TextPricing(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     name: str
-    hf_id: str
-    capabilities: dict[str, TextCapability | bool]  # bool for image capability
-    pricing: dict[str, TextPricing | float]  # float for image pricing
+    hf_id: str | None = None
+    capabilities: dict[str, TextCapability | bool]  # bool for image/search capability
+    pricing: dict[str, TextPricing | float]  # float for image/search pricing
 
 
 class ModelsResponse(BaseModel):

@@ -108,6 +108,16 @@ class AlephService:
                 raise ValueError(f"Invalid image pricing format for model: {model_id}")
             total_price = image_count * pricing
 
+        # Search model pricing (input_tokens represents number of search requests)
+        elif "search" in model.pricing:
+            if image_count > 0:
+                raise ValueError(f"Search model {model_id} cannot process images")
+
+            pricing = model.pricing["search"]
+            if not isinstance(pricing, (int, float)):
+                raise ValueError(f"Invalid search pricing format for model: {model_id}")
+            total_price = input_tokens * pricing
+
         else:
             raise ValueError(f"Pricing information unavailable for model: {model_id}")
 
