@@ -129,3 +129,11 @@ class GlobalChatTokensStats(BaseModel):
     total_output_tokens: int
     total_cached_tokens: int
     token_usage: list[ChatTokenUsage]
+
+
+class GlobalSummaryStats(BaseModel):
+    """Global summary statistics across all key types."""
+
+    total_requests: int
+    total_input_tokens: int
+    total_output_tokens: int

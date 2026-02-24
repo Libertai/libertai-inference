@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date
 
+from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import (
     DashboardStats,
     TokenStats,
@@ -21,6 +22,7 @@ from src.interfaces.stats import (
     ChatCallUsage,
     GlobalChatTokensStats,
     ChatTokenUsage,
+    GlobalSummaryStats,
 )
 from src.models.api_key import ApiKey
 from src.models.base import SessionLocal
@@ -603,4 +605,265 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving chat token stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_liberclaw_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
+        """
+        Get liberclaw API call statistics for a specific date range, grouped by day and model.
+        Filters InferenceCall by joining with ApiKey where type='liberclaw'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_calls = (
+                    db.query(func.count(InferenceCall.id))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                )
+
+                model_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("name"),
+                        func.count(InferenceCall.id).label("count"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                api_usage = [
+                    ModelApiUsage(
+                        model_name=stat.name,
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        call_count=stat.count,  # type: ignore
+                    )
+                    for stat in model_stats
+                ]
+
+                return GlobalApiStats(total_calls=total_calls, api_usage=api_usage)
+        except Exception as e:
+            logger.error(f"Error retrieving liberclaw calls stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_liberclaw_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+        """
+        Get liberclaw token usage statistics for a specific date range, grouped by day and model.
+        Filters InferenceCall by joining with ApiKey where type='liberclaw'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_input_tokens: int = (
+                    db.query(func.sum(InferenceCall.input_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                total_output_tokens: int = (
+                    db.query(func.sum(InferenceCall.output_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                inference_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                calls = [
+                    Call(
+                        date=stat.date.strftime("%Y-%m-%d"),
+                        nb_input_tokens=stat.input_tokens or 0,
+                        nb_output_tokens=stat.output_tokens or 0,
+                        model_name=stat.model_name,
+                    )
+                    for stat in inference_stats
+                ]
+
+                return GlobalTokensStats(
+                    total_input_tokens=total_input_tokens, total_output_tokens=total_output_tokens, calls=calls
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving liberclaw token stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_liberclaw_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+        """
+        Get liberclaw credit usage statistics for a specific date range, grouped by day.
+        Filters InferenceCall by joining with ApiKey where type='liberclaw'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_credits_used: float = (
+                    db.query(func.sum(InferenceCall.credits_used))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                model_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.credits_used).label("credits"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.liberclaw,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                credits_usage = [
+                    CreditsUsage(
+                        credits_used=float(stat.credits or 0),
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        model_name=stat.model_name,
+                    )
+                    for stat in model_stats
+                ]
+
+                return GlobalCreditsStats(total_credits_used=float(total_credits_used), credits_usage=credits_usage)
+        except Exception as e:
+            logger.error(f"Error retrieving liberclaw credits stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_summary_stats(start_date: date, end_date: date) -> GlobalSummaryStats:
+        """
+        Get global summary statistics across all key types for a specific date range.
+        Queries both InferenceCall and ChatRequest tables.
+
+        Args:
+            start_date: Start date for the statistics period (inclusive)
+            end_date: End date for the statistics period (inclusive)
+
+        Returns:
+            GlobalSummaryStats with total requests, input tokens, and output tokens
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                # InferenceCall counts
+                inference_count: int = (
+                    db.query(func.count(InferenceCall.id))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                inference_input_tokens: int = (
+                    db.query(func.sum(InferenceCall.input_tokens))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                inference_output_tokens: int = (
+                    db.query(func.sum(InferenceCall.output_tokens))
+                    .filter(
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                # ChatRequest counts
+                chat_count: int = (
+                    db.query(func.count(ChatRequest.id))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                chat_input_tokens: int = (
+                    db.query(func.sum(ChatRequest.input_tokens))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                chat_output_tokens: int = (
+                    db.query(func.sum(ChatRequest.output_tokens))
+                    .filter(
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                return GlobalSummaryStats(
+                    total_requests=inference_count + chat_count,
+                    total_input_tokens=inference_input_tokens + chat_input_tokens,
+                    total_output_tokens=inference_output_tokens + chat_output_tokens,
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving global summary stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
