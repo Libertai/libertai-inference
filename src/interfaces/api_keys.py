@@ -9,6 +9,7 @@ class ApiKeyType(str, Enum):
     api = "api"
     chat = "chat"
     liberclaw = "liberclaw"
+    x402 = "x402"
 
 
 class InferenceCallType(str, Enum):
@@ -34,6 +35,8 @@ class TextInferenceCallData(BaseModel):
     output_tokens: int
     cached_tokens: int = 0
     type: InferenceCallType | None = None  # Optional for backward compatibility
+    payment_amount: float | None = None
+    payer_address: str | None = None
 
 
 class ImageInferenceCallData(BaseModel):
@@ -41,6 +44,8 @@ class ImageInferenceCallData(BaseModel):
     model_name: str
     image_count: int
     type: InferenceCallType = InferenceCallType.image
+    payment_amount: float | None = None
+    payer_address: str | None = None
 
 
 # Union type for the API endpoint
