@@ -4,13 +4,14 @@ from src.models.user import User
 from src.models.x402_balance import X402Balance
 from src.services.aleph import aleph_service
 from src.utils.logger import setup_logger
+from sqlalchemy.orm import Session
 
 logger = setup_logger(__name__)
 
 
 class X402Service:
     @staticmethod
-    def update_balance(db, payer_address: str, payment_amount: float, actual_cost: float):
+    def update_balance(db: Session, payer_address: str, payment_amount: float, actual_cost: float):
         """Upsert x402 balance for a payer address."""
         # Get or create user
         user = db.query(User).filter(User.address == payer_address).first()
