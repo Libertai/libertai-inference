@@ -7,10 +7,5 @@ router = APIRouter(prefix="/x402", tags=["x402"])
 
 
 @router.get("/prices", dependencies=[Depends(verify_admin_token)])
-async def get_x402_prices() -> dict[str, float]:
+async def get_x402_prices() -> dict[str, dict]:
     return await x402_service.get_current_prices()
-
-
-@router.get("/balances", dependencies=[Depends(verify_admin_token)])
-def get_x402_balances() -> list[dict]:
-    return x402_service.get_balances()

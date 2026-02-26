@@ -35,8 +35,8 @@ class TextInferenceCallData(BaseModel):
     output_tokens: int
     cached_tokens: int = 0
     type: InferenceCallType | None = None  # Optional for backward compatibility
-    payment_amount: float | None = None
-    payer_address: str | None = None
+    payment_payload: str | None = None
+    payment_requirements: str | None = None
 
 
 class ImageInferenceCallData(BaseModel):
@@ -44,8 +44,8 @@ class ImageInferenceCallData(BaseModel):
     model_name: str
     image_count: int
     type: InferenceCallType = InferenceCallType.image
-    payment_amount: float | None = None
-    payer_address: str | None = None
+    payment_payload: str | None = None
+    payment_requirements: str | None = None
 
 
 # Union type for the API endpoint

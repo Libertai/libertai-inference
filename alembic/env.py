@@ -18,7 +18,6 @@ from src.models.liberclaw_user import LiberclawUser  # noqa
 from src.models.subscription import Subscription  # noqa
 from src.models.subscription_transaction import SubscriptionTransaction  # noqa
 from src.models.user import User  # noqa
-from src.models.x402_balance import X402Balance  # noqa
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -216,7 +216,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
             elif api_key.type == ApiKeyType.x402:
-                # For x402 keys: calculate actual cost, update x402 balance, log to inference_calls
+                # For x402: calculate actual cost, settle via thirdweb, log usage
                 if isinstance(usage_log, ImageInferenceCallData):
                     actual_cost = await aleph_service.calculate_price(
                         model_id=usage_log.model_name,
@@ -243,11 +243,12 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         cached_tokens=usage_log.cached_tokens,
                     )
 
-                # Update x402 balance (don't deduct credits)
-                payment_amount = usage_log.payment_amount or 0.0
-                payer_address = usage_log.payer_address
-                if payer_address:
-                    x402_service.update_balance(db, payer_address, payment_amount, actual_cost)
+                # Settle payment via thirdweb
+                if usage_log.payment_payload and usage_log.payment_requirements:
+                    await x402_service.settle_payment(
+                        usage_log.payment_payload,
+                        usage_log.payment_requirements,
+                    )
 
             else:
                 # For API keys: calculate credits, log to inference_calls, and deduct credits
