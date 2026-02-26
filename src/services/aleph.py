@@ -11,7 +11,7 @@ logger = setup_logger(__name__)
 class AlephService:
     __last_fetch_time: float = 0
     __cache_ttl = 300  # 5 minutes
-    __models_data: AlephAPIResponse | None = None
+    models_data: AlephAPIResponse | None = None
     __api_url = (
         "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=LTAI_PRICING"
     )
@@ -21,9 +21,9 @@ class AlephService:
         current_time = time.time()
 
         # Return cached data if it's still valid
-        if self.__models_data is not None and (current_time - self.__last_fetch_time) < self.__cache_ttl:
+        if self.models_data is not None and (current_time - self.__last_fetch_time) < self.__cache_ttl:
             logger.debug("Using cached Aleph models data")
-            return self.__models_data
+            return self.models_data
 
         logger.debug("Fetching fresh Aleph models data")
         try:
@@ -34,16 +34,16 @@ class AlephService:
                     parsed_data = AlephAPIResponse.model_validate(data)
 
                     # Update cache
-                    self.__models_data = parsed_data
+                    self.models_data = parsed_data
                     self.__last_fetch_time = current_time
 
                     return parsed_data
         except Exception as e:
             logger.error(f"Error fetching Aleph models data: {str(e)}", exc_info=True)
             # If we have cached data, return it even if expired
-            if self.__models_data is not None:
+            if self.models_data is not None:
                 logger.warning("Using expired cached data due to fetch error")
-                return self.__models_data
+                return self.models_data
             # Re-raise if we have no cached data
             raise
 

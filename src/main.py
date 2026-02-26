@@ -10,6 +10,7 @@ from src.routes.credits import router as credits_router
 from src.routes.liberclaw import router as liberclaw_router
 from src.routes.stats import router as stats_router
 from src.routes.subscriptions import router as subscriptions_router
+from src.routes.x402 import router as x402_router
 from src.utils.cron import lifespan
 
 app = FastAPI(title="LibertAI inference", lifespan=lifespan)
@@ -43,3 +44,4 @@ app.include_router(agents_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
 app.include_router(liberclaw_router)
+app.include_router(x402_router)

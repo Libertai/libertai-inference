@@ -40,6 +40,8 @@ class _Config:
     LIBERTAI_CHAT_API_KEY: str
     LIBERTAI_CHAT_API_BASE_URL: str
 
+    THIRDWEB_SECRET_KEY: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
@@ -78,6 +80,7 @@ class _Config:
 
         self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
+        self.THIRDWEB_SECRET_KEY = os.getenv("THIRDWEB_SECRET_KEY", "")
 
 
 config = _Config()
