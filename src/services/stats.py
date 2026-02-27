@@ -293,6 +293,7 @@ class StatsService:
     def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         """
         Get model credits usage for a specific date range, grouped by day.
+        Only includes requests made with API-type keys.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
@@ -308,7 +309,9 @@ class StatsService:
 
                 total_credits_used: float = (
                     db.query(func.sum(InferenceCall.credits_used))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -323,7 +326,9 @@ class StatsService:
                         InferenceCall.model_name.label("model_name"),
                         func.sum(InferenceCall.credits_used).label("credits"),
                     )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -350,6 +355,7 @@ class StatsService:
     def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
         """
         Get model api usage for a specific date range, grouped by day.
+        Only includes requests made with API-type keys.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
@@ -365,7 +371,9 @@ class StatsService:
 
                 total_calls = (
                     db.query(func.count(InferenceCall.id))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -379,7 +387,9 @@ class StatsService:
                         InferenceCall.model_name.label("name"),
                         func.count(InferenceCall.id).label("count"),
                     )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -407,6 +417,7 @@ class StatsService:
     def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
         """
         Get token usage statistics for a specific date range, grouped by day and model.
+        Only includes requests made with API-type keys.
 
         Args:
             start_date: Start date for the statistics period (inclusive)
@@ -422,7 +433,9 @@ class StatsService:
 
                 total_input_tokens: int = (
                     db.query(func.sum(InferenceCall.input_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -431,7 +444,9 @@ class StatsService:
                 )
                 total_output_tokens: int = (
                     db.query(func.sum(InferenceCall.output_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .filter(
+                        ApiKey.type == ApiKeyType.api,
                         InferenceCall.used_at >= start_datetime,
                         InferenceCall.used_at <= end_datetime,
                     )
@@ -447,7 +462,12 @@ class StatsService:
                         func.sum(InferenceCall.input_tokens).label("input_tokens"),
                         func.sum(InferenceCall.output_tokens).label("output_tokens"),
                     )
-                    .filter(InferenceCall.used_at >= start_datetime, InferenceCall.used_at <= end_datetime)
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.api,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
                     .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
                     .order_by(cast(InferenceCall.used_at, Date))
                     .all()
@@ -781,6 +801,182 @@ class StatsService:
                 return GlobalCreditsStats(total_credits_used=float(total_credits_used), credits_usage=credits_usage)
         except Exception as e:
             logger.error(f"Error retrieving liberclaw credits stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_x402_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
+        """
+        Get x402 API call statistics for a specific date range, grouped by day and model.
+        Filters InferenceCall by joining with ApiKey where type='x402'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_calls = (
+                    db.query(func.count(InferenceCall.id))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                )
+
+                model_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("name"),
+                        func.count(InferenceCall.id).label("count"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                api_usage = [
+                    ModelApiUsage(
+                        model_name=stat.name,
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        call_count=stat.count,  # type: ignore
+                    )
+                    for stat in model_stats
+                ]
+
+                return GlobalApiStats(total_calls=total_calls, api_usage=api_usage)
+        except Exception as e:
+            logger.error(f"Error retrieving x402 calls stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_x402_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+        """
+        Get x402 token usage statistics for a specific date range, grouped by day and model.
+        Filters InferenceCall by joining with ApiKey where type='x402'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_input_tokens: int = (
+                    db.query(func.sum(InferenceCall.input_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+                total_output_tokens: int = (
+                    db.query(func.sum(InferenceCall.output_tokens))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                inference_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                calls = [
+                    Call(
+                        date=stat.date.strftime("%Y-%m-%d"),
+                        nb_input_tokens=stat.input_tokens or 0,
+                        nb_output_tokens=stat.output_tokens or 0,
+                        model_name=stat.model_name,
+                    )
+                    for stat in inference_stats
+                ]
+
+                return GlobalTokensStats(
+                    total_input_tokens=total_input_tokens, total_output_tokens=total_output_tokens, calls=calls
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving x402 token stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def get_global_x402_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+        """
+        Get x402 credit usage statistics for a specific date range, grouped by day.
+        Filters InferenceCall by joining with ApiKey where type='x402'.
+        """
+        try:
+            with SessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                total_credits_used: float = (
+                    db.query(func.sum(InferenceCall.credits_used))
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .scalar()
+                    or 0
+                )
+
+                model_stats = (
+                    db.query(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.credits_used).label("credits"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .filter(
+                        ApiKey.type == ApiKeyType.x402,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
+                    .all()
+                )
+
+                credits_usage = [
+                    CreditsUsage(
+                        credits_used=float(stat.credits or 0),
+                        used_at=stat.date.strftime("%Y-%m-%d"),
+                        model_name=stat.model_name,
+                    )
+                    for stat in model_stats
+                ]
+
+                return GlobalCreditsStats(total_credits_used=float(total_credits_used), credits_usage=credits_usage)
+        except Exception as e:
+            logger.error(f"Error retrieving x402 credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod

@@ -197,6 +197,42 @@ async def get_liberclaw_credits_stats(
         raise
 
 
+@router.get("/global/x402/calls", response_model=GlobalApiStats)  # type: ignore
+async def get_x402_calls_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalApiStats:
+    try:
+        return StatsService.get_global_x402_calls_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in x402 calls stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/x402/tokens", response_model=GlobalTokensStats)  # type: ignore
+async def get_x402_tokens_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalTokensStats:
+    try:
+        return StatsService.get_global_x402_tokens_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in x402 tokens stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/x402/credits", response_model=GlobalCreditsStats)  # type: ignore
+async def get_x402_credits_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalCreditsStats:
+    try:
+        return StatsService.get_global_x402_credits_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in x402 credits stats route: {str(e)}", exc_info=True)
+        raise
+
+
 @router.get("/global/summary", response_model=GlobalSummaryStats)  # type: ignore
 async def get_global_summary(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
