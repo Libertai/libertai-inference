@@ -16,7 +16,7 @@ class AlephService:
         "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=LTAI_PRICING"
     )
 
-    async def __fetch_models_data(self) -> AlephAPIResponse:
+    async def fetch_models_data(self) -> AlephAPIResponse:
         """Fetch models data from Aleph API"""
         current_time = time.time()
 
@@ -49,7 +49,7 @@ class AlephService:
 
     async def get_model_info(self, model_id: str) -> ModelInfo | None:
         """Get information for a specific model by ID"""
-        data = await self.__fetch_models_data()
+        data = await self.fetch_models_data()
 
         # Navigate through the updated structure
         models_response = data.data.get("LTAI_PRICING", None)

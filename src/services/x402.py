@@ -1,3 +1,5 @@
+import json
+
 import aiohttp
 
 from src.config import config
@@ -51,18 +53,30 @@ class X402Service:
     async def settle_payment(payment_payload: str, payment_requirements: str) -> bool:
         """Settle x402 payment via thirdweb facilitator. Returns True on success."""
         try:
+            parsed_payload = json.loads(payment_payload) if isinstance(payment_payload, str) else payment_payload
+            parsed_requirements = (
+                json.loads(payment_requirements) if isinstance(payment_requirements, str) else payment_requirements
+            )
+
+            x402_version = parsed_payload.get("x402Version", 2)
+
+            headers = {
+                "Content-Type": "application/json",
+                "x-secret-key": config.THIRDWEB_SECRET_KEY,
+            }
+            if config.THIRDWEB_VAULT_ACCESS_TOKEN:
+                headers["x-vault-access-token"] = config.THIRDWEB_VAULT_ACCESS_TOKEN
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{THIRDWEB_X402_BASE}/settle",
                     json={
-                        "paymentPayload": payment_payload,
-                        "paymentRequirements": payment_requirements,
+                        "x402Version": x402_version,
+                        "paymentPayload": parsed_payload,
+                        "paymentRequirements": parsed_requirements,
                         "waitUntil": "confirmed",
                     },
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-secret-key": config.THIRDWEB_SECRET_KEY,
-                    },
+                    headers=headers,
                 ) as response:
                     if response.status == 200:
                         logger.info("x402 payment settled successfully")

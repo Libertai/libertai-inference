@@ -41,6 +41,7 @@ class _Config:
     LIBERTAI_CHAT_API_BASE_URL: str
 
     THIRDWEB_SECRET_KEY: str
+    THIRDWEB_VAULT_ACCESS_TOKEN: str
 
     def __init__(self):
         load_dotenv()
@@ -81,6 +82,7 @@ class _Config:
         self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
         self.THIRDWEB_SECRET_KEY = os.getenv("THIRDWEB_SECRET_KEY", "")
+        self.THIRDWEB_VAULT_ACCESS_TOKEN = os.getenv("THIRDWEB_VAULT_ACCESS_TOKEN", "")
 
 
 config = _Config()

@@ -435,8 +435,8 @@ class ApiKeyService:
                 db.add(usage)
                 db.commit()
 
-                # Deduct credits from user's balance (skip for liberclaw keys — no wallet credits)
-                if api_key.type != ApiKeyType.liberclaw and api_key.user_address:
+                # Deduct credits from user's balance (skip for liberclaw and x402 keys)
+                if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_address:
                     success = CreditService.use_credits(api_key.user_address, credits_used)
 
                     if not success:
