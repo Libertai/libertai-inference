@@ -50,8 +50,12 @@ class X402Service:
         return prices
 
     @staticmethod
-    async def settle_payment(payment_payload: str, payment_requirements: str) -> bool:
-        """Settle x402 payment via thirdweb facilitator. Returns True on success."""
+    async def settle_payment(payment_payload: str, payment_requirements: str, actual_amount: float) -> bool:
+        """Settle x402 payment via thirdweb facilitator.
+
+        For upto scheme, overrides maxAmountRequired in paymentRequirements with
+        the actual usage cost so thirdweb only settles what was consumed.
+        """
         try:
             parsed_payload = json.loads(payment_payload) if isinstance(payment_payload, str) else payment_payload
             parsed_requirements = (
@@ -59,6 +63,10 @@ class X402Service:
             )
 
             x402_version = parsed_payload.get("x402Version", 2)
+
+            # Override maxAmountRequired with actual cost (USD → micro-USDC)
+            actual_amount_micro = str(int(actual_amount * 1_000_000))
+            parsed_requirements["maxAmountRequired"] = actual_amount_micro
 
             headers = {
                 "Content-Type": "application/json",
@@ -79,7 +87,7 @@ class X402Service:
                     headers=headers,
                 ) as response:
                     if response.status == 200:
-                        logger.info("x402 payment settled successfully")
+                        logger.info(f"x402 payment settled (actual: {actual_amount_micro} micro-USDC)")
                         return True
                     else:
                         error_text = await response.text()

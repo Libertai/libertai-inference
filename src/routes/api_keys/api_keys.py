@@ -243,11 +243,12 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         cached_tokens=usage_log.cached_tokens,
                     )
 
-                # Settle payment via thirdweb
+                # Settle payment via thirdweb with actual cost (upto scheme)
                 if usage_log.payment_payload and usage_log.payment_requirements:
                     await x402_service.settle_payment(
                         usage_log.payment_payload,
                         usage_log.payment_requirements,
+                        actual_cost,
                     )
 
             else:
