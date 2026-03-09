@@ -31,6 +31,7 @@ class ModelRedirection(BaseModel):
     from_id: str
     to: str
     type: RedirectionType
+    category: str  # "text", "image", "search"
     description: str | None = None
 
     @model_validator(mode="before")
