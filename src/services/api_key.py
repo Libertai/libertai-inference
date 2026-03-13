@@ -2,12 +2,14 @@ import uuid
 
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
 from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.models.user import User
 from src.services.credit import CreditService
@@ -18,7 +20,7 @@ logger = setup_logger(__name__)
 
 class ApiKeyService:
     @staticmethod
-    def create_api_key(
+    async def create_api_key(
         address: str, name: str, monthly_limit: float | None = None, key_type: ApiKeyType = ApiKeyType.api
     ) -> FullApiKey:
         """
@@ -37,21 +39,23 @@ class ApiKeyService:
         logger.debug(f"Creating API key '{name}' for address {address}")
 
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 # Get or create user
-                user = db.query(User).filter(User.address == address).first()
+                user = (await db.execute(select(User).where(User.address == address))).scalars().first()
                 if not user:
                     user = User(address=address)
                     db.add(user)
-                    db.flush()
+                    await db.flush()
 
                 # Check if name already exists for this user
                 existing_key = (
-                    db.query(ApiKeyDB).filter(ApiKeyDB.user_address == address, ApiKeyDB.name == name).first()
+                    (await db.execute(select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.name == name)))
+                    .scalars()
+                    .first()
                 )
 
                 if existing_key:
-                    db.rollback()
+                    await db.rollback()
                     raise ValueError(f"API key with name '{name}' already exists")
 
                 # Create new API key
@@ -64,7 +68,7 @@ class ApiKeyService:
                     type=key_type,
                 )
                 db.add(api_key)
-                db.commit()
+                await db.commit()
 
                 # Create a clean detached copy of the object with all required attributes
                 # For newly created keys, we DO want to return the full key
@@ -86,7 +90,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def get_or_create_chat_api_key(address: str) -> FullApiKey:
+    async def get_or_create_chat_api_key(address: str) -> FullApiKey:
         """
         Get the chat API key for a user, or create one if it doesn't exist.
 
@@ -99,18 +103,22 @@ class ApiKeyService:
         logger.debug(f"Getting or creating chat API key for address {address}")
 
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 # Get or create user
-                user = db.query(User).filter(User.address == address).first()
+                user = (await db.execute(select(User).where(User.address == address))).scalars().first()
                 if not user:
                     user = User(address=address)
                     db.add(user)
-                    db.flush()
+                    await db.flush()
 
                 # Check if chat API key already exists
                 existing_key = (
-                    db.query(ApiKeyDB)
-                    .filter(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.chat)
+                    (
+                        await db.execute(
+                            select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.chat)
+                        )
+                    )
+                    .scalars()
                     .first()
                 )
 
@@ -138,7 +146,7 @@ class ApiKeyService:
                     type=ApiKeyType.chat,
                 )
                 db.add(api_key)
-                db.commit()
+                await db.commit()
 
                 return FullApiKey(
                     id=api_key.id,
@@ -157,7 +165,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def get_api_keys(address: str) -> list[FullApiKey]:
+    async def get_api_keys(address: str) -> list[FullApiKey]:
         """
         Get all API keys for a user with usage statistics.
 
@@ -171,10 +179,16 @@ class ApiKeyService:
         logger.debug(f"Getting API keys for address {address}")
 
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 # Get all API keys for the user
                 api_keys = (
-                    db.query(ApiKeyDB).filter(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.api).all()
+                    (
+                        await db.execute(
+                            select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.api)
+                        )
+                    )
+                    .scalars()
+                    .all()
                 )
 
                 # Create fully detached copies
@@ -201,7 +215,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def get_api_key_by_id(key_id: uuid.UUID) -> ApiKey | None:
+    async def get_api_key_by_id(key_id: uuid.UUID) -> ApiKey | None:
         """
         Get a specific API key by ID.
 
@@ -215,8 +229,8 @@ class ApiKeyService:
         logger.debug(f"Getting API key with ID {key_id}")
 
         try:
-            with SessionLocal() as db:
-                api_key = db.query(ApiKeyDB).filter(ApiKeyDB.id == key_id).first()
+            async with AsyncSessionLocal() as db:
+                api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.id == key_id))).scalars().first()
 
                 if not api_key:
                     return None
@@ -237,7 +251,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def update_api_key(
+    async def update_api_key(
         key_id: uuid.UUID,
         name: str | None = None,
         is_active: bool | None = None,
@@ -259,8 +273,8 @@ class ApiKeyService:
         logger.debug(f"Updating API key {key_id}")
 
         try:
-            with SessionLocal() as db:
-                api_key = db.query(ApiKeyDB).filter(ApiKeyDB.id == key_id).first()
+            async with AsyncSessionLocal() as db:
+                api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.id == key_id))).scalars().first()
 
                 if not api_key:
                     logger.warning(f"API key {key_id} not found for update")
@@ -270,16 +284,22 @@ class ApiKeyService:
                 if name is not None:
                     # Check if name already exists for this user
                     existing_key = (
-                        db.query(ApiKeyDB)
-                        .filter(
-                            ApiKeyDB.user_address == api_key.user_address, ApiKeyDB.name == name, ApiKeyDB.id != key_id
+                        (
+                            await db.execute(
+                                select(ApiKeyDB).where(
+                                    ApiKeyDB.user_address == api_key.user_address,
+                                    ApiKeyDB.name == name,
+                                    ApiKeyDB.id != key_id,
+                                )
+                            )
                         )
+                        .scalars()
                         .first()
                     )
 
                     if existing_key:
                         logger.warning(f"API key with name '{name}' already exists for address {api_key.user_address}")
-                        db.rollback()
+                        await db.rollback()
                         return None
 
                     api_key.name = name
@@ -290,7 +310,7 @@ class ApiKeyService:
                 if monthly_limit is not None:
                     api_key.monthly_limit = monthly_limit
 
-                db.commit()
+                await db.commit()
 
                 return ApiKey(
                     key=api_key.masked_key,  # Masked key for display
@@ -308,7 +328,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def delete_api_key(key_id: uuid.UUID) -> bool:
+    async def delete_api_key(key_id: uuid.UUID) -> bool:
         """
         Delete an API key.
 
@@ -321,15 +341,15 @@ class ApiKeyService:
         logger.debug(f"Deleting API key {key_id}")
 
         try:
-            with SessionLocal() as db:
-                api_key = db.query(ApiKeyDB).filter(ApiKeyDB.id == key_id).first()
+            async with AsyncSessionLocal() as db:
+                api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.id == key_id))).scalars().first()
 
                 if not api_key:
                     logger.warning(f"API key {key_id} not found for deletion")
                     return False
 
-                db.delete(api_key)
-                db.commit()
+                await db.delete(api_key)
+                await db.commit()
                 return True
 
         except Exception as e:
@@ -337,7 +357,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def get_admin_all_api_keys() -> list[str]:
+    async def get_admin_all_api_keys() -> list[str]:
         """
         Get all API keys across all addresses that have at least 0.02 credits available.
         This method is intended for admin use only.
@@ -347,8 +367,16 @@ class ApiKeyService:
         """
 
         try:
-            with SessionLocal() as db:
-                api_keys = db.query(ApiKeyDB).where(ApiKeyDB.is_active).all()
+            async with AsyncSessionLocal() as db:
+                api_keys = (
+                    (
+                        await db.execute(
+                            select(ApiKeyDB).where(ApiKeyDB.is_active).options(selectinload(ApiKeyDB.liberclaw_user))
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
 
                 # Filter keys with sufficient credits available
                 result = []
@@ -363,15 +391,20 @@ class ApiKeyService:
                         tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
                         cutoff = datetime.now() - timedelta(days=tier_config["rolling_window_days"])
                         usage = float(
-                            db.query(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0))
-                            .filter(InferenceCall.api_key_id == key.id, InferenceCall.used_at >= cutoff)
-                            .scalar()
+                            (
+                                await db.execute(
+                                    select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
+                                        InferenceCall.api_key_id == key.id, InferenceCall.used_at >= cutoff
+                                    )
+                                )
+                            ).scalar()
+                            or 0.0
                         )
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type == ApiKeyType.api:
                         # Existing check: at least 0.02 credits available
-                        effective_limit = key.effective_limit_remaining
+                        effective_limit = await key.get_effective_limit_remaining()
                         if effective_limit < 0.02:
                             continue
 
@@ -385,7 +418,7 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    def register_inference_call(
+    async def register_inference_call(
         key: str,
         credits_used: float,
         model_name: str,
@@ -414,9 +447,9 @@ class ApiKeyService:
         logger.debug(f"Logging usage of {credits_used} credits for API key {key}")
 
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 # Check if API key exists (even if inactive, we still want to log)
-                api_key = db.query(ApiKeyDB).filter(ApiKeyDB.key == key).first()
+                api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == key))).scalars().first()
 
                 if not api_key:
                     logger.warning(f"API key {key} not found")
@@ -433,11 +466,11 @@ class ApiKeyService:
                     image_count=image_count,
                 )
                 db.add(usage)
-                db.commit()
+                await db.commit()
 
                 # Deduct credits from user's balance (skip for liberclaw and x402 keys)
                 if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_address:
-                    success = CreditService.use_credits(api_key.user_address, credits_used)
+                    success = await CreditService.use_credits(api_key.user_address, credits_used)
 
                     if not success:
                         logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")

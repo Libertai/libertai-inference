@@ -7,11 +7,11 @@ import struct
 from solana.rpc.api import Client
 from solders.pubkey import Pubkey
 from sqlalchemy import select, desc
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
 from src.utils.token import get_token_price, get_sol_token_price
@@ -26,7 +26,7 @@ class SolanaService:
         self.last_processed_slot = None
 
     @staticmethod
-    def _get_last_block_from_db(db: Session) -> int | None:
+    async def _get_last_block_from_db(db: AsyncSession) -> int | None:
         """Get the last processed block from database"""
         try:
             stmt = (
@@ -39,7 +39,7 @@ class SolanaService:
                 .order_by(desc(CreditTransaction.block_number))
                 .limit(1)
             )
-            result = db.execute(stmt).scalar_one_or_none()
+            result = (await db.execute(stmt)).scalar_one_or_none()
             return result if result else None
         except Exception as e:
             logger.error(f"Error getting last block from DB: {e}")
@@ -100,8 +100,8 @@ class SolanaService:
         processed_signatures: list[str] = []
 
         try:
-            with SessionLocal() as db:
-                self.last_processed_slot = self._get_last_block_from_db(db)
+            async with AsyncSessionLocal() as db:
+                self.last_processed_slot = await self._get_last_block_from_db(db)
 
                 # Get recent transactions
                 signatures = self.client.get_signatures_for_address(self.program_id, limit=50)
@@ -113,17 +113,19 @@ class SolanaService:
                 for sig_info in signatures.value:
                     signature_str = str(sig_info.signature)
 
-                    existing_tx = db.scalar(
-                        select(CreditTransaction).where(
-                            CreditTransaction.transaction_hash == signature_str,
-                            CreditTransaction.provider.in_(
-                                [
-                                    CreditTransactionProvider.ltai_solana.value,
-                                    CreditTransactionProvider.sol_solana.value,
-                                ]
-                            ),
+                    existing_tx = (
+                        await db.execute(
+                            select(CreditTransaction).where(
+                                CreditTransaction.transaction_hash == signature_str,
+                                CreditTransaction.provider.in_(
+                                    [
+                                        CreditTransactionProvider.ltai_solana.value,
+                                        CreditTransactionProvider.sol_solana.value,
+                                    ]
+                                ),
+                            )
                         )
-                    )
+                    ).scalar()
                     if existing_tx:
                         continue
 
@@ -180,7 +182,7 @@ class SolanaService:
                 logger.warning(f"Unknown payment event type: {payment_event['event_type']}")
                 return []
 
-            CreditService.add_credits(
+            await CreditService.add_credits(
                 provider=provider,
                 address=payment_event["user"],
                 amount=amount,

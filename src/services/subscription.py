@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
+from sqlalchemy import select
 
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.subscription import Subscription, SubscriptionType, SubscriptionStatus
 from src.models.subscription_transaction import SubscriptionTransaction, SubscriptionTransactionStatus
 from src.services.credit import CreditService
@@ -14,7 +15,7 @@ logger = setup_logger(__name__)
 
 class SubscriptionService:
     @staticmethod
-    def create_subscription(
+    async def create_subscription(
         user_address: str,
         subscription_type: SubscriptionType,
         amount: float,
@@ -42,16 +43,16 @@ class SubscriptionService:
         try:
             # Use provided session or create a new one
             if db_session:
-                subscription = SubscriptionService._create_subscription_internal(
+                subscription = await SubscriptionService._create_subscription_internal(
                     db_session, user_address, subscription_type, amount, related_id, next_charge_at
                 )
                 return subscription
             else:
-                with SessionLocal() as db:
-                    subscription = SubscriptionService._create_subscription_internal(
+                async with AsyncSessionLocal() as db:
+                    subscription = await SubscriptionService._create_subscription_internal(
                         db, user_address, subscription_type, amount, related_id, next_charge_at
                     )
-                    db.commit()  # Commit only if we created our own session
+                    await db.commit()  # Commit only if we created our own session
                     return subscription
 
         except Exception as e:
@@ -59,7 +60,7 @@ class SubscriptionService:
             raise
 
     @staticmethod
-    def _create_subscription_internal(db, user_address, subscription_type, amount, related_id, next_charge_at):
+    async def _create_subscription_internal(db, user_address, subscription_type, amount, related_id, next_charge_at):
         # Create the subscription
         subscription = Subscription(
             user_address=user_address,
@@ -73,18 +74,18 @@ class SubscriptionService:
 
         # We need to flush so that the ID is generated but don't commit yet
         # if an external session was passed in
-        db.flush()
-        db.refresh(subscription)
+        await db.flush()
+        await db.refresh(subscription)
 
         # Process initial payment
         if amount > 0:
             # Check balance
-            balance = CreditService.get_balance(user_address)
+            balance = await CreditService.get_balance(user_address)
             if balance < amount:
                 raise ValueError(f"Insufficient balance: {balance} < {amount}. Subscription cannot be created.")
 
             # Deduct credits
-            CreditService.use_credits(user_address, amount)
+            await CreditService.use_credits(user_address, amount)
 
             # Create successful transaction record with the now-available subscription ID
             transaction = SubscriptionTransaction(
@@ -98,7 +99,7 @@ class SubscriptionService:
         return subscription
 
     @staticmethod
-    def process_renewal(subscription_id: uuid.UUID) -> bool:
+    async def process_renewal(subscription_id: uuid.UUID) -> bool:
         """
         Process a subscription renewal.
 
@@ -109,8 +110,12 @@ class SubscriptionService:
             Boolean indicating if the renewal was successful
         """
         try:
-            with SessionLocal() as db:
-                subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+            async with AsyncSessionLocal() as db:
+                subscription = (
+                    (await db.execute(select(Subscription).where(Subscription.id == subscription_id)))
+                    .scalars()
+                    .first()
+                )
 
                 if not subscription:
                     logger.warning(f"Subscription {subscription_id} not found")
@@ -131,7 +136,7 @@ class SubscriptionService:
                 # Check balance
                 user_address = subscription.user_address
                 amount = subscription.amount
-                balance = CreditService.get_balance(user_address)
+                balance = await CreditService.get_balance(user_address)
 
                 if balance < amount:
                     # Create a failed transaction record
@@ -145,19 +150,19 @@ class SubscriptionService:
 
                     subscription.status = SubscriptionStatus.inactive
 
-                    db.commit()
+                    await db.commit()
                     logger.warning(f"Renewal failed for subscription {subscription_id}: Insufficient balance")
                     return False
 
                 # Process payment
-                CreditService.use_credits(user_address, amount)
+                await CreditService.use_credits(user_address, amount)
 
                 # Update subscription
                 subscription.update_charge_dates(now)
 
                 # Commit updates to subscription
-                db.commit()
-                db.refresh(subscription)
+                await db.commit()
+                await db.refresh(subscription)
 
                 # Create transaction record
                 transaction = SubscriptionTransaction(
@@ -167,7 +172,7 @@ class SubscriptionService:
                 )
                 db.add(transaction)
 
-                db.commit()
+                await db.commit()
                 logger.info(f"Successfully renewed subscription {subscription_id}")
                 return True
 
@@ -176,7 +181,7 @@ class SubscriptionService:
             return False
 
     @staticmethod
-    def cancel_subscription(subscription_id: uuid.UUID) -> bool:
+    async def cancel_subscription(subscription_id: uuid.UUID) -> bool:
         """
         Cancel a subscription.
 
@@ -187,15 +192,19 @@ class SubscriptionService:
             Boolean indicating if the cancellation was successful
         """
         try:
-            with SessionLocal() as db:
-                subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+            async with AsyncSessionLocal() as db:
+                subscription = (
+                    (await db.execute(select(Subscription).where(Subscription.id == subscription_id)))
+                    .scalars()
+                    .first()
+                )
 
                 if not subscription:
                     logger.warning(f"Subscription {subscription_id} not found")
                     return False
 
                 subscription.status = SubscriptionStatus.cancelled
-                db.commit()
+                await db.commit()
 
                 logger.info(f"Cancelled subscription {subscription_id}")
                 return True
@@ -205,7 +214,7 @@ class SubscriptionService:
             return False
 
     @staticmethod
-    def restart_subscription(subscription_id: uuid.UUID, months: int = 1) -> bool:
+    async def restart_subscription(subscription_id: uuid.UUID, months: int = 1) -> bool:
         """
         Restart an inactive subscription.
 
@@ -217,8 +226,12 @@ class SubscriptionService:
             Boolean indicating if the operation was successful
         """
         try:
-            with SessionLocal() as db:
-                subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+            async with AsyncSessionLocal() as db:
+                subscription = (
+                    (await db.execute(select(Subscription).where(Subscription.id == subscription_id)))
+                    .scalars()
+                    .first()
+                )
 
                 if not subscription:
                     logger.warning(f"Subscription {subscription_id} not found")
@@ -231,7 +244,7 @@ class SubscriptionService:
                 # Check balance
                 user_address = subscription.user_address
                 amount = subscription.amount
-                balance = CreditService.get_balance(user_address)
+                balance = await CreditService.get_balance(user_address)
 
                 if balance < amount:
                     logger.warning(
@@ -240,15 +253,15 @@ class SubscriptionService:
                     return False
 
                 # Process payment
-                CreditService.use_credits(user_address, amount)
+                await CreditService.use_credits(user_address, amount)
 
                 # Update subscription
                 subscription.status = SubscriptionStatus.active
                 subscription.update_charge_dates(datetime.now(), months=months)
 
                 # Commit updates to subscription
-                db.commit()
-                db.refresh(subscription)
+                await db.commit()
+                await db.refresh(subscription)
 
                 # Create transaction record
                 transaction = SubscriptionTransaction(
@@ -259,7 +272,7 @@ class SubscriptionService:
                 )
                 db.add(transaction)
 
-                db.commit()
+                await db.commit()
 
                 logger.info(f"Restarted subscription {subscription_id}")
                 # TODO: Call functions to restart related services (agents etc)

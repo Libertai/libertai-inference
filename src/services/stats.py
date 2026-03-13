@@ -2,7 +2,7 @@ from calendar import month_abbr
 from datetime import datetime, timedelta, date
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, select
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import (
@@ -24,7 +24,7 @@ from src.interfaces.stats import (
     GlobalSummaryStats,
 )
 from src.models.api_key import ApiKey
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.utils.logger import setup_logger
@@ -34,12 +34,14 @@ logger = setup_logger(__name__)
 
 class StatsService:
     @staticmethod
-    def get_dashboard_stats(user_address: str) -> DashboardStats:
+    async def get_dashboard_stats(user_address: str) -> DashboardStats:
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 now = datetime.now()
 
-                api_key_ids = [k.id for k in db.query(ApiKey.id).filter(ApiKey.user_address == user_address).all()]
+                api_key_ids = (
+                    (await db.execute(select(ApiKey.id).where(ApiKey.user_address == user_address))).scalars().all()
+                )
                 if not api_key_ids:
                     return DashboardStats(
                         address=user_address,
@@ -55,21 +57,22 @@ class StatsService:
 
                 # Single query: monthly credits + current month full stats
                 monthly_rows = (
-                    db.query(
-                        func.extract("year", InferenceCall.used_at).label("yr"),
-                        func.extract("month", InferenceCall.used_at).label("mo"),
-                        func.sum(InferenceCall.credits_used).label("credits"),
-                        func.count(InferenceCall.id).label("calls"),
-                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
-                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    await db.execute(
+                        select(
+                            func.extract("year", InferenceCall.used_at).label("yr"),
+                            func.extract("month", InferenceCall.used_at).label("mo"),
+                            func.sum(InferenceCall.credits_used).label("credits"),
+                            func.count(InferenceCall.id).label("calls"),
+                            func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                            func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                        )
+                        .where(
+                            InferenceCall.api_key_id.in_(api_key_ids),
+                            InferenceCall.used_at >= six_months_start,
+                        )
+                        .group_by("yr", "mo")
                     )
-                    .filter(
-                        InferenceCall.api_key_id.in_(api_key_ids),
-                        InferenceCall.used_at >= six_months_start,
-                    )
-                    .group_by("yr", "mo")
-                    .all()
-                )
+                ).all()
 
                 monthly_usage = {}
                 current_calls = 0
@@ -107,13 +110,15 @@ class StatsService:
             )
 
     @staticmethod
-    def get_usage_stats(user_address: str, start_date: date, end_date: date) -> UsageStats:
+    async def get_usage_stats(user_address: str, start_date: date, end_date: date) -> UsageStats:
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-                api_keys = db.query(ApiKey.id, ApiKey.name).filter(ApiKey.user_address == user_address).all()
+                api_keys = (
+                    await db.execute(select(ApiKey.id, ApiKey.name).where(ApiKey.user_address == user_address))
+                ).all()
                 if not api_keys:
                     return UsageStats(
                         inference_calls=0,
@@ -137,15 +142,16 @@ class StatsService:
 
                 # Daily usage — also derive totals from this
                 daily_stats = (
-                    db.query(
-                        cast(InferenceCall.used_at, Date).label("date"),
-                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
-                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    await db.execute(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                            func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                        )
+                        .where(*base_filter)
+                        .group_by(cast(InferenceCall.used_at, Date))
                     )
-                    .filter(*base_filter)
-                    .group_by(cast(InferenceCall.used_at, Date))
-                    .all()
-                )
+                ).all()
 
                 daily_data = {}
                 total_input = 0
@@ -169,16 +175,17 @@ class StatsService:
 
                 # By model — also derive total calls + cost
                 model_stats = (
-                    db.query(
-                        InferenceCall.model_name.label("name"),
-                        func.count(InferenceCall.id).label("calls"),
-                        func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
-                        func.sum(InferenceCall.credits_used).label("cost"),
+                    await db.execute(
+                        select(
+                            InferenceCall.model_name.label("name"),
+                            func.count(InferenceCall.id).label("calls"),
+                            func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
+                            func.sum(InferenceCall.credits_used).label("cost"),
+                        )
+                        .where(*base_filter)
+                        .group_by(InferenceCall.model_name)
                     )
-                    .filter(*base_filter)
-                    .group_by(InferenceCall.model_name)
-                    .all()
-                )
+                ).all()
 
                 total_calls = 0
                 total_cost = 0.0
@@ -197,16 +204,17 @@ class StatsService:
 
                 # By API key
                 api_key_stats = (
-                    db.query(
-                        InferenceCall.api_key_id.label("key_id"),
-                        func.count(InferenceCall.id).label("calls"),
-                        func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
-                        func.sum(InferenceCall.credits_used).label("cost"),
+                    await db.execute(
+                        select(
+                            InferenceCall.api_key_id.label("key_id"),
+                            func.count(InferenceCall.id).label("calls"),
+                            func.sum(InferenceCall.input_tokens + InferenceCall.output_tokens).label("total_tokens"),
+                            func.sum(InferenceCall.credits_used).label("cost"),
+                        )
+                        .where(*base_filter)
+                        .group_by(InferenceCall.api_key_id)
                     )
-                    .filter(*base_filter)
-                    .group_by(InferenceCall.api_key_id)
-                    .all()
-                )
+                ).all()
 
                 usage_by_api_key = [
                     UsageByEntity(
@@ -237,27 +245,30 @@ class StatsService:
             )
 
     @staticmethod
-    def _get_inference_credits_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalCreditsStats:
-        with SessionLocal() as db:
+    async def _get_inference_credits_stats(
+        key_type: ApiKeyType, start_date: date, end_date: date
+    ) -> GlobalCreditsStats:
+        async with AsyncSessionLocal() as db:
             start_datetime = datetime.combine(start_date, datetime.min.time())
             end_datetime = datetime.combine(end_date, datetime.max.time())
 
             model_stats = (
-                db.query(
-                    cast(InferenceCall.used_at, Date).label("date"),
-                    InferenceCall.model_name.label("model_name"),
-                    func.sum(InferenceCall.credits_used).label("credits"),
+                await db.execute(
+                    select(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.credits_used).label("credits"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .where(
+                        ApiKey.type == key_type,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                 )
-                .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                .filter(
-                    ApiKey.type == key_type,
-                    InferenceCall.used_at >= start_datetime,
-                    InferenceCall.used_at <= end_datetime,
-                )
-                .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
-                .order_by(cast(InferenceCall.used_at, Date))
-                .all()
-            )
+            ).all()
 
             total = 0.0
             credits_usage = []
@@ -275,81 +286,84 @@ class StatsService:
             return GlobalCreditsStats(total_credits_used=total, credits_usage=credits_usage)
 
     @staticmethod
-    def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+    async def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         try:
-            return StatsService._get_inference_credits_stats(ApiKeyType.api, start_date, end_date)
+            return await StatsService._get_inference_credits_stats(ApiKeyType.api, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def _get_inference_api_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalApiStats:
-        with SessionLocal() as db:
+    async def _get_inference_api_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalApiStats:
+        async with AsyncSessionLocal() as db:
             start_datetime = datetime.combine(start_date, datetime.min.time())
             end_datetime = datetime.combine(end_date, datetime.max.time())
 
             model_stats = (
-                db.query(
-                    cast(InferenceCall.used_at, Date).label("date"),
-                    InferenceCall.model_name.label("name"),
-                    func.count(InferenceCall.id).label("count"),
+                await db.execute(
+                    select(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("name"),
+                        func.count(InferenceCall.id).label("count"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .where(
+                        ApiKey.type == key_type,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                 )
-                .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                .filter(
-                    ApiKey.type == key_type,
-                    InferenceCall.used_at >= start_datetime,
-                    InferenceCall.used_at <= end_datetime,
-                )
-                .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
-                .order_by(cast(InferenceCall.used_at, Date))
-                .all()
-            )
+            ).all()
 
             total = 0
             api_usage = []
             for stat in model_stats:
-                total += stat.count
+                count: int = stat[2]  # func.count result
+                total += count
                 api_usage.append(
                     ModelApiUsage(
-                        model_name=stat.name,
-                        used_at=stat.date.strftime("%Y-%m-%d"),
-                        call_count=stat.count,
+                        model_name=stat[1],
+                        used_at=stat[0].strftime("%Y-%m-%d"),
+                        call_count=count,
                     )
                 )
 
             return GlobalApiStats(total_calls=total, api_usage=api_usage)
 
     @staticmethod
-    def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
+    async def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
         try:
-            return StatsService._get_inference_api_stats(ApiKeyType.api, start_date, end_date)
+            return await StatsService._get_inference_api_stats(ApiKeyType.api, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving api stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def _get_inference_tokens_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalTokensStats:
-        with SessionLocal() as db:
+    async def _get_inference_tokens_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalTokensStats:
+        async with AsyncSessionLocal() as db:
             start_datetime = datetime.combine(start_date, datetime.min.time())
             end_datetime = datetime.combine(end_date, datetime.max.time())
 
             inference_stats = (
-                db.query(
-                    cast(InferenceCall.used_at, Date).label("date"),
-                    InferenceCall.model_name.label("model_name"),
-                    func.sum(InferenceCall.input_tokens).label("input_tokens"),
-                    func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                await db.execute(
+                    select(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        InferenceCall.model_name.label("model_name"),
+                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                    )
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .where(
+                        ApiKey.type == key_type,
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
+                    .order_by(cast(InferenceCall.used_at, Date))
                 )
-                .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                .filter(
-                    ApiKey.type == key_type,
-                    InferenceCall.used_at >= start_datetime,
-                    InferenceCall.used_at <= end_datetime,
-                )
-                .group_by(cast(InferenceCall.used_at, Date), InferenceCall.model_name)
-                .order_by(cast(InferenceCall.used_at, Date))
-                .all()
-            )
+            ).all()
 
             total_input = 0
             total_output = 0
@@ -371,41 +385,43 @@ class StatsService:
             return GlobalTokensStats(total_input_tokens=total_input, total_output_tokens=total_output, calls=calls)
 
     @staticmethod
-    def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+    async def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
         try:
-            return StatsService._get_inference_tokens_stats(ApiKeyType.api, start_date, end_date)
+            return await StatsService._get_inference_tokens_stats(ApiKeyType.api, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving token stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_chat_calls_stats(start_date: date, end_date: date) -> GlobalChatCallsStats:
+    async def get_global_chat_calls_stats(start_date: date, end_date: date) -> GlobalChatCallsStats:
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
                 chat_stats = (
-                    db.query(
-                        cast(ChatRequest.created_at, Date).label("date"),
-                        ChatRequest.model_name.label("name"),
-                        func.count(ChatRequest.id).label("count"),
+                    await db.execute(
+                        select(
+                            cast(ChatRequest.created_at, Date).label("date"),
+                            ChatRequest.model_name.label("name"),
+                            func.count(ChatRequest.id).label("count"),
+                        )
+                        .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
+                        .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
+                        .order_by(cast(ChatRequest.created_at, Date))
                     )
-                    .filter(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
-                    .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
-                    .order_by(cast(ChatRequest.created_at, Date))
-                    .all()
-                )
+                ).all()
 
                 total = 0
                 chat_usage = []
                 for stat in chat_stats:
-                    total += stat.count
+                    count: int = stat[2]  # func.count result
+                    total += count
                     chat_usage.append(
                         ChatCallUsage(
-                            model_name=stat.name,
-                            used_at=stat.date.strftime("%Y-%m-%d"),
-                            call_count=stat.count,
+                            model_name=stat[1],
+                            used_at=stat[0].strftime("%Y-%m-%d"),
+                            call_count=count,
                         )
                     )
 
@@ -415,25 +431,26 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_chat_tokens_stats(start_date: date, end_date: date) -> GlobalChatTokensStats:
+    async def get_global_chat_tokens_stats(start_date: date, end_date: date) -> GlobalChatTokensStats:
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
                 chat_stats = (
-                    db.query(
-                        cast(ChatRequest.created_at, Date).label("date"),
-                        ChatRequest.model_name.label("model_name"),
-                        func.sum(ChatRequest.input_tokens).label("input_tokens"),
-                        func.sum(ChatRequest.output_tokens).label("output_tokens"),
-                        func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                    await db.execute(
+                        select(
+                            cast(ChatRequest.created_at, Date).label("date"),
+                            ChatRequest.model_name.label("model_name"),
+                            func.sum(ChatRequest.input_tokens).label("input_tokens"),
+                            func.sum(ChatRequest.output_tokens).label("output_tokens"),
+                            func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                        )
+                        .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
+                        .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
+                        .order_by(cast(ChatRequest.created_at, Date))
                     )
-                    .filter(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
-                    .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
-                    .order_by(cast(ChatRequest.created_at, Date))
-                    .all()
-                )
+                ).all()
 
                 total_input = 0
                 total_output = 0
@@ -467,84 +484,87 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_liberclaw_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
+    async def get_global_liberclaw_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
         try:
-            return StatsService._get_inference_api_stats(ApiKeyType.liberclaw, start_date, end_date)
+            return await StatsService._get_inference_api_stats(ApiKeyType.liberclaw, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving liberclaw calls stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_liberclaw_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+    async def get_global_liberclaw_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
         try:
-            return StatsService._get_inference_tokens_stats(ApiKeyType.liberclaw, start_date, end_date)
+            return await StatsService._get_inference_tokens_stats(ApiKeyType.liberclaw, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving liberclaw token stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_liberclaw_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+    async def get_global_liberclaw_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         try:
-            return StatsService._get_inference_credits_stats(ApiKeyType.liberclaw, start_date, end_date)
+            return await StatsService._get_inference_credits_stats(ApiKeyType.liberclaw, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving liberclaw credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_x402_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
+    async def get_global_x402_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
         try:
-            return StatsService._get_inference_api_stats(ApiKeyType.x402, start_date, end_date)
+            return await StatsService._get_inference_api_stats(ApiKeyType.x402, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving x402 calls stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_x402_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
+    async def get_global_x402_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
         try:
-            return StatsService._get_inference_tokens_stats(ApiKeyType.x402, start_date, end_date)
+            return await StatsService._get_inference_tokens_stats(ApiKeyType.x402, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving x402 token stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_x402_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
+    async def get_global_x402_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
         try:
-            return StatsService._get_inference_credits_stats(ApiKeyType.x402, start_date, end_date)
+            return await StatsService._get_inference_credits_stats(ApiKeyType.x402, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving x402 credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def get_global_summary_stats(start_date: date, end_date: date) -> GlobalSummaryStats:
+    async def get_global_summary_stats(start_date: date, end_date: date) -> GlobalSummaryStats:
         try:
-            with SessionLocal() as db:
+            async with AsyncSessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
                 inference = (
-                    db.query(
-                        func.count(InferenceCall.id).label("cnt"),
-                        func.coalesce(func.sum(InferenceCall.input_tokens), 0).label("inp"),
-                        func.coalesce(func.sum(InferenceCall.output_tokens), 0).label("out"),
+                    await db.execute(
+                        select(
+                            func.count(InferenceCall.id).label("cnt"),
+                            func.coalesce(func.sum(InferenceCall.input_tokens), 0).label("inp"),
+                            func.coalesce(func.sum(InferenceCall.output_tokens), 0).label("out"),
+                        ).where(InferenceCall.used_at >= start_datetime, InferenceCall.used_at <= end_datetime)
                     )
-                    .filter(InferenceCall.used_at >= start_datetime, InferenceCall.used_at <= end_datetime)
-                    .first()
-                )
+                ).first()
 
                 chat = (
-                    db.query(
-                        func.count(ChatRequest.id).label("cnt"),
-                        func.coalesce(func.sum(ChatRequest.input_tokens), 0).label("inp"),
-                        func.coalesce(func.sum(ChatRequest.output_tokens), 0).label("out"),
+                    await db.execute(
+                        select(
+                            func.count(ChatRequest.id).label("cnt"),
+                            func.coalesce(func.sum(ChatRequest.input_tokens), 0).label("inp"),
+                            func.coalesce(func.sum(ChatRequest.output_tokens), 0).label("out"),
+                        ).where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
                     )
-                    .filter(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
-                    .first()
-                )
+                ).first()
+
+                i_cnt, i_inp, i_out = (inference[0], inference[1], inference[2]) if inference else (0, 0, 0)
+                c_cnt, c_inp, c_out = (chat[0], chat[1], chat[2]) if chat else (0, 0, 0)
 
                 return GlobalSummaryStats(
-                    total_requests=(inference.cnt or 0) + (chat.cnt or 0),
-                    total_input_tokens=(inference.inp or 0) + (chat.inp or 0),
-                    total_output_tokens=(inference.out or 0) + (chat.out or 0),
+                    total_requests=i_cnt + c_cnt,
+                    total_input_tokens=i_inp + c_inp,
+                    total_output_tokens=i_out + c_out,
                 )
         except Exception as e:
             logger.error(f"Error retrieving global summary stats: {str(e)}", exc_info=True)

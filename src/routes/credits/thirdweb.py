@@ -6,6 +6,7 @@ from fastapi import HTTPException, Header, Request
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel
+from sqlalchemy import select
 from web3 import Web3
 
 from src.config import config
@@ -15,7 +16,7 @@ from src.interfaces.credits import (
     ThirdwebOnrampTransactionData,
     CreditTransactionStatus,
 )
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
@@ -60,13 +61,6 @@ async def thirdweb_webhook(
     signature: str = Header(None, alias="X-Pay-Signature"),
     timestamp: str = Header(None, alias="X-Pay-Timestamp"),
 ) -> None:
-    """
-    Process webhooks from Thirdweb.
-    Supports both onchain-transaction and onramp-transaction events.
-
-    Verifies the webhook signature using the THIRDWEB_WEBHOOK_SECRET and validates
-    the timestamp to prevent replay attacks.
-    """
     # Verify the webhook signature
     if not signature:
         logger.warning("Missing signature header in webhook request")
@@ -81,12 +75,10 @@ async def thirdweb_webhook(
         webhook_timestamp = int(timestamp)
         current_time = int(time.time())
 
-        # Check if webhook is too old
         if current_time - webhook_timestamp > MAX_WEBHOOK_AGE:
             logger.warning(f"Webhook timestamp too old: {webhook_timestamp}, current time: {current_time}")
             raise HTTPException(status_code=401, detail="Webhook expired")
 
-        # Check if webhook is from the future (with a small tolerance)
         if webhook_timestamp > current_time + 30:
             logger.warning(f"Webhook timestamp from the future: {webhook_timestamp}, current time: {current_time}")
             raise HTTPException(status_code=401, detail="Invalid timestamp")
@@ -98,42 +90,35 @@ async def thirdweb_webhook(
     body = await request.body()
     body_str = body.decode("utf-8")
 
-    # Combine timestamp and body to create the payload for signature verification
     signature_payload = f"{timestamp}.{body_str}"
 
-    # Calculate expected signature
     expected_signature = hmac.new(
         config.THIRDWEB_WEBHOOK_SECRET.encode(), signature_payload.encode(), hashlib.sha256
     ).hexdigest()
 
-    # Secure comparison to prevent timing attacks
     if not hmac.compare_digest(expected_signature, signature):
         logger.warning("Invalid webhook signature")
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     logger.debug(f"Received Thirdweb webhook: {payload.model_dump_json()}")
 
-    # Handle both onchain and onramp transactions
     if payload.is_onchain_transaction:
-        _handle_onchain_transaction(payload.onchain_data)
+        await _handle_onchain_transaction(payload.onchain_data)
     elif payload.is_onramp_transaction:
-        _handle_onramp_transaction(payload.onramp_data)
+        await _handle_onramp_transaction(payload.onramp_data)
     else:
         logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
 
 
-def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
-    """Handle onchain transaction webhook data."""
+async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
     if data is None:
         raise HTTPException(status_code=400, detail="Missing onchain transaction data")
 
-    # Check if transaction is destined for our payment processor
     if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
         logger.warning(f"Transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
 
     try:
-        # Extract transaction details from the last transaction (assuming Base chain)
         base_transaction = next((tx for tx in data.transactions[::-1] if tx.chainId == 8453), None)
         if base_transaction is None:
             logger.warning("No Base chain transaction found in onchain transaction")
@@ -142,8 +127,6 @@ def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> 
         transaction_hash = base_transaction.transactionHash
         sender_address = data.purchaseData.userAddress
 
-        # Convert amount from destination token amount to USD
-        # destinationAmount is in token's smallest unit (e.g., USDC has 6 decimals)
         amount_usd = int(data.destinationAmount) / (10**data.destinationToken.decimals)
 
         if data.destinationToken.symbol != "USDC":
@@ -153,29 +136,26 @@ def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> 
             logger.warning(f"Unsupported destination token chain: {data.destinationToken.chainId}")
             return
 
-        # First, check if transaction already exists
-        with SessionLocal() as db:
-            existing_transaction = (
-                db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
             )
+            existing_transaction = result.scalars().first()
 
-        # Determine transaction status based on the webhook status
         tx_status = (
             CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
         )
 
-        # If the transaction already exists and status is completed, update it
         if existing_transaction is not None:
-            CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
+            await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             return
 
-        # Add credits to the user's account with the appropriate status
-        CreditService.add_credits(
+        await CreditService.add_credits(
             provider=CreditTransactionProvider.thirdweb,
             address=format_address(LibertaiChain.base, sender_address),
             amount=amount_usd,
             transaction_hash=transaction_hash,
-            block_number=None,  # Thirdweb doesn't provide block number
+            block_number=None,
             status=tx_status,
         )
 
@@ -184,23 +164,18 @@ def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> 
         raise HTTPException(status_code=500, detail=f"Error processing onchain webhook: {str(e)}")
 
 
-def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> None:
-    """Handle onramp transaction webhook data."""
+async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> None:
     if data is None:
         raise HTTPException(status_code=400, detail="Missing onramp transaction data")
 
-    # Check if transaction is destined for our payment processor
     if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
         logger.warning(f"Onramp transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
 
     try:
-        # For onramp transactions, we use the onramp transaction ID as the hash
         transaction_hash = data.id
         sender_address = data.purchaseData.userAddress
 
-        # Convert amount from token amount to USD
-        # amount is in token's smallest unit (e.g., USDC has 6 decimals)
         amount_usd = int(data.amount) / (10**data.token.decimals)
 
         if data.token.symbol != "USDC":
@@ -210,30 +185,27 @@ def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> No
             logger.warning(f"Unsupported onramp token chain: {data.token.chainId}")
             return
 
-        # First, check if transaction already exists
-        with SessionLocal() as db:
-            existing_transaction = (
-                db.query(CreditTransaction).filter(CreditTransaction.transaction_hash == transaction_hash).first()
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
             )
+            existing_transaction = result.scalars().first()
 
-        # Determine transaction status based on the webhook status
         tx_status = (
             CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
         )
 
-        # If the transaction already exists and status is completed, update it
         if existing_transaction is not None:
             if data.status == "COMPLETED":
-                CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
+                await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             return
 
-        # Add credits to the user's account with the appropriate status
-        CreditService.add_credits(
+        await CreditService.add_credits(
             provider=CreditTransactionProvider.thirdweb,
             address=format_address(LibertaiChain.base, sender_address),
             amount=amount_usd,
             transaction_hash=transaction_hash,
-            block_number=None,  # Onramp transactions don't have block numbers
+            block_number=None,
             status=tx_status,
         )
 

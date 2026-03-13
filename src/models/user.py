@@ -1,10 +1,9 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, String, TIMESTAMP
+from sqlalchemy import Column, String, TIMESTAMP, select, func
 from sqlalchemy.orm import relationship, Mapped
-from sqlalchemy.sql import func
 
-from src.models.base import Base, SessionLocal
+from src.models.base import Base, AsyncSessionLocal
 
 if TYPE_CHECKING:
     from src.models.credit_transaction import CreditTransaction
@@ -28,26 +27,15 @@ class User(Base):
         "Subscription", back_populates="user", cascade="all, delete-orphan"
     )
 
-    @property
-    def credit_balance(self) -> float:
-        """
-        Dynamically calculate the balance from active transactions.
-        This will be calculated when accessing the property.
-        """
+    async def get_credit_balance(self) -> float:
         from src.models.credit_transaction import CreditTransaction, CreditTransactionStatus
 
-        with SessionLocal() as db:
-            # Get all active transactions for this user
-            active_transactions = (
-                db.query(CreditTransaction)
-                .filter(
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
                     CreditTransaction.address == self.address,
-                    CreditTransaction.is_active,
+                    CreditTransaction.is_active == True,  # noqa: E712
                     CreditTransaction.status == CreditTransactionStatus.completed,
                 )
-                .all()
             )
-
-            # Sum remaining amounts
-            total_balance = sum(tx.amount_left for tx in active_transactions)
-            return total_balance
+            return float(result.scalar() or 0.0)
