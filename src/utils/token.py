@@ -1,16 +1,19 @@
-import requests
+import httpx
 
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3/simple/price"
 
-def get_token_price() -> float:
+
+async def get_token_price() -> float:
     """Get the current price of $LTAI in USD from Coingecko"""
     try:
-        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=libertai&vs_currencies=usd")
-        response.raise_for_status()  # Raise exception for 4XX/5XX responses
-        price_data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{COINGECKO_BASE_URL}?ids=libertai&vs_currencies=usd")
+            response.raise_for_status()
+            price_data = response.json()
 
         if "libertai" not in price_data or "usd" not in price_data["libertai"]:
             logger.error(f"Unexpected response format from Coingecko: {price_data}")
@@ -23,17 +26,18 @@ def get_token_price() -> float:
             raise ValueError("Invalid price from Coingecko")
 
         return price
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Failed to fetch token price: {str(e)}")
         raise
 
 
-def get_sol_token_price() -> float:
+async def get_sol_token_price() -> float:
     """Get the current price of $SOL in USD from Coingecko"""
     try:
-        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
-        response.raise_for_status()  # Raise exception for 4XX/5XX responses
-        price_data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{COINGECKO_BASE_URL}?ids=solana&vs_currencies=usd")
+            response.raise_for_status()
+            price_data = response.json()
 
         if "solana" not in price_data or "usd" not in price_data["solana"]:
             logger.error(f"Unexpected response format from Coingecko: {price_data}")
@@ -46,6 +50,6 @@ def get_sol_token_price() -> float:
             raise ValueError("Invalid price from Coingecko")
 
         return price
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         logger.error(f"Failed to fetch token price: {str(e)}")
         raise
