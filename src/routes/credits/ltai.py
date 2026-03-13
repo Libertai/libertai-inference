@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -56,10 +57,12 @@ async def process_base_ltai_transactions() -> list[str]:
                 )
 
                 # Start from recent blocks with a margin to include missed blocks between executions or downtimes
-                from_block = w3.eth.block_number - 1000
+                from_block = await asyncio.to_thread(lambda: w3.eth.block_number) - 1000
                 start_block = max(from_block, last_block_number + 1)
 
-                events = contract.events.PaymentProcessed.get_logs(from_block=start_block)
+                events = await asyncio.to_thread(
+                    contract.events.PaymentProcessed.get_logs, from_block=start_block
+                )
 
             for event in events:
                 try:
@@ -95,7 +98,7 @@ async def handle_payment_event(event) -> str:
     ltai_amount = event["args"]["amount"] / 10**18
     block_number = event["blockNumber"]
 
-    token_price = get_token_price()  # Get token/USD price
+    token_price = await get_token_price()  # Get token/USD price
     amount = token_price * ltai_amount  # Calculate USD value
     await CreditService.add_credits(
         CreditTransactionProvider.ltai_base,

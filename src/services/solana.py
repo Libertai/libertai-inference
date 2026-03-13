@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -104,7 +105,9 @@ class SolanaService:
                 self.last_processed_slot = await self._get_last_block_from_db(db)
 
                 # Get recent transactions
-                signatures = self.client.get_signatures_for_address(self.program_id, limit=50)
+                signatures = await asyncio.to_thread(
+                    self.client.get_signatures_for_address, self.program_id, limit=50
+                )
 
                 if not signatures.value:
                     return processed_signatures
@@ -136,12 +139,15 @@ class SolanaService:
                 if not new_transactions:
                     return processed_signatures
 
-                ltai_token_price = get_token_price()
-                sol_token_price = get_sol_token_price()
+                ltai_token_price = await get_token_price()
+                sol_token_price = await get_sol_token_price()
 
                 for sig_info, signature_str in reversed(new_transactions):
-                    tx = self.client.get_transaction(
-                        sig_info.signature, encoding="json", max_supported_transaction_version=0
+                    tx = await asyncio.to_thread(
+                        self.client.get_transaction,
+                        sig_info.signature,
+                        encoding="json",
+                        max_supported_transaction_version=0,
                     )
                     if tx.value:
                         await self._process_transaction(
