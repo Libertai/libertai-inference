@@ -7,6 +7,8 @@ from aleph.sdk.conf import settings
 from aleph_message.models import Chain, Payment, PaymentType, StoreMessage
 from aleph_message.models.execution.environment import HypervisorType
 from fastapi import HTTPException, Depends
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from src.config import config
 from src.interfaces.agent import (
@@ -16,7 +18,7 @@ from src.interfaces.agent import (
 )
 from src.models import SubscriptionStatus
 from src.models.agent import Agent
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.subscription import Subscription
 from src.routes.agents import router
 from src.services.auth import get_current_address
@@ -34,7 +36,6 @@ AGENT_MONTHLY_COST = 10  # Monthly cost in credits
 async def _create_agent_instance(
     client: AuthenticatedAlephHttpClient, agent_id: uuid.UUID, ssh_public_key: str
 ) -> str:
-    """Helper function to create an Aleph agent instance."""
     rootfs = settings.UBUNTU_24_QEMU_ROOTFS_ID
     rootfs_message: StoreMessage = await client.get_message(item_hash=rootfs, message_type=StoreMessage)
     rootfs_size = (
@@ -65,21 +66,19 @@ async def create_agent(
 ) -> AgentResponse:
     agent_id = uuid.uuid4()
 
-    # Create Aleph instance
     aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
 
-    user_balance = CreditService.get_balance(user_address)
+    user_balance = await CreditService.get_balance(user_address)
     if user_balance < AGENT_MONTHLY_COST * body.subscription_months:
         raise HTTPException(
             status_code=HTTPStatus.PAYMENT_REQUIRED,
             detail="Not enough credits to create an agent.",
         )
 
-    with SessionLocal() as db:
+    async with AsyncSessionLocal() as db:
         async with AuthenticatedAlephHttpClient(account=aleph_account, api_server=config.ALEPH_API_URL) as client:
             instance_hash = await _create_agent_instance(client, agent_id, body.ssh_public_key)
 
-        # Create agent in the database
         agent = Agent(
             agent_id=agent_id,
             instance_hash=instance_hash,
@@ -88,12 +87,10 @@ async def create_agent(
             ssh_public_key=body.ssh_public_key,
         )
 
-        # Create a subscription for the agent
         from src.models.subscription import SubscriptionType
         from src.services.subscription import SubscriptionService
 
-        # Create subscription and handle initial payment using the same DB session
-        subscription = SubscriptionService.create_subscription(
+        subscription = await SubscriptionService.create_subscription(
             user_address=user_address,
             subscription_type=SubscriptionType.agent,
             amount=AGENT_MONTHLY_COST,
@@ -102,14 +99,12 @@ async def create_agent(
             db_session=db,
         )
 
-        # Update subscription_id on the agent
         agent.subscription_id = subscription.id
 
         db.add(agent)
-        db.commit()
-        db.refresh(agent)
+        await db.commit()
+        await db.refresh(agent)
 
-        # Create response with required fields from agent and subscription
         return AgentResponse(
             id=agent.id,
             instance_hash=agent.instance_hash,
@@ -126,8 +121,11 @@ async def create_agent(
 
 @router.get("/", description="List all agents for the current user")  # type: ignore
 async def list_agents(user_address: str = Depends(get_current_address)) -> list[GetAgentResponse]:
-    with SessionLocal() as db:
-        agents = db.query(Agent).filter(Agent.user_address == user_address).all()
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Agent).where(Agent.user_address == user_address).options(selectinload(Agent.subscription))
+        )
+        agents = result.scalars().all()
 
         agent_response = []
         for agent in agents:
@@ -158,8 +156,9 @@ async def list_agents(user_address: str = Depends(get_current_address)) -> list[
 
 @router.get("/{agent_id}", description="Get an agent's public information")  # type: ignore
 async def get_agent_public_info(agent_id: uuid.UUID) -> GetAgentResponse:
-    with SessionLocal() as db:
-        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Agent).where(Agent.id == agent_id).options(selectinload(Agent.subscription)))
+        agent = result.scalars().first()
 
         if not agent:
             raise HTTPException(
@@ -193,13 +192,14 @@ async def reallocate_agent(
     agent_id: uuid.UUID,
     user_address: str = Depends(get_current_address),
 ) -> GetAgentResponse:
-    with SessionLocal() as db:
-        agent = (
-            db.query(Agent)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Agent)
             .join(Agent.subscription)
-            .filter(Agent.id == agent_id, Agent.user_address == user_address)
-            .first()
+            .where(Agent.id == agent_id, Agent.user_address == user_address)
+            .options(selectinload(Agent.subscription))
         )
+        agent = result.scalars().first()
 
         if not agent:
             raise HTTPException(
@@ -222,7 +222,6 @@ async def reallocate_agent(
         aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
 
         async with AuthenticatedAlephHttpClient(account=aleph_account, api_server=config.ALEPH_API_URL) as client:
-            # Forget the previous instance
             try:
                 await client.forget(
                     address=config.ALEPH_OWNER,
@@ -233,14 +232,11 @@ async def reallocate_agent(
             except Exception as e:
                 logger.warning(f"Failed to forget previous instance {agent.instance_hash}: {str(e)}")
 
-            # Create new instance
             new_instance_hash = await _create_agent_instance(client, agent_id, agent.ssh_public_key)
 
-            # Update agent with new instance hash
             agent.instance_hash = new_instance_hash
-            db.commit()
+            await db.commit()
 
-        # Get IP address of new instance
         try:
             ip_address = await fetch_instance_ip(agent.instance_hash)
         except ValueError:
@@ -261,25 +257,19 @@ async def reallocate_agent(
 
 @scheduler.scheduled_job("interval", hours=6)
 async def remove_expired_agents():
-    """
-    Scheduled job to remove agent instances where the subscription is expired.
-    """
     logger.info("Running scheduled agents cleanup job")
 
-    with SessionLocal() as db:
-        # Find all agents with expired subscriptions but still have an instance
-        expired_agents = (
-            db.query(Agent)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Agent)
             .join(Agent.subscription)
-            .filter(Subscription.status == SubscriptionStatus.inactive, Agent.instance_hash.is_not(None))
-            .all()
+            .where(Subscription.status == SubscriptionStatus.inactive, Agent.instance_hash.is_not(None))
         )
+        expired_agents = result.scalars().all()
         logger.info(f"Processing {len(expired_agents)} expired agents")
 
-        # Process each agent
         for agent in expired_agents:
             try:
-                # Delete the Aleph instance
                 aleph_account = ETHAccount(config.ALEPH_SENDER_SK)
                 async with AuthenticatedAlephHttpClient(
                     account=aleph_account, api_server=config.ALEPH_API_URL
@@ -290,9 +280,9 @@ async def remove_expired_agents():
                         channel=config.ALEPH_AGENT_CHANNEL,
                         reason="Agent subscription expired",
                     )
-                agent.instance_hash = None  # Mark instance as deleted
+                agent.instance_hash = None
             except Exception as e:
                 logger.error(f"Error processing agent {agent.id} cleanup: {str(e)}", exc_info=True)
-        db.commit()
+        await db.commit()
 
         logger.info("Agents cleanup job completed")

@@ -22,14 +22,8 @@ logger = setup_logger(__name__)
 
 @router.get("/dashboard", response_model=DashboardStats)  # type: ignore
 async def get_dashboard_stats(user_address: str = Depends(get_current_address)) -> DashboardStats:
-    """
-    Get dashboard statistics for the authenticated user:
-    - Credits used per month for the last 6 months
-    - Number of inference calls made this month
-    - Tokens used this month (input, output, and total)
-    """
     try:
-        return StatsService.get_dashboard_stats(user_address)
+        return await StatsService.get_dashboard_stats(user_address)
     except Exception as e:
         logger.error(f"Error in dashboard stats route for {user_address}: {str(e)}", exc_info=True)
         raise
@@ -41,19 +35,8 @@ async def get_usage_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
     user_address: str = Depends(get_current_address),
 ) -> UsageStats:
-    """
-    Get detailed usage statistics for a specific date range.
-
-    Statistics include:
-    - Total number of inference calls
-    - Total tokens (input and output)
-    - Total cost
-    - Daily breakdown of token usage
-    - Usage breakdown by model
-    - Usage breakdown by API key
-    """
     try:
-        return StatsService.get_usage_stats(user_address, start_date, end_date)
+        return await StatsService.get_usage_stats(user_address, start_date, end_date)
     except Exception as e:
         logger.error(f"Error in usage stats route for {user_address}: {str(e)}", exc_info=True)
         raise
@@ -64,17 +47,8 @@ async def get_credits_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalCreditsStats:
-    """
-    Get detailed credits statistics and models usage for a specific date range.
-
-    Statistics include:
-    - Credits used per model
-    - Tokens used per model
-    - Which model has been used
-    """
-
     try:
-        return StatsService.get_global_credits_stats(start_date, end_date)
+        return await StatsService.get_global_credits_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
         raise
@@ -85,16 +59,8 @@ async def get_api_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalApiStats:
-    """
-    Get detailed api statistics and models usage for a specific date range.
-
-    Statistics include:
-    - Total API calls for the entire models
-    - List with API calls for each model
-    """
-
     try:
-        return StatsService.get_global_api_stats(start_date, end_date)
+        return await StatsService.get_global_api_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
         raise
@@ -105,17 +71,8 @@ async def get_tokens_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalTokensStats:
-    """
-    Get detailed tokens usage statistics for a specific date range.
-
-    Statistics include:
-    - Total user input tokens
-    - Total model output vouchers
-    - Total subscriptions to the agents
-    - List with the agents creations dates
-    """
     try:
-        return StatsService.get_global_tokens_stats(start_date, end_date)
+        return await StatsService.get_global_tokens_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in token stats route: {str(e)}", exc_info=True)
         raise
@@ -126,15 +83,8 @@ async def get_chat_calls_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalChatCallsStats:
-    """
-    Get detailed chat API call statistics for a specific date range.
-
-    Statistics include:
-    - Total number of chat API calls
-    - Daily breakdown by model of chat API calls
-    """
     try:
-        return StatsService.get_global_chat_calls_stats(start_date, end_date)
+        return await StatsService.get_global_chat_calls_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in chat calls stats route: {str(e)}", exc_info=True)
         raise
@@ -145,17 +95,8 @@ async def get_chat_tokens_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalChatTokensStats:
-    """
-    Get detailed chat token usage statistics for a specific date range.
-
-    Statistics include:
-    - Total input tokens
-    - Total output tokens
-    - Total cached tokens
-    - Daily breakdown by model of token usage
-    """
     try:
-        return StatsService.get_global_chat_tokens_stats(start_date, end_date)
+        return await StatsService.get_global_chat_tokens_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in chat tokens stats route: {str(e)}", exc_info=True)
         raise
@@ -167,7 +108,7 @@ async def get_liberclaw_calls_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalApiStats:
     try:
-        return StatsService.get_global_liberclaw_calls_stats(start_date, end_date)
+        return await StatsService.get_global_liberclaw_calls_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in liberclaw calls stats route: {str(e)}", exc_info=True)
         raise
@@ -179,7 +120,7 @@ async def get_liberclaw_tokens_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalTokensStats:
     try:
-        return StatsService.get_global_liberclaw_tokens_stats(start_date, end_date)
+        return await StatsService.get_global_liberclaw_tokens_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in liberclaw tokens stats route: {str(e)}", exc_info=True)
         raise
@@ -191,7 +132,7 @@ async def get_liberclaw_credits_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalCreditsStats:
     try:
-        return StatsService.get_global_liberclaw_credits_stats(start_date, end_date)
+        return await StatsService.get_global_liberclaw_credits_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in liberclaw credits stats route: {str(e)}", exc_info=True)
         raise
@@ -203,7 +144,7 @@ async def get_x402_calls_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalApiStats:
     try:
-        return StatsService.get_global_x402_calls_stats(start_date, end_date)
+        return await StatsService.get_global_x402_calls_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in x402 calls stats route: {str(e)}", exc_info=True)
         raise
@@ -215,7 +156,7 @@ async def get_x402_tokens_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalTokensStats:
     try:
-        return StatsService.get_global_x402_tokens_stats(start_date, end_date)
+        return await StatsService.get_global_x402_tokens_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in x402 tokens stats route: {str(e)}", exc_info=True)
         raise
@@ -227,7 +168,7 @@ async def get_x402_credits_stats(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalCreditsStats:
     try:
-        return StatsService.get_global_x402_credits_stats(start_date, end_date)
+        return await StatsService.get_global_x402_credits_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in x402 credits stats route: {str(e)}", exc_info=True)
         raise
@@ -239,7 +180,7 @@ async def get_global_summary(
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalSummaryStats:
     try:
-        return StatsService.get_global_summary_stats(start_date, end_date)
+        return await StatsService.get_global_summary_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in global summary stats route: {str(e)}", exc_info=True)
         raise

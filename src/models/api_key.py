@@ -3,12 +3,12 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID, Enum
+from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID, Enum, select
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql.expression import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
-from src.models.base import Base, SessionLocal
+from src.models.base import Base, AsyncSessionLocal
 from src.models.liberclaw_user import LiberclawUser  # noqa: F401 - must be imported for FK resolution
 
 if TYPE_CHECKING:
@@ -63,63 +63,42 @@ class ApiKey(Base):
 
     @property
     def masked_key(self) -> str:
-        """Return a masked version of the API key, showing only the first 4 and last 4 characters."""
         if len(self.key) <= 8:
             return "****"
         return f"{self.key[:4]}...{self.key[-4:]}"
 
     @staticmethod
     def generate_key() -> str:
-        """Generate a random API key ID."""
         return secrets.token_hex(16)
 
-    @property
-    def current_month_usage(self) -> float:
-        """
-        Calculate the total usage for the current month directly from the database.
-        """
+    async def get_current_month_usage(self) -> float:
         from src.models.inference_call import InferenceCall
 
-        with SessionLocal() as db:
-            # Get current month's usage using SQL aggregation
+        async with AsyncSessionLocal() as db:
             now = datetime.now()
             first_day = datetime(now.year, now.month, 1)
             next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
 
-            result = (
-                db.query(sql_func.sum(InferenceCall.credits_used))
-                .filter(
+            result = await db.execute(
+                select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
                     InferenceCall.api_key_id == self.id,
                     InferenceCall.used_at >= first_day,
                     InferenceCall.used_at < next_month,
                 )
-                .scalar()
             )
+            return float(result.scalar() or 0.0)
 
-            return float(result or 0.0)
-
-    @property
-    def effective_limit_remaining(self) -> float:
-        """
-        Calculate effective remaining usage based on both the API key's monthly limit
-        and the user's available credit balance.
-
-        This combines the monthly limit of the API key with the user's current balance
-        to determine how many credits can actually be used.
-        """
+    async def get_effective_limit_remaining(self) -> float:
         if not self.user_address:
             return 0.0
 
         from src.services.credit import CreditService
 
-        # Get user's current balance
-        user_balance = CreditService.get_balance(self.user_address)
+        user_balance = await CreditService.get_balance(self.user_address)
 
-        # If there's a monthly limit, calculate remaining credits within that limit
         if self.monthly_limit is not None:
-            limit_remaining = max(0.0, self.monthly_limit - self.current_month_usage)
-            # Use the minimum of remaining limit and available balance
+            usage = await self.get_current_month_usage()
+            limit_remaining = max(0.0, self.monthly_limit - usage)
             return min(limit_remaining, user_balance)
 
-        # If no monthly limit is set, the effective limit is just the user's available balance
         return user_balance

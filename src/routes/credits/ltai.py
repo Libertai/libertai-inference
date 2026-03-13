@@ -4,11 +4,12 @@ import os
 from fastapi import HTTPException
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
+from sqlalchemy import select
 from web3 import Web3
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider
-from src.models.base import SessionLocal
+from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
@@ -32,18 +33,19 @@ with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") a
 @router.post("/ltai/base/process", description="Process credit purchase with $LTAI transactions in Base")  # type: ignore
 async def process_base_ltai_transactions() -> list[str]:
     try:
-        with SessionLocal() as db:
+        async with AsyncSessionLocal() as db:
             processed_transactions: list[str] = []
 
             if ltai_base_payments_lock.locked():
                 return processed_transactions  # Skip execution if already running
 
-            last_db_block = (
-                db.query(CreditTransaction)
-                .filter(CreditTransaction.provider == CreditTransactionProvider.ltai_base)
+            result = await db.execute(
+                select(CreditTransaction)
+                .where(CreditTransaction.provider == CreditTransactionProvider.ltai_base)
                 .order_by(CreditTransaction.block_number.desc())
-                .first()
+                .limit(1)
             )
+            last_db_block = result.scalars().first()
             last_block_number = (
                 last_db_block.block_number if last_db_block and last_db_block.block_number is not None else 0
             )
@@ -61,7 +63,7 @@ async def process_base_ltai_transactions() -> list[str]:
 
             for event in events:
                 try:
-                    transaction_hash = handle_payment_event(event)
+                    transaction_hash = await handle_payment_event(event)
                 except Exception as e:
                     logger.error(f"Error processing payment: {e}", exc_info=True)
                 processed_transactions.append(transaction_hash)
@@ -85,16 +87,7 @@ async def process_solana_ltai_transactions() -> list[str]:
         return processed_transactions
 
 
-def handle_payment_event(event) -> str:
-    """Handle a PaymentProcessed event from the Base LTAI Payment Processor contract
-
-    Args:
-        event: The event object
-
-    Returns:
-        The transaction hash of the event
-    """
-
+async def handle_payment_event(event) -> str:
     logger.debug(f"Processing payment event: {event}")
 
     transaction_hash = f"0x{event['transactionHash'].hex()}"
@@ -104,7 +97,7 @@ def handle_payment_event(event) -> str:
 
     token_price = get_token_price()  # Get token/USD price
     amount = token_price * ltai_amount  # Calculate USD value
-    CreditService.add_credits(
+    await CreditService.add_credits(
         CreditTransactionProvider.ltai_base,
         format_address(LibertaiChain.base, sender),
         amount,

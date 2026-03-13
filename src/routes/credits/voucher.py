@@ -21,7 +21,7 @@ logger = setup_logger(__name__)
 @router.post("/vouchers", description="Add credits via voucher to a specific address")  # type: ignore
 async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool:
     # Add credits using the voucher provider
-    success = CreditService.add_credits(
+    success = await CreditService.add_credits(
         provider=CreditTransactionProvider.voucher,
         address=format_address(voucher_request.chain, voucher_request.address),
         amount=voucher_request.amount,
@@ -41,7 +41,7 @@ async def get_vouchers(chain: LibertaiChain, address: str, password: str) -> lis
         raise HTTPException(status_code=400, detail=str(e))
 
     # Get all vouchers for the address
-    vouchers = CreditService.get_vouchers(params.address)
+    vouchers = await CreditService.get_vouchers(params.address)
 
     # Convert to response model
     return [
@@ -68,5 +68,5 @@ async def change_voucher_expiration(request: VoucherChangeExpireRequest) -> bool
         return False
 
     # Mark voucher as expired
-    success = CreditService.change_voucher_expiration_date(voucher_id, request.expired_at)
+    success = await CreditService.change_voucher_expiration_date(voucher_id, request.expired_at)
     return success
