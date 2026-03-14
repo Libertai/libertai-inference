@@ -74,13 +74,9 @@ async def cancel_subscription(
                 detail=f"Subscription with ID {subscription_id} not found.",
             )
 
-    success = await SubscriptionService.cancel_subscription(subscription_id)
+        subscription.status = SubscriptionStatus.cancelled
+        await db.commit()
 
-    if not success:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail="Failed to cancel the subscription.",
-        )
     return {"details": "Subscription cancelled successfully"}
 
 

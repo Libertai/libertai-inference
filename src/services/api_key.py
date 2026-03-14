@@ -378,6 +378,56 @@ class ApiKeyService:
                     .all()
                 )
 
+                # Pre-fetch balances for all user addresses to avoid N+1 queries
+                user_addresses = {k.user_address for k in api_keys if k.user_address and k.type == ApiKeyType.api}
+                balances: dict[str, float] = {}
+                if user_addresses:
+                    from src.models.credit_transaction import CreditTransaction
+                    from src.interfaces.credits import CreditTransactionStatus
+
+                    balance_rows = (
+                        await db.execute(
+                            select(
+                                CreditTransaction.address,
+                                sql_func.coalesce(sql_func.sum(CreditTransaction.amount_left), 0.0),
+                            )
+                            .where(
+                                CreditTransaction.address.in_(user_addresses),
+                                CreditTransaction.is_active == True,  # noqa: E712
+                                CreditTransaction.status == CreditTransactionStatus.completed,
+                            )
+                            .group_by(CreditTransaction.address)
+                        )
+                    ).all()
+                    balances = {row[0]: float(row[1]) for row in balance_rows}
+
+                # Pre-fetch current month usage for API keys with monthly limits
+                api_keys_with_limits = [
+                    k for k in api_keys if k.type == ApiKeyType.api and k.monthly_limit is not None
+                ]
+                monthly_usage: dict[uuid.UUID, float] = {}
+                if api_keys_with_limits:
+                    now = datetime.now()
+                    first_day = datetime(now.year, now.month, 1)
+                    next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+                    limit_key_ids = [k.id for k in api_keys_with_limits]
+
+                    usage_rows = (
+                        await db.execute(
+                            select(
+                                InferenceCall.api_key_id,
+                                sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
+                            )
+                            .where(
+                                InferenceCall.api_key_id.in_(limit_key_ids),
+                                InferenceCall.used_at >= first_day,
+                                InferenceCall.used_at < next_month,
+                            )
+                            .group_by(InferenceCall.api_key_id)
+                        )
+                    ).all()
+                    monthly_usage = {row[0]: float(row[1]) for row in usage_rows}
+
                 # Filter keys with sufficient credits available
                 result = []
                 for key in api_keys:
@@ -403,8 +453,15 @@ class ApiKeyService:
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type == ApiKeyType.api:
-                        # Existing check: at least 0.02 credits available
-                        effective_limit = await key.get_effective_limit_remaining()
+                        if not key.user_address:
+                            continue
+                        user_balance = balances.get(key.user_address, 0.0)
+                        if key.monthly_limit is not None:
+                            key_usage = monthly_usage.get(key.id, 0.0)
+                            limit_remaining = max(0.0, key.monthly_limit - key_usage)
+                            effective_limit = min(limit_remaining, user_balance)
+                        else:
+                            effective_limit = user_balance
                         if effective_limit < 0.02:
                             continue
 

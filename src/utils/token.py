@@ -22,6 +22,14 @@ async def _get_async_client() -> httpx.AsyncClient:
     return _async_client
 
 
+async def close_async_client():
+    """Close the shared AsyncClient to release connections."""
+    global _async_client
+    if _async_client is not None:
+        await _async_client.aclose()
+        _async_client = None
+
+
 async def get_token_price() -> float:
     """Get the current price of $LTAI in USD from Coingecko"""
     try:

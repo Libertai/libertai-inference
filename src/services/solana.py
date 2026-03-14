@@ -105,9 +105,7 @@ class SolanaService:
                 self.last_processed_slot = await self._get_last_block_from_db(db)
 
                 # Get recent transactions
-                signatures = await asyncio.to_thread(
-                    self.client.get_signatures_for_address, self.program_id, limit=50
-                )
+                signatures = await asyncio.to_thread(self.client.get_signatures_for_address, self.program_id, limit=50)
 
                 if not signatures.value:
                     return processed_signatures
