@@ -85,7 +85,7 @@ async def process_solana_ltai_transactions() -> list[str]:
     if ltai_solana_payments_lock.locked():
         return processed_transactions
 
-    async with ltai_base_payments_lock:
+    async with ltai_solana_payments_lock:
         processed_transactions = await solana_service.poll_transactions()
         return processed_transactions
 
