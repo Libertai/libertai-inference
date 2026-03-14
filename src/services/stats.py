@@ -2,7 +2,7 @@ from calendar import month_abbr
 from datetime import datetime, timedelta, date
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, cast, Date, select
+from sqlalchemy import func, cast, Date, Integer, select
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import (
@@ -59,8 +59,8 @@ class StatsService:
                 monthly_rows = (
                     await db.execute(
                         select(
-                            func.extract("year", InferenceCall.used_at).label("yr"),
-                            func.extract("month", InferenceCall.used_at).label("mo"),
+                            cast(func.extract("year", InferenceCall.used_at), Integer).label("yr"),
+                            cast(func.extract("month", InferenceCall.used_at), Integer).label("mo"),
                             func.sum(InferenceCall.credits_used).label("credits"),
                             func.count(InferenceCall.id).label("calls"),
                             func.sum(InferenceCall.input_tokens).label("input_tokens"),
@@ -81,8 +81,8 @@ class StatsService:
                 current_output = 0
 
                 for row in monthly_rows:
-                    mo = int(row.mo)
-                    yr = int(row.yr)
+                    mo = row.mo
+                    yr = row.yr
                     monthly_usage[month_abbr[mo]] = float(row.credits or 0)
                     if mo == now.month and yr == now.year:
                         current_calls = row.calls or 0

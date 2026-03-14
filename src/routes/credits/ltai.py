@@ -60,16 +60,14 @@ async def process_base_ltai_transactions() -> list[str]:
                 from_block = await asyncio.to_thread(lambda: w3.eth.block_number) - 1000
                 start_block = max(from_block, last_block_number + 1)
 
-                events = await asyncio.to_thread(
-                    contract.events.PaymentProcessed.get_logs, from_block=start_block
-                )
+                events = await asyncio.to_thread(contract.events.PaymentProcessed.get_logs, from_block=start_block)
 
             for event in events:
                 try:
                     transaction_hash = await handle_payment_event(event)
+                    processed_transactions.append(transaction_hash)
                 except Exception as e:
                     logger.error(f"Error processing payment: {e}", exc_info=True)
-                processed_transactions.append(transaction_hash)
 
         return processed_transactions
     except Exception as e:
