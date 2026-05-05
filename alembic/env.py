@@ -3,7 +3,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, make_url
 from sqlalchemy import pool
 
 from src.models.agent import Agent  # noqa
@@ -26,6 +26,8 @@ config = context.config
 load_dotenv()
 
 DATABASE_URL = os.path.expandvars(os.getenv("DATABASE_URL", ""))
+if DATABASE_URL:
+    DATABASE_URL = make_url(DATABASE_URL).set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 # Interpret the config file for Python logging.
