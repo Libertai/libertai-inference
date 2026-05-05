@@ -25,6 +25,13 @@ services:
     restart: always
     env_file:
       - .env
+    networks:
+      - dokploy-network
+      - default
+
+networks:
+  dokploy-network:
+    external: true
 
 volumes:
   libertai_inference_pg_data:
