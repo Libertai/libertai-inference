@@ -2,7 +2,7 @@ import time
 
 import aiohttp
 
-from src.interfaces.aleph import AlephAPIResponse, ModelInfo, TextPricing
+from src.interfaces.aleph import AlephAPIResponse, EmbeddingPricing, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -97,6 +97,16 @@ class AlephService:
             input_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
             output_price = output_tokens / 1_000_000 * pricing.price_per_million_output_tokens
             total_price = input_price + output_price
+
+        # Embedding model pricing (input-only, no completion tokens)
+        elif "embedding" in model.pricing:
+            if image_count > 0:
+                raise ValueError(f"Embedding model {model_id} cannot process images")
+
+            pricing = model.pricing["embedding"]
+            if not isinstance(pricing, EmbeddingPricing):
+                raise ValueError(f"Invalid embedding pricing format for model: {model_id}")
+            total_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
 
         # Image model pricing
         elif "image" in model.pricing:

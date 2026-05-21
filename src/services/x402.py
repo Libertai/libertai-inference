@@ -3,7 +3,7 @@ import json
 import aiohttp
 
 from src.config import config
-from src.interfaces.aleph import TextPricing
+from src.interfaces.aleph import EmbeddingPricing, TextPricing
 from src.services.aleph import aleph_service
 from src.utils.logger import setup_logger
 
@@ -39,9 +39,17 @@ class X402Service:
                     "price_per_million_output_tokens": pricing.price_per_million_output_tokens,
                     "default_max_tokens": default_max_tokens,
                 }
+            elif "embedding" in model.pricing:
+                embedding_pricing = model.pricing["embedding"]
+                if not isinstance(embedding_pricing, EmbeddingPricing):
+                    continue
+                prices[model.id] = {
+                    "price_per_million_input_tokens": embedding_pricing.price_per_million_input_tokens,
+                    "is_embedding": True,
+                }
             elif "image" in model.pricing:
                 image_price = model.pricing["image"]
-                if isinstance(image_price, TextPricing):
+                if isinstance(image_price, (TextPricing, EmbeddingPricing)):
                     continue
                 prices[model.id] = {
                     "price_per_image": float(image_price),
