@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from src.models.api_key import ApiKey
     from src.models.credit_transaction import CreditTransaction
     from src.models.oauth_connection import OAuthConnection
+    from src.models.plan_subscription import PlanSubscription
     from src.models.session import Session
     from src.models.wallet_connection import WalletConnection
 
@@ -41,6 +42,9 @@ class User(Base):
     )
     sessions: Mapped[list["Session"]] = relationship(
         "Session", back_populates="user", cascade="all, delete-orphan"
+    )
+    plan_subscriptions: Mapped[list["PlanSubscription"]] = relationship(
+        "PlanSubscription", back_populates="user", cascade="all, delete-orphan"
     )
 
     def __init__(
