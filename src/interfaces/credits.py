@@ -20,7 +20,7 @@ class CreditTransactionProvider(str, Enum):
 
 
 class CreditBalanceResponse(BaseModel):
-    address: str
+    address: str | None
     balance: float
 
 
@@ -43,7 +43,7 @@ class CreditTransactionResponse(BaseModel):
 
 
 class CreditTransactionsResponse(BaseModel):
-    address: str
+    address: str | None
     transactions: list[CreditTransactionResponse]
 
 

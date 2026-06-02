@@ -15,6 +15,7 @@ from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
+from src.services.users import get_or_create_user_by_wallet
 
 
 async def _user_for_address(address: str) -> User:
@@ -62,14 +63,15 @@ async def test_add_credits_for_user_adds_to_same_balance():
 
 async def test_create_api_key_sets_user_id():
     address = "0xD00D000000000000000000000000000000000003"
-    full_key = await ApiKeyService.create_api_key(address, "my key")
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, address)
+        await db.commit()
+        user_id = user.id
+
+    full_key = await ApiKeyService.create_api_key(user_id=user_id, name="my key", user_address=address)
 
     async with AsyncSessionLocal() as db:
-        wallet = (
-            await db.execute(select(WalletConnection).where(WalletConnection.address == address))
-        ).scalars().first()
-        assert wallet is not None
         api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.id == full_key.id))).scalars().first()
         assert api_key is not None
-        assert api_key.user_id == wallet.user_id
+        assert api_key.user_id == user_id
         assert api_key.user_address == address

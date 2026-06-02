@@ -13,8 +13,9 @@ from src.interfaces.credits import (
 )
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.user import User
 from src.routes.credits import router
-from src.services.auth import get_current_address
+from src.services.auth import get_current_user
 from src.services.credit import CreditService
 from src.utils.cron import scheduler
 from src.utils.logger import setup_logger
@@ -63,24 +64,24 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
 
 
 @router.get("/balance", description="Get the current credit balance for authenticated user.")  # type: ignore
-async def get_user_balance(user_address: str = Depends(get_current_address)) -> CreditBalanceResponse:
+async def get_user_balance(user: User = Depends(get_current_user)) -> CreditBalanceResponse:
     try:
-        balance = await CreditService.get_balance(user_address)
-        return CreditBalanceResponse(address=user_address, balance=balance)
+        balance = await CreditService.get_balance(user.id)
+        return CreditBalanceResponse(address=user.address, balance=balance)
     except Exception as e:
-        logger.error(f"Error retrieving balance for {user_address}: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving balance for user {user.id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving credit balance: {str(e)}"
         )
 
 
 @router.get("/transactions", description="Get transaction history for authenticated user")  # type: ignore
-async def get_transaction_history(user_address: str = Depends(get_current_address)) -> CreditTransactionsResponse:
+async def get_transaction_history(user: User = Depends(get_current_user)) -> CreditTransactionsResponse:
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(CreditTransaction)
-                .where(CreditTransaction.address == user_address)
+                .where(CreditTransaction.user_id == user.id)
                 .order_by(CreditTransaction.created_at.desc())
             )
             transactions = result.scalars().all()
@@ -101,9 +102,9 @@ async def get_transaction_history(user_address: str = Depends(get_current_addres
                     )
                 )
 
-            return CreditTransactionsResponse(address=user_address, transactions=transaction_responses)
+            return CreditTransactionsResponse(address=user.address, transactions=transaction_responses)
     except Exception as e:
-        logger.error(f"Error retrieving transaction history for {user_address}: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving transaction history for user {user.id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving transaction history: {str(e)}"
         )

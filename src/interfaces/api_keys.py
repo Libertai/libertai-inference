@@ -56,6 +56,7 @@ class ApiKey(BaseModel):
     id: uuid.UUID
     key: str  # Masked key for display
     name: str
+    user_id: uuid.UUID | None = None
     user_address: str | None = None
     created_at: datetime
     is_active: bool
