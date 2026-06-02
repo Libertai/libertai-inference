@@ -1,25 +1,61 @@
+import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, String, TIMESTAMP, select, func
-from sqlalchemy.orm import relationship, Mapped
+from sqlalchemy import TIMESTAMP, UUID, Boolean, String, func, select
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, AsyncSessionLocal
 
 if TYPE_CHECKING:
-    from src.models.credit_transaction import CreditTransaction
     from src.models.api_key import ApiKey
+    from src.models.credit_transaction import CreditTransaction
+    from src.models.oauth_connection import OAuthConnection
+    from src.models.session import Session
+    from src.models.wallet_connection import WalletConnection
 
 
 class User(Base):
     __tablename__ = "users"
 
-    address = Column(String, primary_key=True)  # Unique address for Ethereum or Solana address
-    created_at = Column(TIMESTAMP, default=func.current_timestamp())
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
+    email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
+
+    # Legacy wallet address. Identity moved to wallet_connections; kept (nullable, unique) for one
+    # release as a rollback hatch and so existing address-based FKs resolve until the FK swap.
+    address: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
 
     credit_transactions: Mapped[list["CreditTransaction"]] = relationship(
         "CreditTransaction", back_populates="user", cascade="all, delete-orphan"
     )
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
+    wallet_connections: Mapped[list["WalletConnection"]] = relationship(
+        "WalletConnection", back_populates="user", cascade="all, delete-orphan"
+    )
+    oauth_connections: Mapped[list["OAuthConnection"]] = relationship(
+        "OAuthConnection", back_populates="user", cascade="all, delete-orphan"
+    )
+    sessions: Mapped[list["Session"]] = relationship(
+        "Session", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    def __init__(
+        self,
+        address: str | None = None,
+        email: str | None = None,
+        email_verified: bool = False,
+        display_name: str | None = None,
+        avatar_url: str | None = None,
+    ):
+        self.address = address
+        self.email = email
+        self.email_verified = email_verified
+        self.display_name = display_name
+        self.avatar_url = avatar_url
 
     async def get_credit_balance(self) -> float:
         from src.models.credit_transaction import CreditTransaction, CreditTransactionStatus

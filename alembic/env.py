@@ -8,12 +8,18 @@ from sqlalchemy import pool
 
 # Import all models that should be included in migrations
 from src.models.api_key import ApiKey  # noqa
+from src.models.auth_code import AuthCode  # noqa
 from src.models.base import Base  # Import the Base from your models
 from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.inference_call import InferenceCall  # noqa
 from src.models.liberclaw_user import LiberclawUser  # noqa
+from src.models.magic_link import MagicLink  # noqa
+from src.models.oauth_connection import OAuthConnection  # noqa
+from src.models.session import Session  # noqa
 from src.models.user import User  # noqa
+from src.models.wallet_challenge import WalletChallenge  # noqa
+from src.models.wallet_connection import WalletConnection  # noqa
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
