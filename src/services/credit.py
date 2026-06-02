@@ -77,18 +77,36 @@ class CreditService:
         user_id: uuid.UUID,
         amount: float,
         provider: CreditTransactionProvider,
+        transaction_hash: str | None = None,
         expired_at: datetime | None = None,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ) -> bool:
-        """Add credits to a user by id (fiat top-ups, trials) — no wallet involved."""
+        """Add credits to a user by id (fiat top-ups, trials) — no wallet involved.
+
+        If ``transaction_hash`` is given it is used for idempotency: a replayed
+        webhook with the same hash is skipped (returns ``False``).
+        """
         logger.debug(f"Adding {amount} credits to user {user_id} with status {status.value}")
         try:
             async with AsyncSessionLocal() as db:
+                if transaction_hash:
+                    existing = (
+                        await db.execute(
+                            select(CreditTransaction).where(
+                                CreditTransaction.transaction_hash == transaction_hash
+                            )
+                        )
+                    ).scalars().first()
+                    if existing:
+                        logger.warning(f"Transaction {transaction_hash} already processed, skipping")
+                        return False
+
                 transaction = CreditTransaction(
                     user_id=user_id,
                     amount=amount,
                     amount_left=amount,
                     provider=provider,
+                    transaction_hash=transaction_hash,
                     expired_at=expired_at,
                     is_active=True,
                     status=status,
