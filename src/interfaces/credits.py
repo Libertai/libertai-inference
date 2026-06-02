@@ -50,7 +50,7 @@ class CreditTransactionsResponse(BaseModel):
 class ExpiredCreditTransaction(BaseModel):
     id: str  # UUID as string
     transaction_hash: str | None
-    address: str
+    address: str | None
     expired_at: datetime | None
 
 
@@ -141,7 +141,7 @@ class VoucherAddCreditsRequest(BaseModel):
 
 class VoucherCreditsResponse(BaseModel):
     id: str  # UUID as string
-    address: str
+    address: str | None
     amount: float
     amount_left: float
     expired_at: datetime | None

@@ -32,7 +32,9 @@ class CreditTransaction(Base):
     transaction_hash: Mapped[str | None] = mapped_column(
         String, nullable=True, unique=True
     )  # Optional transaction hash
-    address: Mapped[str] = mapped_column(String, ForeignKey("users.address", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # Legacy wallet address kept (no FK) for one release as a rollback hatch; identity is user_id.
+    address: Mapped[str | None] = mapped_column(String, nullable=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     amount_left: Mapped[float] = mapped_column(
         Float, nullable=False
@@ -52,16 +54,18 @@ class CreditTransaction(Base):
 
     def __init__(
         self,
-        address: str,
+        user_id: uuid.UUID,
         amount: float,
         amount_left: float,
         provider: CreditTransactionProvider,
+        address: str | None = None,
         transaction_hash: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
         is_active: bool = True,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ):
+        self.user_id = user_id
         self.transaction_hash = transaction_hash
         self.address = address
         self.amount = amount

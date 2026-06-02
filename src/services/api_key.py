@@ -11,8 +11,8 @@ from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
-from src.models.user import User
 from src.services.credit import CreditService
+from src.services.users import get_or_create_user_by_wallet
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -40,12 +40,8 @@ class ApiKeyService:
 
         try:
             async with AsyncSessionLocal() as db:
-                # Get or create user
-                user = (await db.execute(select(User).where(User.address == address))).scalars().first()
-                if not user:
-                    user = User(address=address)
-                    db.add(user)
-                    await db.flush()
+                # Resolve the wallet address to a user (creating the user + wallet link if new).
+                user = await get_or_create_user_by_wallet(db, address)
 
                 # Check if name already exists for this user
                 existing_key = (
@@ -63,6 +59,7 @@ class ApiKeyService:
                 api_key = ApiKeyDB(
                     key=key,
                     name=name,
+                    user_id=user.id,
                     user_address=address,
                     monthly_limit=monthly_limit,
                     type=key_type,
@@ -104,12 +101,8 @@ class ApiKeyService:
 
         try:
             async with AsyncSessionLocal() as db:
-                # Get or create user
-                user = (await db.execute(select(User).where(User.address == address))).scalars().first()
-                if not user:
-                    user = User(address=address)
-                    db.add(user)
-                    await db.flush()
+                # Resolve the wallet address to a user (creating the user + wallet link if new).
+                user = await get_or_create_user_by_wallet(db, address)
 
                 # Check if chat API key already exists
                 existing_key = (
@@ -141,6 +134,7 @@ class ApiKeyService:
                 api_key = ApiKeyDB(
                     key=key,
                     name="Chat API Key",
+                    user_id=user.id,
                     user_address=address,
                     monthly_limit=None,
                     type=ApiKeyType.chat,

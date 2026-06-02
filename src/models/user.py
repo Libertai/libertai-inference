@@ -63,7 +63,7 @@ class User(Base):
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
-                    CreditTransaction.address == self.address,
+                    CreditTransaction.user_id == self.id,
                     CreditTransaction.is_active == True,  # noqa: E712
                     CreditTransaction.status == CreditTransactionStatus.completed,
                 )

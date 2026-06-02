@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import select, func
@@ -5,7 +6,7 @@ from sqlalchemy import select, func
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
-from src.models.user import User
+from src.services.users import get_or_create_user_by_wallet
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -38,13 +39,8 @@ class CreditService:
 
         try:
             async with AsyncSessionLocal() as db:
-                # Get or create user
-                result = await db.execute(select(User).where(User.address == address))
-                user = result.scalars().first()
-                if not user:
-                    user = User(address=address)
-                    db.add(user)
-                    await db.flush()
+                # Resolve the wallet address to a user (creating the user + wallet link if new).
+                user = await get_or_create_user_by_wallet(db, address)
 
                 # Check if transaction already exists (if a hash was provided)
                 if transaction_hash:
@@ -58,8 +54,9 @@ class CreditService:
 
                 # Record transaction
                 transaction = CreditTransaction(
-                    transaction_hash=transaction_hash,
+                    user_id=user.id,
                     address=address,
+                    transaction_hash=transaction_hash,
                     amount=amount,
                     amount_left=amount,
                     provider=provider,
@@ -73,6 +70,34 @@ class CreditService:
                 return True
         except Exception as e:
             logger.error(f"Error adding credits to {address}: {str(e)}", exc_info=True)
+            raise
+
+    @staticmethod
+    async def add_credits_for_user(
+        user_id: uuid.UUID,
+        amount: float,
+        provider: CreditTransactionProvider,
+        expired_at: datetime | None = None,
+        status: CreditTransactionStatus = CreditTransactionStatus.completed,
+    ) -> bool:
+        """Add credits to a user by id (fiat top-ups, trials) — no wallet involved."""
+        logger.debug(f"Adding {amount} credits to user {user_id} with status {status.value}")
+        try:
+            async with AsyncSessionLocal() as db:
+                transaction = CreditTransaction(
+                    user_id=user_id,
+                    amount=amount,
+                    amount_left=amount,
+                    provider=provider,
+                    expired_at=expired_at,
+                    is_active=True,
+                    status=status,
+                )
+                db.add(transaction)
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error adding credits to user {user_id}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
