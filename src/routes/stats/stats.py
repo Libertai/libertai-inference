@@ -12,8 +12,9 @@ from src.interfaces.stats import (
     GlobalChatTokensStats,
     GlobalSummaryStats,
 )
+from src.models.user import User
 from src.routes.stats import router
-from src.services.auth import get_current_address
+from src.services.auth import get_current_user
 from src.services.stats import StatsService
 from src.utils.logger import setup_logger
 
@@ -21,11 +22,12 @@ logger = setup_logger(__name__)
 
 
 @router.get("/dashboard", response_model=DashboardStats)  # type: ignore
-async def get_dashboard_stats(user_address: str = Depends(get_current_address)) -> DashboardStats:
+async def get_dashboard_stats(user: User = Depends(get_current_user)) -> DashboardStats:
     try:
-        return await StatsService.get_dashboard_stats(user_address)
+        # Stats are still wallet-address keyed; email users (no address) get empty stats for now.
+        return await StatsService.get_dashboard_stats(user.address or "")
     except Exception as e:
-        logger.error(f"Error in dashboard stats route for {user_address}: {str(e)}", exc_info=True)
+        logger.error(f"Error in dashboard stats route for user {user.id}: {str(e)}", exc_info=True)
         raise
 
 
@@ -33,12 +35,12 @@ async def get_dashboard_stats(user_address: str = Depends(get_current_address)) 
 async def get_usage_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-    user_address: str = Depends(get_current_address),
+    user: User = Depends(get_current_user),
 ) -> UsageStats:
     try:
-        return await StatsService.get_usage_stats(user_address, start_date, end_date)
+        return await StatsService.get_usage_stats(user.address or "", start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in usage stats route for {user_address}: {str(e)}", exc_info=True)
+        logger.error(f"Error in usage stats route for user {user.id}: {str(e)}", exc_info=True)
         raise
 
 

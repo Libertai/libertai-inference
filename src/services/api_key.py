@@ -12,7 +12,6 @@ from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.services.credit import CreditService
-from src.services.users import get_or_create_user_by_wallet
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -21,31 +20,33 @@ logger = setup_logger(__name__)
 class ApiKeyService:
     @staticmethod
     async def create_api_key(
-        address: str, name: str, monthly_limit: float | None = None, key_type: ApiKeyType = ApiKeyType.api
+        user_id: uuid.UUID,
+        name: str,
+        monthly_limit: float | None = None,
+        key_type: ApiKeyType = ApiKeyType.api,
+        user_address: str | None = None,
     ) -> FullApiKey:
         """
         Create a new API key for a user.
 
         Args:
-            address: User's blockchain address
+            user_id: Owner user id
             name: Name for the API key
             monthly_limit: Optional monthly usage limit in credits
             key_type: Category/type of the API key
+            user_address: Optional legacy wallet address to record on the key
 
         Returns:
             Newly created ApiKey object with all properties eagerly loaded
             This is the only time the FULL key is returned
         """
-        logger.debug(f"Creating API key '{name}' for address {address}")
+        logger.debug(f"Creating API key '{name}' for user {user_id}")
 
         try:
             async with AsyncSessionLocal() as db:
-                # Resolve the wallet address to a user (creating the user + wallet link if new).
-                user = await get_or_create_user_by_wallet(db, address)
-
                 # Check if name already exists for this user
                 existing_key = (
-                    (await db.execute(select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.name == name)))
+                    (await db.execute(select(ApiKeyDB).where(ApiKeyDB.user_id == user_id, ApiKeyDB.name == name)))
                     .scalars()
                     .first()
                 )
@@ -59,8 +60,8 @@ class ApiKeyService:
                 api_key = ApiKeyDB(
                     key=key,
                     name=name,
-                    user_id=user.id,
-                    user_address=address,
+                    user_id=user_id,
+                    user_address=user_address,
                     monthly_limit=monthly_limit,
                     type=key_type,
                 )
@@ -83,32 +84,30 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error creating API key for {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error creating API key for user {user_id}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
-    async def get_or_create_chat_api_key(address: str) -> FullApiKey:
+    async def get_or_create_chat_api_key(user_id: uuid.UUID, user_address: str | None = None) -> FullApiKey:
         """
         Get the chat API key for a user, or create one if it doesn't exist.
 
         Args:
-            address: User's blockchain address
+            user_id: Owner user id
+            user_address: Optional legacy wallet address to record on a newly created key
 
         Returns:
             FullApiKey object with the chat API key (full key returned only on creation)
         """
-        logger.debug(f"Getting or creating chat API key for address {address}")
+        logger.debug(f"Getting or creating chat API key for user {user_id}")
 
         try:
             async with AsyncSessionLocal() as db:
-                # Resolve the wallet address to a user (creating the user + wallet link if new).
-                user = await get_or_create_user_by_wallet(db, address)
-
                 # Check if chat API key already exists
                 existing_key = (
                     (
                         await db.execute(
-                            select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.chat)
+                            select(ApiKeyDB).where(ApiKeyDB.user_id == user_id, ApiKeyDB.type == ApiKeyType.chat)
                         )
                     )
                     .scalars()
@@ -134,8 +133,8 @@ class ApiKeyService:
                 api_key = ApiKeyDB(
                     key=key,
                     name="Chat API Key",
-                    user_id=user.id,
-                    user_address=address,
+                    user_id=user_id,
+                    user_address=user_address,
                     monthly_limit=None,
                     type=ApiKeyType.chat,
                 )
@@ -155,22 +154,22 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error getting or creating chat API key for {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting or creating chat API key for user {user_id}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
-    async def get_api_keys(address: str) -> list[FullApiKey]:
+    async def get_api_keys(user_id: uuid.UUID) -> list[FullApiKey]:
         """
         Get all API keys for a user with usage statistics.
 
         Args:
-            address: User's blockchain address
+            user_id: Owner user id
 
         Returns:
             List of ApiKey objects with all properties eagerly loaded
             Keys are masked for security
         """
-        logger.debug(f"Getting API keys for address {address}")
+        logger.debug(f"Getting API keys for user {user_id}")
 
         try:
             async with AsyncSessionLocal() as db:
@@ -178,7 +177,7 @@ class ApiKeyService:
                 api_keys = (
                     (
                         await db.execute(
-                            select(ApiKeyDB).where(ApiKeyDB.user_address == address, ApiKeyDB.type == ApiKeyType.api)
+                            select(ApiKeyDB).where(ApiKeyDB.user_id == user_id, ApiKeyDB.type == ApiKeyType.api)
                         )
                     )
                     .scalars()
@@ -205,7 +204,7 @@ class ApiKeyService:
                 return result
 
         except Exception as e:
-            logger.error(f"Error getting API keys for {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting API keys for user {user_id}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
@@ -232,6 +231,7 @@ class ApiKeyService:
                 return ApiKey(
                     key=api_key.masked_key,  # Masked key for display
                     name=api_key.name,
+                    user_id=api_key.user_id,
                     user_address=api_key.user_address,
                     monthly_limit=api_key.monthly_limit,
                     id=api_key.id,
@@ -281,7 +281,7 @@ class ApiKeyService:
                         (
                             await db.execute(
                                 select(ApiKeyDB).where(
-                                    ApiKeyDB.user_address == api_key.user_address,
+                                    ApiKeyDB.user_id == api_key.user_id,
                                     ApiKeyDB.name == name,
                                     ApiKeyDB.id != key_id,
                                 )
@@ -292,7 +292,7 @@ class ApiKeyService:
                     )
 
                     if existing_key:
-                        logger.warning(f"API key with name '{name}' already exists for address {api_key.user_address}")
+                        logger.warning(f"API key with name '{name}' already exists for user {api_key.user_id}")
                         await db.rollback()
                         return None
 
@@ -309,6 +309,7 @@ class ApiKeyService:
                 return ApiKey(
                     key=api_key.masked_key,  # Masked key for display
                     name=api_key.name,
+                    user_id=api_key.user_id,
                     user_address=api_key.user_address,
                     monthly_limit=api_key.monthly_limit,
                     id=api_key.id,
@@ -372,25 +373,25 @@ class ApiKeyService:
                     .all()
                 )
 
-                # Pre-fetch balances for all user addresses to avoid N+1 queries
-                user_addresses = {k.user_address for k in api_keys if k.user_address and k.type == ApiKeyType.api}
-                balances: dict[str, float] = {}
-                if user_addresses:
+                # Pre-fetch balances for all users to avoid N+1 queries
+                user_ids = {k.user_id for k in api_keys if k.user_id and k.type == ApiKeyType.api}
+                balances: dict[uuid.UUID, float] = {}
+                if user_ids:
                     from src.models.credit_transaction import CreditTransaction
                     from src.interfaces.credits import CreditTransactionStatus
 
                     balance_rows = (
                         await db.execute(
                             select(
-                                CreditTransaction.address,
+                                CreditTransaction.user_id,
                                 sql_func.coalesce(sql_func.sum(CreditTransaction.amount_left), 0.0),
                             )
                             .where(
-                                CreditTransaction.address.in_(user_addresses),
+                                CreditTransaction.user_id.in_(user_ids),
                                 CreditTransaction.is_active == True,  # noqa: E712
                                 CreditTransaction.status == CreditTransactionStatus.completed,
                             )
-                            .group_by(CreditTransaction.address)
+                            .group_by(CreditTransaction.user_id)
                         )
                     ).all()
                     balances = {row[0]: float(row[1]) for row in balance_rows}
@@ -447,9 +448,9 @@ class ApiKeyService:
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type == ApiKeyType.api:
-                        if not key.user_address:
+                        if not key.user_id:
                             continue
-                        user_balance = balances.get(key.user_address, 0.0)
+                        user_balance = balances.get(key.user_id, 0.0)
                         if key.monthly_limit is not None:
                             key_usage = monthly_usage.get(key.id, 0.0)
                             limit_remaining = max(0.0, key.monthly_limit - key_usage)
@@ -520,8 +521,8 @@ class ApiKeyService:
                 await db.commit()
 
                 # Deduct credits from user's balance (skip for liberclaw and x402 keys)
-                if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_address:
-                    success = await CreditService.use_credits(api_key.user_address, credits_used)
+                if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_id:
+                    success = await CreditService.use_credits(api_key.user_id, credits_used)
 
                     if not success:
                         logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")

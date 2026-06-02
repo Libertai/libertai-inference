@@ -17,10 +17,11 @@ from src.interfaces.api_keys import (
 )
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
+from src.models.user import User
 from src.routes.api_keys import router
 from src.services.aleph import aleph_service
 from src.services.api_key import ApiKeyService
-from src.services.auth import get_current_address, verify_admin_token
+from src.services.auth import get_current_user, verify_admin_token
 from src.services.chat_request import ChatRequestService
 from src.services.x402 import x402_service
 from src.utils.logger import setup_logger
@@ -29,12 +30,13 @@ logger = setup_logger(__name__)
 
 
 @router.post("")  # type: ignore
-async def create_api_key(
-    api_key_create: ApiKeyCreate, current_address: str = Depends(get_current_address)
-) -> FullApiKey:
+async def create_api_key(api_key_create: ApiKeyCreate, user: User = Depends(get_current_user)) -> FullApiKey:
     try:
         full_api_key = await ApiKeyService.create_api_key(
-            address=current_address, name=api_key_create.name, monthly_limit=api_key_create.monthly_limit
+            user_id=user.id,
+            name=api_key_create.name,
+            monthly_limit=api_key_create.monthly_limit,
+            user_address=user.address,
         )
         return full_api_key
     except Exception as e:
@@ -43,9 +45,9 @@ async def create_api_key(
 
 
 @router.get("")  # type: ignore
-async def get_api_keys(current_address: str = Depends(get_current_address)) -> ApiKeyListResponse:
+async def get_api_keys(user: User = Depends(get_current_user)) -> ApiKeyListResponse:
     try:
-        api_keys = await ApiKeyService.get_api_keys(address=current_address)
+        api_keys = await ApiKeyService.get_api_keys(user_id=user.id)
         return ApiKeyListResponse(keys=api_keys)
     except Exception as e:
         logger.error(f"Error getting API keys: {str(e)}", exc_info=True)
@@ -53,9 +55,9 @@ async def get_api_keys(current_address: str = Depends(get_current_address)) -> A
 
 
 @router.get("/chat")  # type: ignore
-async def get_chat_api_key(current_address: str = Depends(get_current_address)) -> ChatApiKeyResponse:
+async def get_chat_api_key(user: User = Depends(get_current_user)) -> ChatApiKeyResponse:
     try:
-        chat_api_key = await ApiKeyService.get_or_create_chat_api_key(address=current_address)
+        chat_api_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user.id, user_address=user.address)
         return ChatApiKeyResponse(key=chat_api_key.full_key)
     except Exception as e:
         logger.error(f"Error getting or creating chat API key: {str(e)}", exc_info=True)
@@ -64,7 +66,7 @@ async def get_chat_api_key(current_address: str = Depends(get_current_address)) 
 
 @router.put("/{key_id}")  # type: ignore
 async def update_api_key(
-    key_id: uuid.UUID, api_key_update: ApiKeyUpdate, current_address: str = Depends(get_current_address)
+    key_id: uuid.UUID, api_key_update: ApiKeyUpdate, user: User = Depends(get_current_user)
 ) -> ApiKey:
     try:
         existing_api_key = await ApiKeyService.get_api_key_by_id(key_id=key_id)
@@ -72,7 +74,7 @@ async def update_api_key(
         if not existing_api_key:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {key_id} not found")
 
-        if not existing_api_key.user_address or existing_api_key.user_address.lower() != current_address.lower():
+        if existing_api_key.user_id != user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own API keys")
 
         api_key = await ApiKeyService.update_api_key(
@@ -103,14 +105,14 @@ async def update_api_key(
 
 
 @router.delete("/{key_id}")  # type: ignore
-async def delete_api_key(key_id: uuid.UUID, current_address: str = Depends(get_current_address)) -> None:
+async def delete_api_key(key_id: uuid.UUID, user: User = Depends(get_current_user)) -> None:
     try:
         existing_api_key = await ApiKeyService.get_api_key_by_id(key_id=key_id)
 
         if not existing_api_key:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key with ID {key_id} not found")
 
-        if not existing_api_key.user_address or existing_api_key.user_address.lower() != current_address.lower():
+        if existing_api_key.user_id != user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own API keys")
 
         success = await ApiKeyService.delete_api_key(key_id=key_id)

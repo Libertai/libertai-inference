@@ -93,12 +93,12 @@ class ApiKey(Base):
             return float(result.scalar() or 0.0)
 
     async def get_effective_limit_remaining(self) -> float:
-        if not self.user_address:
+        if not self.user_id:
             return 0.0
 
         from src.services.credit import CreditService
 
-        user_balance = await CreditService.get_balance(self.user_address)
+        user_balance = await CreditService.get_balance(self.user_id)
 
         if self.monthly_limit is not None:
             usage = await self.get_current_month_usage()

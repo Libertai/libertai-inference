@@ -101,15 +101,15 @@ class CreditService:
             raise
 
     @staticmethod
-    async def use_credits(address: str, amount: float):
-        logger.debug(f"Using {amount} credits from address {address}")
+    async def use_credits(user_id: uuid.UUID, amount: float):
+        logger.debug(f"Using {amount} credits from user {user_id}")
 
         try:
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     select(CreditTransaction)
                     .where(
-                        CreditTransaction.address == address,
+                        CreditTransaction.user_id == user_id,
                         CreditTransaction.is_active == True,  # noqa: E712
                         CreditTransaction.status == CreditTransactionStatus.completed,
                     )
@@ -132,22 +132,22 @@ class CreditService:
 
                 if remaining_amount > 0:
                     logger.warning(
-                        f"Insufficient credits for {address}: requested {amount}, missing {remaining_amount}"
+                        f"Insufficient credits for user {user_id}: requested {amount}, missing {remaining_amount}"
                     )
 
                 await db.commit()
                 return True
         except Exception as e:
-            logger.error(f"Error using credits from {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error using credits from user {user_id}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod
-    async def get_balance(address: str) -> float:
+    async def get_balance(user_id: uuid.UUID) -> float:
         try:
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
-                        CreditTransaction.address == address,
+                        CreditTransaction.user_id == user_id,
                         CreditTransaction.is_active == True,  # noqa: E712
                         CreditTransaction.status == CreditTransactionStatus.completed,
                     )
@@ -155,7 +155,7 @@ class CreditService:
                 balance = result.scalar()
                 return float(balance or 0.0)
         except Exception as e:
-            logger.error(f"Error getting balance for {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting balance for user {user_id}: {str(e)}", exc_info=True)
             return 0
 
     @staticmethod
