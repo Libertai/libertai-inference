@@ -30,6 +30,9 @@ class ApiKey(Base):
     user_address: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Soft delete: set instead of removing the row, so related inference_calls (usage
+    # history) are preserved. A deleted key is hidden from the user and unusable.
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
     type: Mapped[ApiKeyType] = mapped_column(Enum(ApiKeyType), nullable=False, default=ApiKeyType.api)
     liberclaw_user_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -53,9 +53,18 @@ class ApiKeyService:
 
         try:
             async with AsyncSessionLocal() as db:
-                # Check if name already exists for this user
+                # Check if name already exists for this user (ignoring soft-deleted keys,
+                # so a deleted key's name can be reused).
                 existing_key = (
-                    (await db.execute(select(ApiKeyDB).where(ApiKeyDB.user_id == user_id, ApiKeyDB.name == name)))
+                    (
+                        await db.execute(
+                            select(ApiKeyDB).where(
+                                ApiKeyDB.user_id == user_id,
+                                ApiKeyDB.name == name,
+                                ApiKeyDB.deleted_at.is_(None),
+                            )
+                        )
+                    )
                     .scalars()
                     .first()
                 )
@@ -186,7 +195,11 @@ class ApiKeyService:
                 api_keys = (
                     (
                         await db.execute(
-                            select(ApiKeyDB).where(ApiKeyDB.user_id == user_id, ApiKeyDB.type == ApiKeyType.api)
+                            select(ApiKeyDB).where(
+                                ApiKeyDB.user_id == user_id,
+                                ApiKeyDB.type == ApiKeyType.api,
+                                ApiKeyDB.deleted_at.is_(None),
+                            )
                         )
                     )
                     .scalars()
@@ -334,7 +347,9 @@ class ApiKeyService:
     @staticmethod
     async def delete_api_key(key_id: uuid.UUID) -> bool:
         """
-        Delete an API key.
+        Soft-delete an API key: mark it deleted + inactive instead of removing the row,
+        so the related inference_calls (usage history) are preserved. A deleted key is
+        hidden from the user and excluded from the inference gateway.
 
         Args:
             key_id: API key UUID
@@ -342,7 +357,7 @@ class ApiKeyService:
         Returns:
             Boolean indicating if the operation was successful
         """
-        logger.debug(f"Deleting API key {key_id}")
+        logger.debug(f"Soft-deleting API key {key_id}")
 
         try:
             async with AsyncSessionLocal() as db:
@@ -352,8 +367,10 @@ class ApiKeyService:
                     logger.warning(f"API key {key_id} not found for deletion")
                     return False
 
-                await db.delete(api_key)
-                await db.commit()
+                if api_key.deleted_at is None:
+                    api_key.deleted_at = datetime.now()
+                    api_key.is_active = False
+                    await db.commit()
                 return True
 
         except Exception as e:
@@ -375,7 +392,9 @@ class ApiKeyService:
                 api_keys = (
                     (
                         await db.execute(
-                            select(ApiKeyDB).where(ApiKeyDB.is_active).options(selectinload(ApiKeyDB.liberclaw_user))
+                            select(ApiKeyDB)
+                            .where(ApiKeyDB.is_active, ApiKeyDB.deleted_at.is_(None))
+                            .options(selectinload(ApiKeyDB.liberclaw_user))
                         )
                     )
                     .scalars()
