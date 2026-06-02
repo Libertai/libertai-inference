@@ -26,6 +26,7 @@ from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
 from src.services.auth import get_current_user
+from src.services.entitlement import get_allowance_state
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
@@ -189,19 +190,23 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
                 .order_by(PlanSubscription.created_at.desc())
             )
         ).scalars().first()
+        allowance = await get_allowance_state(db, user.id)
 
-    if not sub:
-        return SubscriptionResponse(tier=DEFAULT_TIER, has_subscription=False)
-    effective_tier = sub.tier if sub.status == "active" else DEFAULT_TIER
+    has_sub = sub is not None
     return SubscriptionResponse(
-        tier=effective_tier,
-        has_subscription=True,
-        status=sub.status,
-        provider=sub.provider,
-        current_period_end=sub.current_period_end,
-        cancel_at_period_end=sub.cancel_at_period_end,
-        pending_tier=sub.pending_tier,
-        is_trial=sub.is_trial,
+        tier=(sub.tier if sub and sub.status == "active" else DEFAULT_TIER),
+        has_subscription=has_sub,
+        status=sub.status if sub else None,
+        provider=sub.provider if sub else None,
+        current_period_end=sub.current_period_end if sub else None,
+        cancel_at_period_end=sub.cancel_at_period_end if sub else False,
+        pending_tier=sub.pending_tier if sub else None,
+        is_trial=sub.is_trial if sub else False,
+        window_5h_used=allowance.window_5h_used,
+        window_5h_limit=allowance.window_5h_limit,
+        weekly_used=allowance.weekly_used,
+        weekly_limit=allowance.weekly_limit,
+        prepaid_balance=allowance.prepaid_balance,
     )
 
 
