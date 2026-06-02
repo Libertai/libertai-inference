@@ -19,6 +19,10 @@ from src.models.magic_link import MagicLink
 from src.models.auth_code import AuthCode
 from src.models.wallet_challenge import WalletChallenge
 
+# Payments
+from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription_event import PlanSubscriptionEvent
+
 # This ensures all models are loaded and SQLAlchemy can properly establish relationships
 __all__ = [
     "Base",
@@ -34,4 +38,6 @@ __all__ = [
     "MagicLink",
     "AuthCode",
     "WalletChallenge",
+    "PlanSubscription",
+    "PlanSubscriptionEvent",
 ]

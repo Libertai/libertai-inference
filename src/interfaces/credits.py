@@ -17,6 +17,7 @@ class CreditTransactionProvider(str, Enum):
     thirdweb = "thirdweb"
     voucher = "voucher"
     sol_solana = "sol_solana"  # SOL Solana payments
+    revolut = "revolut"  # Fiat (card/bank) top-ups via Revolut
 
 
 class CreditBalanceResponse(BaseModel):
