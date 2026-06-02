@@ -12,6 +12,15 @@ from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.services.credit import CreditService
+from src.services.entitlement import (
+    WINDOW_5H,
+    WINDOW_WEEKLY,
+    active_tiers_by_users,
+    compute_source,
+    get_allowance_state,
+    usage_by_users,
+)
+from src.subscription_tiers import DEFAULT_TIER, get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -396,6 +405,12 @@ class ApiKeyService:
                     ).all()
                     balances = {row[0]: float(row[1]) for row in balance_rows}
 
+                # Pre-fetch dual-window entitlement inputs (5h + weekly usage, active tier)
+                # for all api-type users, so the per-key loop is pure computation.
+                window_5h_usage = await usage_by_users(db, user_ids, datetime.now() - WINDOW_5H)
+                weekly_usage = await usage_by_users(db, user_ids, datetime.now() - WINDOW_WEEKLY)
+                active_tiers = await active_tiers_by_users(db, user_ids)
+
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
                     k for k in api_keys if k.type == ApiKeyType.api and k.monthly_limit is not None
@@ -450,14 +465,21 @@ class ApiKeyService:
                     elif key.type == ApiKeyType.api:
                         if not key.user_id:
                             continue
-                        user_balance = balances.get(key.user_id, 0.0)
+                        # Per-key monthly limit is an extra cap (if the user set one).
                         if key.monthly_limit is not None:
                             key_usage = monthly_usage.get(key.id, 0.0)
-                            limit_remaining = max(0.0, key.monthly_limit - key_usage)
-                            effective_limit = min(limit_remaining, user_balance)
-                        else:
-                            effective_limit = user_balance
-                        if effective_limit < 0.02:
+                            if key_usage >= key.monthly_limit:
+                                continue
+                        # Dual-window entitlement: free tier (or larger paid windows) by
+                        # default, prepaid balance as the overflow path.
+                        tier = get_tier(active_tiers.get(key.user_id, DEFAULT_TIER))
+                        source = compute_source(
+                            tier,
+                            window_5h_usage.get(key.user_id, 0.0),
+                            weekly_usage.get(key.user_id, 0.0),
+                            balances.get(key.user_id, 0.0),
+                        )
+                        if source == "blocked":
                             continue
 
                     # chat keys and valid liberclaw/api keys pass through
@@ -520,12 +542,15 @@ class ApiKeyService:
                 db.add(usage)
                 await db.commit()
 
-                # Deduct credits from user's balance (skip for liberclaw and x402 keys)
+                # Deduct credits from user's balance (skip for liberclaw and x402 keys).
+                # Usage covered by a live tier window is NOT charged to prepaid — only
+                # overflow beyond the dual-window allowance draws down the balance.
                 if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_id:
-                    success = await CreditService.use_credits(api_key.user_id, credits_used)
-
-                    if not success:
-                        logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
+                    state = await get_allowance_state(db, api_key.user_id)
+                    if state.source != "tier":
+                        success = await CreditService.use_credits(api_key.user_id, credits_used)
+                        if not success:
+                            logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
 
                 return True
 

@@ -51,6 +51,12 @@ class SubscriptionResponse(BaseModel):
     cancel_at_period_end: bool = False
     pending_tier: str | None = None
     is_trial: bool = False
+    # Dual-window allowance snapshot (free tier by default, larger if subscribed).
+    window_5h_used: float = 0.0
+    window_5h_limit: float = 0.0
+    weekly_used: float = 0.0
+    weekly_limit: float = 0.0
+    prepaid_balance: float = 0.0
 
 
 class CancelResponse(BaseModel):

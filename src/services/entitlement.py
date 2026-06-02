@@ -100,6 +100,47 @@ async def _prepaid_balance(db: AsyncSession, user_id: uuid.UUID) -> float:
     return float(total or 0.0)
 
 
+async def usage_by_users(
+    db: AsyncSession, user_ids: set[uuid.UUID], cutoff: datetime
+) -> dict[uuid.UUID, float]:
+    """Batched ``api``-key credit usage per user since ``cutoff`` (avoids N+1 at the gateway)."""
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                ApiKeyDB.user_id,
+                sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
+            )
+            .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
+            .where(
+                ApiKeyDB.user_id.in_(user_ids),
+                ApiKeyDB.type == ApiKeyType.api,
+                InferenceCall.used_at >= cutoff,
+            )
+            .group_by(ApiKeyDB.user_id)
+        )
+    ).all()
+    return {row[0]: float(row[1]) for row in rows}
+
+
+async def active_tiers_by_users(
+    db: AsyncSession, user_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Batched active-subscription tier per user (absent => free)."""
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(PlanSubscription.user_id, PlanSubscription.tier).where(
+                PlanSubscription.user_id.in_(user_ids),
+                PlanSubscription.status == "active",
+            )
+        )
+    ).all()
+    return {row[0]: row[1] for row in rows}
+
+
 async def get_allowance_state(
     db: AsyncSession, user_id: uuid.UUID, now: datetime | None = None
 ) -> AllowanceState:
