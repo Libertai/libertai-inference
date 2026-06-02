@@ -64,11 +64,17 @@ from src.models.base import Base  # noqa: E402
 
 # Import every model module so Base.metadata knows all tables (mirrors alembic/env.py).
 import src.models.api_key  # noqa: E402,F401
+import src.models.auth_code  # noqa: E402,F401
 import src.models.chat_request  # noqa: E402,F401
 import src.models.credit_transaction  # noqa: E402,F401
 import src.models.inference_call  # noqa: E402,F401
 import src.models.liberclaw_user  # noqa: E402,F401
+import src.models.magic_link  # noqa: E402,F401
+import src.models.oauth_connection  # noqa: E402,F401
+import src.models.session  # noqa: E402,F401
 import src.models.user  # noqa: E402,F401
+import src.models.wallet_challenge  # noqa: E402,F401
+import src.models.wallet_connection  # noqa: E402,F401
 
 _engine = create_async_engine(make_url(TEST_DATABASE_URL).set(drivername="postgresql+psycopg"))
 
