@@ -8,8 +8,6 @@ from src.models.base import Base, AsyncSessionLocal
 if TYPE_CHECKING:
     from src.models.credit_transaction import CreditTransaction
     from src.models.api_key import ApiKey
-    from src.models.agent import Agent
-    from src.models.subscription import Subscription
 
 
 class User(Base):
@@ -22,10 +20,6 @@ class User(Base):
         "CreditTransaction", back_populates="user", cascade="all, delete-orphan"
     )
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
-    agents: Mapped[list["Agent"]] = relationship("Agent", back_populates="user", cascade="all, delete-orphan")
-    subscriptions: Mapped[list["Subscription"]] = relationship(
-        "Subscription", back_populates="user", cascade="all, delete-orphan"
-    )
 
     async def get_credit_balance(self) -> float:
         from src.models.credit_transaction import CreditTransaction, CreditTransactionStatus

@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, make_url
 from sqlalchemy import pool
 
-from src.models.agent import Agent  # noqa
-
 # Import all models that should be included in migrations
 from src.models.api_key import ApiKey  # noqa
 from src.models.base import Base  # Import the Base from your models
@@ -15,8 +13,6 @@ from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.inference_call import InferenceCall  # noqa
 from src.models.liberclaw_user import LiberclawUser  # noqa
-from src.models.subscription import Subscription  # noqa
-from src.models.subscription_transaction import SubscriptionTransaction  # noqa
 from src.models.user import User  # noqa
 
 # this is the Alembic Config object, which provides
