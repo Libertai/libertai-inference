@@ -31,9 +31,20 @@ from src.services.payments.base import PaymentProviderKind, UnsupportedCapabilit
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
+from src.utils.cron import scheduler
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+@scheduler.scheduled_job("interval", hours=1)
+async def expire_subscriptions() -> int:
+    """Downgrade subscriptions past their billing period (provider-agnostic, local-only)."""
+    async with AsyncSessionLocal() as db:
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        count = await manager.check_expirations()
+        await db.commit()
+    return count
 
 
 def _checkout_redirect() -> str:
