@@ -23,9 +23,11 @@ class ApiKey(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    user_address: Mapped[str | None] = mapped_column(
-        String, ForeignKey("users.address", ondelete="CASCADE"), nullable=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
+    # Legacy wallet address kept (no FK) for one release as a rollback hatch; identity is user_id.
+    user_address: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
@@ -49,6 +51,7 @@ class ApiKey(Base):
         self,
         key: str,
         name: str,
+        user_id: uuid.UUID | None = None,
         user_address: str | None = None,
         monthly_limit: float | None = None,
         type: ApiKeyType = ApiKeyType.api,
@@ -56,6 +59,7 @@ class ApiKey(Base):
     ):
         self.key = key
         self.name = name
+        self.user_id = user_id
         self.user_address = user_address
         self.monthly_limit = monthly_limit
         self.type = type
