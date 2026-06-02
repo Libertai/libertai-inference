@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta
 from typing import Annotated
 
@@ -8,6 +9,9 @@ from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel
 
 from src.config import config
+from src.models.base import AsyncSessionLocal
+from src.models.user import User
+from src.services.users import get_or_create_user_by_wallet, get_user_by_id
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -78,6 +82,76 @@ def verify_token(libertai_auth: str = Cookie(default=None)) -> TokenData:
 def get_current_address(token_data: Annotated[TokenData, Depends(verify_token)]) -> str:
     """Return the current wallet address from the token, formatted according to the chain."""
     return format_address(token_data.chain, token_data.address)
+
+
+def _extract_token(authorization: str | None, libertai_auth: str | None) -> str | None:
+    """Prefer an Authorization: Bearer header, fall back to the legacy cookie."""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return libertai_auth
+
+
+async def _resolve_user_from_token(token: str) -> User:
+    try:
+        payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication token has expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+
+    # New UUID-based token: sub is the user id.
+    try:
+        user_id: uuid.UUID | None = uuid.UUID(sub)
+    except (ValueError, AttributeError):
+        user_id = None
+
+    async with AsyncSessionLocal() as db:
+        if user_id is not None:
+            user = await get_user_by_id(db, user_id)
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials"
+                )
+            return user
+
+        # Legacy wallet token: sub is an address (+ optional chain claim). Resolve to its user,
+        # keeping pre-cutover console sessions alive.
+        chain_value = payload.get("chain")
+        try:
+            chain = LibertaiChain(chain_value) if chain_value else LibertaiChain.base
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid chain in token")
+        user = await get_or_create_user_by_wallet(db, format_address(chain, sub))
+        await db.commit()
+        return user
+
+
+async def get_current_user(
+    authorization: str | None = Header(default=None),
+    libertai_auth: str | None = Cookie(default=None),
+) -> User:
+    """Resolve the authenticated user from a Bearer/cookie JWT (UUID or legacy wallet token)."""
+    token = _extract_token(authorization, libertai_auth)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return await _resolve_user_from_token(token)
+
+
+async def get_optional_user(
+    authorization: str | None = Header(default=None),
+    libertai_auth: str | None = Cookie(default=None),
+) -> User | None:
+    token = _extract_token(authorization, libertai_auth)
+    if not token:
+        return None
+    try:
+        return await _resolve_user_from_token(token)
+    except HTTPException:
+        return None
 
 
 def verify_admin_token(x_admin_token: str = Header(...)) -> None:

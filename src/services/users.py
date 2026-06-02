@@ -1,8 +1,14 @@
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
+
+
+async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
+    return await db.get(User, user_id)
 
 
 def infer_chain(address: str) -> str:
