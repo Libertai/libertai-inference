@@ -84,23 +84,51 @@ async def verify_magic_link(
     return None
 
 
+def _build_email_html(link: str, code: str) -> str:
+    return (
+        "<h2>Sign in to LibertAI</h2>"
+        f'<p style="font-size: 24px; font-weight: bold; letter-spacing: 8px; text-align: center; '
+        f'margin: 20px 0;">{code}</p>'
+        '<p style="text-align: center; color: #666;">Enter this code in the app</p>'
+        '<p style="text-align: center; color: #666;">&mdash; or &mdash;</p>'
+        f'<p style="text-align: center;"><a href="{link}">Click here to sign in</a></p>'
+        "<p>This link and code expire in 15 minutes.</p>"
+        "<p>If you didn't request this, you can safely ignore this email.</p>"
+    )
+
+
+def _send_smtp(email: str, html: str) -> None:
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Your LibertAI sign-in link"
+    msg["From"] = config.SMTP_FROM
+    msg["To"] = email
+    msg.attach(MIMEText(html, "html"))
+
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT) as server:
+        if config.SMTP_USE_TLS:
+            server.starttls()
+        if config.SMTP_USER and config.SMTP_PASSWORD:
+            server.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        server.sendmail(config.SMTP_FROM, [email], msg.as_string())
+
+
 async def send_magic_link_email(email: str, token: str, code: str) -> None:
-    """Send the magic-link email via Resend. With no API key configured (dev/mock), just log it."""
+    """Send the magic-link email via SMTP. With no SMTP host configured (dev), log it instead."""
+    import asyncio
+
     link = f"{config.FRONTEND_URL}/auth/verify?token={token}"
-    if not config.RESEND_API_KEY:
+    if not config.SMTP_HOST:
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return
 
-    import httpx
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await client.post(
-            "https://api.resend.com/emails",
-            headers={"Authorization": f"Bearer {config.RESEND_API_KEY}"},
-            json={
-                "from": "LibertAI <noreply@libertai.io>",
-                "to": [email],
-                "subject": "Your LibertAI sign-in link",
-                "html": f'Sign in with code <b>{code}</b> or <a href="{link}">click here</a>.',
-            },
-        )
+    try:
+        await asyncio.to_thread(_send_smtp, email, _build_email_html(link, code))
+        logger.info(f"Magic-link email sent to {email} via SMTP")
+    except Exception as e:
+        # Don't surface SMTP errors to the caller (avoids leaking whether an email exists);
+        # the user can retry. The failure is logged for ops.
+        logger.error(f"SMTP send failed for {email}: {e}")

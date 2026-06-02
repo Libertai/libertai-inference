@@ -49,9 +49,14 @@ class _Config:
     GITHUB_CLIENT_ID: str
     GITHUB_CLIENT_SECRET: str
 
-    # Magic-link / email (Resend, sender domain libertai.io)
+    # Magic-link / email (SMTP; falls back to console logging when SMTP_HOST is unset)
     MAGIC_LINK_SECRET: str
-    RESEND_API_KEY: str | None
+    SMTP_HOST: str
+    SMTP_PORT: int
+    SMTP_USER: str
+    SMTP_PASSWORD: str
+    SMTP_FROM: str
+    SMTP_USE_TLS: bool
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
     ENCRYPTION_KEY: str
@@ -117,7 +122,12 @@ class _Config:
 
         # Magic-link / email
         self.MAGIC_LINK_SECRET = os.getenv("MAGIC_LINK_SECRET", "")
-        self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", None)
+        self.SMTP_HOST = os.getenv("SMTP_HOST", "")
+        self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        self.SMTP_USER = os.getenv("SMTP_USER", "")
+        self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+        self.SMTP_FROM = os.getenv("SMTP_FROM", "LibertAI <noreply@libertai.io>")
+        self.SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
 
         # Token encryption (Fernet)
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
