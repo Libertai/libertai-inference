@@ -1,0 +1,119 @@
+"""Subscription tier configuration (provider-agnostic).
+
+A tier defines two things:
+  1. Recurring **entitlement windows** (Phase 4) — a trailing-5h and trailing-7d
+     credit allowance that every user gets (even with no paid subscription, via
+     the ``free`` tier). Exhausting a window falls through to prepaid balance.
+  2. **Provider plan IDs** — the per-provider identifiers needed to open a
+     subscription checkout. Keyed by provider id so the same tier can be sold
+     through Revolut today and another fiat provider tomorrow without touching
+     the manager.
+
+All prices/windows/plan IDs here are placeholders until the Revolut product +
+final pricing are confirmed (see the plan's Unresolved Questions).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+DEFAULT_TIER = "free"
+DEFAULT_CURRENCY = "EUR"
+
+
+@dataclass(frozen=True)
+class TierConfig:
+    name: str
+    price_cents: int
+    currency: str
+    # Rolling-window allowances in credit units (USD-equivalent), consumed by the
+    # Phase 4 entitlement service. ``free`` gets small windows; paid tiers larger.
+    window_5h_credits: float
+    weekly_credits: float
+    # provider id -> identifiers required to open a checkout on that provider.
+    # e.g. {"revolut": {"plan_id": "...", "variation_id": "..."}}
+    provider_plan_ids: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    @property
+    def is_paid(self) -> bool:
+        return self.price_cents > 0
+
+
+# NOTE: placeholder plan IDs (ported from the liberclaw Revolut dashboard). Replace
+# with the LibertAI Revolut product's real plan/variation UUIDs before going live.
+SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
+    "free": TierConfig(
+        name="free",
+        price_cents=0,
+        currency=DEFAULT_CURRENCY,
+        window_5h_credits=0.5,
+        weekly_credits=2.0,
+        provider_plan_ids={},
+    ),
+    "starter": TierConfig(
+        name="starter",
+        price_cents=700,
+        currency=DEFAULT_CURRENCY,
+        window_5h_credits=2.0,
+        weekly_credits=10.0,
+        provider_plan_ids={
+            "revolut": {
+                "plan_id": "a9a0b97f-753f-4e13-ac60-f86733809dce",
+                "variation_id": "88e34b68-abea-497a-9743-01874274dcdf",
+            }
+        },
+    ),
+    "pro": TierConfig(
+        name="pro",
+        price_cents=1900,
+        currency=DEFAULT_CURRENCY,
+        window_5h_credits=8.0,
+        weekly_credits=40.0,
+        provider_plan_ids={
+            "revolut": {
+                "plan_id": "c4c23aef-c39d-419d-99b6-f84034102615",
+                "variation_id": "2bdb31f1-78d5-48ad-88eb-c9c41fac57ef",
+            }
+        },
+    ),
+    "team": TierConfig(
+        name="team",
+        price_cents=4900,
+        currency=DEFAULT_CURRENCY,
+        window_5h_credits=25.0,
+        weekly_credits=120.0,
+        provider_plan_ids={
+            "revolut": {
+                "plan_id": "d66f42c8-5b08-4dc0-9bd1-8f17f3f70b7b",
+                "variation_id": "71a36c44-4277-495d-9258-6eba1c325559",
+            }
+        },
+    ),
+}
+
+# Higher index = higher tier (used for up/downgrade validation).
+TIER_ORDER: dict[str, int] = {name: i for i, name in enumerate(SUBSCRIPTION_TIERS)}
+PAID_TIERS: set[str] = {name for name, cfg in SUBSCRIPTION_TIERS.items() if cfg.is_paid}
+
+
+def get_tier(tier: str) -> TierConfig:
+    cfg = SUBSCRIPTION_TIERS.get(tier)
+    if cfg is None:
+        raise ValueError(f"Unknown tier: {tier}")
+    return cfg
+
+
+def get_provider_plan(tier: str, provider: str) -> dict[str, str]:
+    """Return the {plan_id, variation_id} for a tier on a given provider."""
+    plan = get_tier(tier).provider_plan_ids.get(provider)
+    if not plan:
+        raise ValueError(f"Tier {tier!r} is not sold through provider {provider!r}")
+    return plan
+
+
+def is_upgrade(current_tier: str, new_tier: str) -> bool:
+    return TIER_ORDER.get(new_tier, 0) > TIER_ORDER.get(current_tier, 0)
+
+
+def is_downgrade(current_tier: str, new_tier: str) -> bool:
+    return TIER_ORDER.get(new_tier, 0) < TIER_ORDER.get(current_tier, 0)
