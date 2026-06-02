@@ -16,6 +16,7 @@ from sqlalchemy import make_url
 
 PRE_MIGRATION_REV = "2bccd793c8f4"  # head before Migration A (drop agents/subscriptions)
 MIGRATION_A_REV = "ce9e82ee761a"
+MIGRATION_B_REV = "491dd7c0450b"
 
 BASE_ADDR = "0xAbC0000000000000000000000000000000000001"
 SOL_ADDR = "SoLanaTestAddr1111111111111111111111111111"
@@ -109,3 +110,34 @@ def test_migration_a_backfills_identity(scratch_db):
             "WHERE c.user_id <> u.id"
         ).fetchone()[0]
         assert mismatched == 0
+
+
+def test_migration_b_swaps_primary_key(scratch_db):
+    # Run the whole chain through Migration B.
+    _alembic_upgrade(MIGRATION_B_REV)
+
+    with psycopg.connect(_libpq_conninfo(scratch_db), autocommit=True) as conn:
+        # id is the PK now: two address-less (email) users can coexist.
+        conn.execute(
+            "INSERT INTO users (id, email, email_verified, created_at) "
+            "VALUES (gen_random_uuid(), 'a@example.com', false, now())"
+        )
+        conn.execute(
+            "INSERT INTO users (id, email, email_verified, created_at) "
+            "VALUES (gen_random_uuid(), 'b@example.com', false, now())"
+        )
+
+        # credit_transactions.user_id is NOT NULL.
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            conn.execute(
+                "INSERT INTO credit_transactions (id, amount, amount_left, provider, created_at, is_active, status) "
+                "VALUES (gen_random_uuid(), 1, 1, 'thirdweb', now(), true, 'completed')"
+            )
+
+        # credit_transactions.user_id FK is enforced against users.id.
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute(
+                "INSERT INTO credit_transactions "
+                "(id, user_id, amount, amount_left, provider, created_at, is_active, status) "
+                "VALUES (gen_random_uuid(), gen_random_uuid(), 1, 1, 'thirdweb', now(), true, 'completed')"
+            )
