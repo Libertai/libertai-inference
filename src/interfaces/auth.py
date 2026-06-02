@@ -42,3 +42,43 @@ class AuthLoginResponse(BaseModel):
 class AuthStatusResponse(BaseModel):
     authenticated: bool
     address: str | None = None
+
+
+# --- UUID-identity auth (email / OAuth / wallet challenge / refresh) ---
+
+
+class TokenPairResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class WalletChallengeRequest(BaseModel):
+    address: str
+
+
+class WalletChallengeResponse(BaseModel):
+    message: str
+
+
+class WalletVerifyRequest(BaseModel):
+    address: str
+    signature: str
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+
+
+class VerifyMagicLinkRequest(BaseModel):
+    token: str | None = None
+    email: str | None = None
+    code: str | None = None
+
+
+class ExchangeRequest(BaseModel):
+    code: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
