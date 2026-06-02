@@ -43,6 +43,31 @@ class _Config:
     THIRDWEB_SECRET_KEY: str
     THIRDWEB_VAULT_ACCESS_TOKEN: str
 
+    # OAuth (apps registered under the LibertAI org / Google Cloud project)
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    GITHUB_CLIENT_ID: str
+    GITHUB_CLIENT_SECRET: str
+
+    # Magic-link / email (Resend, sender domain libertai.io)
+    MAGIC_LINK_SECRET: str
+    RESEND_API_KEY: str | None
+
+    # Token encryption (Fernet); _PREVIOUS enables key rotation
+    ENCRYPTION_KEY: str
+    ENCRYPTION_KEY_PREVIOUS: str | None
+
+    # URLs + token lifetimes
+    FRONTEND_URL: str
+    API_URL: str
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int
+
+    # Provider-agnostic fiat payments (Revolut first)
+    REVOLUT_SECRET_KEY: str
+    REVOLUT_WEBHOOK_SECRET: str
+    REVOLUT_API_URL: str
+    REVOLUT_API_VERSION: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
@@ -83,6 +108,31 @@ class _Config:
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
         self.THIRDWEB_SECRET_KEY = os.getenv("THIRDWEB_SECRET_KEY", "")
         self.THIRDWEB_VAULT_ACCESS_TOKEN = os.getenv("THIRDWEB_VAULT_ACCESS_TOKEN", "")
+
+        # OAuth
+        self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+        self.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        self.GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+        self.GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+
+        # Magic-link / email
+        self.MAGIC_LINK_SECRET = os.getenv("MAGIC_LINK_SECRET", "")
+        self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", None)
+
+        # Token encryption (Fernet)
+        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+        self.ENCRYPTION_KEY_PREVIOUS = os.getenv("ENCRYPTION_KEY_PREVIOUS", None)
+
+        # URLs + token lifetimes
+        self.FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+        self.API_URL = os.getenv("API_URL", "")
+        self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+
+        # Payments (Revolut)
+        self.REVOLUT_SECRET_KEY = os.getenv("REVOLUT_SECRET_KEY", "")
+        self.REVOLUT_WEBHOOK_SECRET = os.getenv("REVOLUT_WEBHOOK_SECRET", "")
+        self.REVOLUT_API_URL = os.getenv("REVOLUT_API_URL", "https://merchant.revolut.com")
+        self.REVOLUT_API_VERSION = os.getenv("REVOLUT_API_VERSION", "2024-09-01")
 
 
 config = _Config()
