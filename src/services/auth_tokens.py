@@ -40,6 +40,7 @@ def create_refresh_token(user_id: uuid.UUID, session_id: uuid.UUID) -> str:
             "sub": str(user_id),
             "sid": str(session_id),
             "type": REFRESH,
+            "jti": str(uuid.uuid4()),  # unique per token so rotation always yields a distinct token
             "iat": now,
             "exp": now + timedelta(days=config.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
         }

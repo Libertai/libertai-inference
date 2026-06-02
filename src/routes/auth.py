@@ -1,7 +1,15 @@
+import hashlib
+import secrets
+import uuid
+from datetime import datetime, timedelta
+
 import fastapi
-from fastapi import APIRouter, HTTPException, status, Cookie
+import jwt
+from fastapi import APIRouter, Cookie, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from libertai_utils.chains.ethereum import format_eth_address
 from libertai_utils.chains.index import is_signature_valid
+from sqlalchemy import select
 
 from src.config import config
 from src.interfaces.auth import (
@@ -10,13 +18,51 @@ from src.interfaces.auth import (
     AuthMessageRequest,
     AuthMessageResponse,
     AuthStatusResponse,
+    EmailLoginRequest,
+    ExchangeRequest,
+    RefreshRequest,
+    TokenPairResponse,
+    VerifyMagicLinkRequest,
+    WalletChallengeRequest,
+    WalletChallengeResponse,
+    WalletVerifyRequest,
 )
-from src.services.auth import create_access_token, verify_token
+from src.models.auth_code import AuthCode
+from src.models.base import AsyncSessionLocal
+from src.models.session import Session
+from src.models.user import User
+from src.services import magic_link, oauth, wallet_auth
+from src.services.auth import create_access_token, get_current_user, verify_token
+from src.services.auth_tokens import REFRESH, create_access_token as create_user_access_token, create_refresh_token, decode_token
+from src.services.users import get_or_create_user_by_email, get_or_create_user_by_oauth, get_or_create_user_by_wallet, link_wallet
+from src.utils.encryption import decrypt, encrypt
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+_AUTH_CODE_TTL_SECONDS = 60
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+async def _issue_token_pair(db, user: User, device_info: str | None = None) -> TokenPairResponse:
+    """Create a Session + access/refresh pair, storing the refresh hash for rotation."""
+    session = Session(
+        user_id=user.id,
+        refresh_token_hash="pending",
+        expires_at=datetime.now() + timedelta(days=config.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+        device_info=device_info,
+    )
+    db.add(session)
+    await db.flush()
+    refresh = create_refresh_token(user.id, session.id)
+    session.refresh_token_hash = _hash(refresh)
+    await db.flush()
+    return TokenPairResponse(access_token=create_user_access_token(user.id), refresh_token=refresh)
 
 
 # TODO: put this in a better place
@@ -68,3 +114,178 @@ async def check_auth_status(libertai_auth: str = Cookie(default=None)) -> AuthSt
     except HTTPException:
         # If token verification fails, return not authenticated
         return AuthStatusResponse(authenticated=False)
+
+
+# --- Wallet (EVM) challenge/verify ---
+
+
+@router.post("/wallet/challenge")
+async def wallet_challenge(request: WalletChallengeRequest) -> WalletChallengeResponse:
+    """Issue a nonce message for an EVM wallet to sign."""
+    async with AsyncSessionLocal() as db:
+        message = await wallet_auth.create_challenge(db, request.address)
+        await db.commit()
+    return WalletChallengeResponse(message=message)
+
+
+@router.post("/wallet/verify")
+async def wallet_verify(request: WalletVerifyRequest) -> TokenPairResponse:
+    """Verify a signed challenge and return a token pair (creates/links the wallet user)."""
+    async with AsyncSessionLocal() as db:
+        if not await wallet_auth.verify_signature(db, request.address, request.signature):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+        user = await get_or_create_user_by_wallet(db, format_eth_address(request.address), "base")
+        pair = await _issue_token_pair(db, user)
+        await db.commit()
+    return pair
+
+
+# --- Email magic link ---
+
+
+@router.post("/login/email", status_code=status.HTTP_204_NO_CONTENT)
+async def login_email(request: EmailLoginRequest) -> None:
+    """Send a magic-link email (token + 6-digit code)."""
+    async with AsyncSessionLocal() as db:
+        token, code = await magic_link.create_magic_link(db, request.email)
+        await db.commit()
+    await magic_link.send_magic_link_email(request.email, token, code)
+
+
+@router.post("/verify-magic-link")
+async def verify_magic_link_route(request: VerifyMagicLinkRequest) -> TokenPairResponse:
+    """Verify a magic link (by token or email+code) and return a token pair."""
+    async with AsyncSessionLocal() as db:
+        email = await magic_link.verify_magic_link(
+            db, token=request.token, email=request.email, code=request.code
+        )
+        if email is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
+        user, _ = await get_or_create_user_by_email(db, email)
+        pair = await _issue_token_pair(db, user)
+        await db.commit()
+    return pair
+
+
+# --- OAuth (Google / GitHub) ---
+
+
+@router.get("/oauth/{provider}")
+async def oauth_start(provider: str) -> RedirectResponse:
+    """Redirect to the provider's consent screen."""
+    if provider not in oauth.SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown provider")
+    state = secrets.token_urlsafe(16)
+    redirect_uri = f"{config.API_URL}/auth/oauth/{provider}/callback"
+    response = RedirectResponse(oauth.get_authorize_url(provider, state, redirect_uri))
+    response.set_cookie("oauth_state", state, httponly=True, max_age=600, samesite="lax", secure=True)
+    return response
+
+
+@router.get("/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: str, code: str, state: str, oauth_state: str = Cookie(default=None)
+) -> RedirectResponse:
+    """Provider redirect target: verify state, mint tokens, hand back a one-time code to the frontend."""
+    if provider not in oauth.SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown provider")
+    if not oauth_state or not secrets.compare_digest(oauth_state, state):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OAuth state")
+
+    redirect_uri = f"{config.API_URL}/auth/oauth/{provider}/callback"
+    info = await oauth.exchange_code_for_user_info(provider, code, redirect_uri)
+
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_oauth(db, info)
+        pair = await _issue_token_pair(db, user)
+        one_time_code = secrets.token_urlsafe(32)
+        db.add(
+            AuthCode(
+                code_hash=_hash(one_time_code),
+                user_id=user.id,
+                access_token=encrypt(pair.access_token),
+                refresh_token=encrypt(pair.refresh_token),
+                expires_at=datetime.now() + timedelta(seconds=_AUTH_CODE_TTL_SECONDS),
+            )
+        )
+        await db.commit()
+
+    response = RedirectResponse(f"{config.FRONTEND_URL}/auth/callback?code={one_time_code}")
+    response.delete_cookie("oauth_state")
+    return response
+
+
+@router.post("/exchange")
+async def exchange_code(request: ExchangeRequest) -> TokenPairResponse:
+    """Exchange a one-time OAuth code for the token pair (single-use)."""
+    async with AsyncSessionLocal() as db:
+        auth_code = (
+            await db.execute(select(AuthCode).where(AuthCode.code_hash == _hash(request.code)))
+        ).scalars().first()
+        if auth_code is None or auth_code.expires_at < datetime.now():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+        pair = TokenPairResponse(
+            access_token=decrypt(auth_code.access_token), refresh_token=decrypt(auth_code.refresh_token)
+        )
+        await db.delete(auth_code)
+        await db.commit()
+    return pair
+
+
+# --- Refresh / logout ---
+
+
+@router.post("/refresh")
+async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
+    """Rotate a refresh token (one-time use per token) and return a fresh pair."""
+    try:
+        payload = decode_token(request.refresh_token, REFRESH)
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    sid = payload.get("sid")
+    async with AsyncSessionLocal() as db:
+        session = await db.get(Session, uuid.UUID(sid)) if sid else None
+        if session is None or session.revoked_at is not None or session.expires_at < datetime.now():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+        if not secrets.compare_digest(session.refresh_token_hash, _hash(request.refresh_token)):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        user = await db.get(User, session.user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        new_refresh = create_refresh_token(user.id, session.id)
+        session.refresh_token_hash = _hash(new_refresh)
+        await db.flush()
+        access = create_user_access_token(user.id)
+        await db.commit()
+    return TokenPairResponse(access_token=access, refresh_token=new_refresh)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(request: RefreshRequest) -> None:
+    """Revoke the session backing a refresh token."""
+    try:
+        payload = decode_token(request.refresh_token, REFRESH)
+    except jwt.PyJWTError:
+        return
+    sid = payload.get("sid")
+    if not sid:
+        return
+    async with AsyncSessionLocal() as db:
+        session = await db.get(Session, uuid.UUID(sid))
+        if session is not None and session.revoked_at is None:
+            session.revoked_at = datetime.now()
+            await db.commit()
+
+
+# --- Account linking (logged-in) ---
+
+
+@router.post("/link/wallet", status_code=status.HTTP_204_NO_CONTENT)
+async def link_wallet_route(request: WalletVerifyRequest, user: User = Depends(get_current_user)) -> None:
+    """Attach a verified EVM wallet to the logged-in user (e.g. a fiat user adding crypto)."""
+    async with AsyncSessionLocal() as db:
+        if not await wallet_auth.verify_signature(db, request.address, request.signature):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+        await link_wallet(db, user, format_eth_address(request.address), "base")
+        await db.commit()
