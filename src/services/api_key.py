@@ -18,7 +18,8 @@ from src.services.entitlement import (
     active_tiers_by_users,
     compute_source,
     get_allowance_state,
-    usage_by_users,
+    open_windows,
+    window_usage_by_users,
 )
 from src.subscription_tiers import DEFAULT_TIER, get_tier
 from src.utils.logger import setup_logger
@@ -424,10 +425,11 @@ class ApiKeyService:
                     ).all()
                     balances = {row[0]: float(row[1]) for row in balance_rows}
 
-                # Pre-fetch dual-window entitlement inputs (5h + weekly usage, active tier)
-                # for all api-type users, so the per-key loop is pure computation.
-                window_5h_usage = await usage_by_users(db, user_ids, datetime.now() - WINDOW_5H)
-                weekly_usage = await usage_by_users(db, user_ids, datetime.now() - WINDOW_WEEKLY)
+                # Pre-fetch dual fixed-window entitlement inputs (usage within each user's
+                # active 5h + weekly window, active tier) so the per-key loop is pure computation.
+                now = datetime.now()
+                window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
+                weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
                 active_tiers = await active_tiers_by_users(db, user_ids)
 
                 # Pre-fetch current month usage for API keys with monthly limits
@@ -548,7 +550,9 @@ class ApiKeyService:
                     logger.warning(f"API key {key} not found")
                     return False
 
-                # Log usage with the API key ID
+                # Anchor the usage row + windows to the same instant so this call counts
+                # in the window it opens (avoids python/DB clock skew).
+                now = datetime.now()
                 usage = InferenceCall(
                     api_key_id=api_key.id,
                     credits_used=credits_used,
@@ -558,16 +562,28 @@ class ApiKeyService:
                     cached_tokens=cached_tokens,
                     image_count=image_count,
                 )
+                usage.used_at = now
                 db.add(usage)
+
+                # Chargeable keys (not liberclaw/x402) with an owner accrue against fixed windows.
+                chargeable_user_id = (
+                    api_key.user_id
+                    if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402)
+                    else None
+                )
+                if chargeable_user_id is not None:
+                    # Open/reset this user's fixed windows so usage accrues against them.
+                    await open_windows(db, chargeable_user_id, now)
+
                 await db.commit()
 
                 # Deduct credits from user's balance (skip for liberclaw and x402 keys).
                 # Usage covered by a live tier window is NOT charged to prepaid — only
-                # overflow beyond the dual-window allowance draws down the balance.
-                if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and api_key.user_id:
-                    state = await get_allowance_state(db, api_key.user_id)
+                # overflow beyond the fixed-window allowance draws down the balance.
+                if chargeable_user_id is not None:
+                    state = await get_allowance_state(db, chargeable_user_id, now)
                     if state.source != "tier":
-                        success = await CreditService.use_credits(api_key.user_id, credits_used)
+                        success = await CreditService.use_credits(chargeable_user_id, credits_used)
                         if not success:
                             logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
 
