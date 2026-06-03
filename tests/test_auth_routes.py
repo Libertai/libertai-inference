@@ -67,6 +67,22 @@ async def test_email_magic_link_verify(async_client, monkeypatch):
     assert resp.json()["access_token"]
 
 
+async def test_me_returns_user_profile(async_client):
+    from src.services.auth_tokens import create_access_token
+
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, "me-route@example.com")
+        await db.commit()
+        token = create_access_token(user.id)
+
+    resp = await async_client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "me-route@example.com"
+
+    # Unauthenticated -> 401.
+    assert (await async_client.get("/auth/me")).status_code == 401
+
+
 async def test_oauth_exchange_one_time_code(async_client, monkeypatch):
     monkeypatch.setattr(config, "ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(config, "ENCRYPTION_KEY_PREVIOUS", None)

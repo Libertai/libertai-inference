@@ -18,6 +18,7 @@ from src.interfaces.auth import (
     AuthMessageRequest,
     AuthMessageResponse,
     AuthStatusResponse,
+    CurrentUserResponse,
     EmailLoginRequest,
     ExchangeRequest,
     RefreshRequest,
@@ -114,6 +115,18 @@ async def check_auth_status(libertai_auth: str = Cookie(default=None)) -> AuthSt
     except HTTPException:
         # If token verification fails, return not authenticated
         return AuthStatusResponse(authenticated=False)
+
+
+@router.get("/me")
+async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
+    """Return the authenticated user's profile (email/OAuth or wallet)."""
+    return CurrentUserResponse(
+        id=str(user.id),
+        email=user.email,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+        address=user.address,
+    )
 
 
 # --- Wallet (EVM) challenge/verify ---

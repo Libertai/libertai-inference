@@ -76,6 +76,14 @@ class VerifyMagicLinkRequest(BaseModel):
     code: str | None = None
 
 
+class CurrentUserResponse(BaseModel):
+    id: str
+    email: str | None = None
+    display_name: str | None = None
+    avatar_url: str | None = None
+    address: str | None = None
+
+
 class ExchangeRequest(BaseModel):
     code: str
 
