@@ -61,6 +61,20 @@ async def test_add_credits_for_user_adds_to_same_balance():
     assert await user.get_credit_balance() == 15.0
 
 
+async def test_use_credits_reports_full_vs_insufficient():
+    address = "0xFee1000000000000000000000000000000000004"
+    assert await CreditService.add_credits(CreditTransactionProvider.thirdweb, address, 3.0)
+    user = await _user_for_address(address)
+
+    # Full deduction within balance -> True.
+    assert await CreditService.use_credits(user.id, 1.0) is True
+    assert await user.get_credit_balance() == 2.0
+
+    # Overdraft -> False, and the remaining balance is drained to 0.
+    assert await CreditService.use_credits(user.id, 5.0) is False
+    assert await user.get_credit_balance() == 0.0
+
+
 async def test_create_api_key_sets_user_id():
     address = "0xD00D000000000000000000000000000000000003"
     async with AsyncSessionLocal() as db:

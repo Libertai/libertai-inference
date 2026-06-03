@@ -119,7 +119,12 @@ class CreditService:
             raise
 
     @staticmethod
-    async def use_credits(user_id: uuid.UUID, amount: float):
+    async def use_credits(user_id: uuid.UUID, amount: float) -> bool:
+        """Deduct credits from a user's active transactions (oldest-expiring first).
+
+        Returns ``True`` if the full amount was deducted, ``False`` if the balance was
+        insufficient (the available credits are still drained to 0 in that case).
+        """
         logger.debug(f"Using {amount} credits from user {user_id}")
 
         try:
@@ -148,13 +153,14 @@ class CreditService:
                     if remaining_amount <= 0:
                         break
 
-                if remaining_amount > 0:
+                fully_deducted = remaining_amount <= 0
+                if not fully_deducted:
                     logger.warning(
                         f"Insufficient credits for user {user_id}: requested {amount}, missing {remaining_amount}"
                     )
 
                 await db.commit()
-                return True
+                return fully_deducted
         except Exception as e:
             logger.error(f"Error using credits from user {user_id}: {str(e)}", exc_info=True)
             raise
