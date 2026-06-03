@@ -14,16 +14,25 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.api_key import ApiKeyService
+from src.services.entitlement import WINDOW_5H
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _setup(*, usage=None, usage_age_hours=1.0, prepaid=0.0, tier=None):
-    """Create a user + active api key with optional usage/prepaid/subscription. Returns (user_id, key_str)."""
+async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
+    """Create a user + api key with optional usage in an active/expired 5h window.
+
+    ``window`` controls the 5h window state when ``usage`` is given:
+      - "active":  window open now, usage counts against the allowance
+      - "expired": window already ended, so the usage has reset to 0
+    Returns (user_id, key_str).
+    """
+    now = datetime.now()
     async with AsyncSessionLocal() as db:
         user = User(email=f"enf-{uuid.uuid4().hex}@example.com", email_verified=True)
         db.add(user)
@@ -32,8 +41,13 @@ async def _setup(*, usage=None, usage_age_hours=1.0, prepaid=0.0, tier=None):
         db.add(key)
         await db.flush()
         if usage:
+            if window == "active":
+                started, expires, used_at = now - timedelta(hours=1), now + timedelta(hours=4), now - timedelta(minutes=30)
+            else:  # expired
+                started, expires, used_at = now - timedelta(hours=6), now - timedelta(hours=1), now - timedelta(hours=5)
+            db.add(EntitlementWindow(user_id=user.id, kind=WINDOW_5H, started_at=started, expires_at=expires))
             call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m")
-            call.used_at = datetime.now() - timedelta(hours=usage_age_hours)
+            call.used_at = used_at
             db.add(call)
         if prepaid:
             db.add(
@@ -52,6 +66,7 @@ async def _cleanup(user_id):
     async with AsyncSessionLocal() as db:
         from sqlalchemy import delete
 
+        await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user_id))
         await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id == user_id))
         await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
         # inference_calls cascade via api_keys FK; delete keys then user.
@@ -69,15 +84,15 @@ async def test_free_key_included_within_window():
 
 
 async def test_free_key_excluded_when_window_exhausted_no_prepaid():
-    user_id, key = await _setup(usage=0.5, usage_age_hours=1.0)  # free 5h limit is 0.5
+    user_id, key = await _setup(usage=0.5, window="active")  # free 5h limit is 0.5
     try:
         assert key not in await ApiKeyService.get_admin_all_api_keys()
     finally:
         await _cleanup(user_id)
 
 
-async def test_key_returns_after_window_rolls():
-    user_id, key = await _setup(usage=0.5, usage_age_hours=6.0)  # usage older than 5h window
+async def test_key_returns_after_window_resets():
+    user_id, key = await _setup(usage=0.5, window="expired")  # window ended -> usage reset to 0
     try:
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:
@@ -85,7 +100,7 @@ async def test_key_returns_after_window_rolls():
 
 
 async def test_paid_tier_gets_larger_window():
-    user_id, key = await _setup(usage=0.5, usage_age_hours=1.0, tier="pro")  # exhausts free, fine for pro
+    user_id, key = await _setup(usage=0.5, window="active", tier="pro")  # exhausts free, fine for pro
     try:
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:
@@ -93,7 +108,7 @@ async def test_paid_tier_gets_larger_window():
 
 
 async def test_prepaid_overflow_keeps_key_included():
-    user_id, key = await _setup(usage=0.5, usage_age_hours=1.0, prepaid=5.0)
+    user_id, key = await _setup(usage=0.5, window="active", prepaid=5.0)
     try:
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:

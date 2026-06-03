@@ -71,6 +71,7 @@ import src.models.inference_call  # noqa: E402,F401
 import src.models.liberclaw_user  # noqa: E402,F401
 import src.models.magic_link  # noqa: E402,F401
 import src.models.oauth_connection  # noqa: E402,F401
+import src.models.entitlement_window  # noqa: E402,F401
 import src.models.plan_subscription  # noqa: E402,F401
 import src.models.plan_subscription_event  # noqa: E402,F401
 import src.models.session  # noqa: E402,F401

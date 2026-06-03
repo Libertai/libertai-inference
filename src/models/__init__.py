@@ -23,6 +23,9 @@ from src.models.wallet_challenge import WalletChallenge
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 
+# Entitlement
+from src.models.entitlement_window import EntitlementWindow
+
 # This ensures all models are loaded and SQLAlchemy can properly establish relationships
 __all__ = [
     "Base",
@@ -40,4 +43,5 @@ __all__ = [
     "WalletChallenge",
     "PlanSubscription",
     "PlanSubscriptionEvent",
+    "EntitlementWindow",
 ]

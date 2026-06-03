@@ -1,9 +1,13 @@
-"""Dual-window entitlement: a trailing-5h and trailing-7d credit allowance.
+"""Dual fixed-window entitlement: a 5-hour and a weekly allowance that reset on expiry.
 
-Every user gets the ``free`` tier's windows by default; an active paid
-subscription grants larger windows. When a window is exhausted, usage falls
-through to prepaid balance (top-ups / on-chain credits). A user is allowed to
-make inference calls while *either* path has room.
+Each window is **fixed**, not rolling: it opens when the user sends a message (via
+``open_windows``), accumulates usage against the tier limit for a fixed duration,
+then resets to empty all at once when it expires — the next message opens a fresh
+window. (Contrast with a rolling window, where old usage gradually ages out.)
+
+Every user gets the ``free`` tier's windows by default; an active paid subscription
+grants larger ones. When a window is exhausted, usage falls through to prepaid
+balance. A user is allowed while *either* path has room.
 
 This is the single source of truth consumed by both the gateway chokepoint
 (``api_key.get_admin_all_api_keys`` / ``register_inference_call``) and the
@@ -16,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
 
@@ -24,6 +28,7 @@ from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionStatus
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.credit_transaction import CreditTransaction
+from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.subscription_tiers import DEFAULT_TIER, TierConfig, get_tier
@@ -32,8 +37,13 @@ from src.subscription_tiers import DEFAULT_TIER, TierConfig, get_tier
 # are exhausted (matches the legacy gateway threshold).
 PREPAID_MIN = 0.02
 
-WINDOW_5H = timedelta(hours=5)
-WINDOW_WEEKLY = timedelta(days=7)
+# Fixed window kinds and their durations.
+WINDOW_5H = "5h"
+WINDOW_WEEKLY = "weekly"
+WINDOW_DURATIONS: dict[str, timedelta] = {
+    WINDOW_5H: timedelta(hours=5),
+    WINDOW_WEEKLY: timedelta(days=7),
+}
 
 
 @dataclass
@@ -46,7 +56,7 @@ class AllowanceState:
     weekly_limit: float
     prepaid_balance: float
     source: str  # "tier" | "prepaid" | "blocked"
-    resets_at: datetime | None  # when the binding tier window next frees up
+    resets_at: datetime | None  # when the 5h window resets (None if no active window)
 
 
 def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepaid: float) -> str:
@@ -57,6 +67,39 @@ def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepa
     if prepaid >= PREPAID_MIN:
         return "prepaid"
     return "blocked"
+
+
+async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | None = None) -> None:
+    """Ensure both fixed windows are open for a user sending a message.
+
+    Creates a window if none exists, or resets an expired one to start now. Active
+    windows are left untouched. Flushes; the caller controls the commit.
+    """
+    now = now or datetime.now()
+    for kind, duration in WINDOW_DURATIONS.items():
+        window = (
+            await db.execute(
+                select(EntitlementWindow)
+                .where(EntitlementWindow.user_id == user_id, EntitlementWindow.kind == kind)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if window is None:
+            db.add(EntitlementWindow(user_id=user_id, kind=kind, started_at=now, expires_at=now + duration))
+        elif window.expires_at <= now:
+            window.started_at = now
+            window.expires_at = now + duration
+        # else: still active — leave it.
+    await db.flush()
+
+
+async def _active_window(db: AsyncSession, user_id: uuid.UUID, kind: str, now: datetime) -> EntitlementWindow | None:
+    window = (
+        await db.execute(
+            select(EntitlementWindow).where(EntitlementWindow.user_id == user_id, EntitlementWindow.kind == kind)
+        )
+    ).scalar_one_or_none()
+    return window if window and window.expires_at > now else None
 
 
 async def get_active_tier(db: AsyncSession, user_id: uuid.UUID) -> str:
@@ -100,10 +143,13 @@ async def _prepaid_balance(db: AsyncSession, user_id: uuid.UUID) -> float:
     return float(total or 0.0)
 
 
-async def usage_by_users(
-    db: AsyncSession, user_ids: set[uuid.UUID], cutoff: datetime
+async def window_usage_by_users(
+    db: AsyncSession, user_ids: set[uuid.UUID], kind: str, now: datetime
 ) -> dict[uuid.UUID, float]:
-    """Batched ``api``-key credit usage per user since ``cutoff`` (avoids N+1 at the gateway)."""
+    """Batched usage within each user's *active* window of ``kind`` (avoids N+1 at the gateway).
+
+    Users with no active window are absent from the result (treated as 0 used).
+    """
     if not user_ids:
         return {}
     rows = (
@@ -113,10 +159,18 @@ async def usage_by_users(
                 sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
             )
             .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
+            .join(
+                EntitlementWindow,
+                and_(
+                    EntitlementWindow.user_id == ApiKeyDB.user_id,
+                    EntitlementWindow.kind == kind,
+                ),
+            )
             .where(
                 ApiKeyDB.user_id.in_(user_ids),
                 ApiKeyDB.type == ApiKeyType.api,
-                InferenceCall.used_at >= cutoff,
+                EntitlementWindow.expires_at > now,
+                InferenceCall.used_at >= EntitlementWindow.started_at,
             )
             .group_by(ApiKeyDB.user_id)
         )
@@ -124,9 +178,7 @@ async def usage_by_users(
     return {row[0]: float(row[1]) for row in rows}
 
 
-async def active_tiers_by_users(
-    db: AsyncSession, user_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, str]:
+async def active_tiers_by_users(db: AsyncSession, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
     """Batched active-subscription tier per user (absent => free)."""
     if not user_ids:
         return {}
@@ -147,13 +199,13 @@ async def get_allowance_state(
     now = now or datetime.now()
     tier = get_tier(await get_active_tier(db, user_id))
 
-    usage_5h = await _usage_since(db, user_id, now - WINDOW_5H)
-    usage_weekly = await _usage_since(db, user_id, now - WINDOW_WEEKLY)
+    window_5h = await _active_window(db, user_id, WINDOW_5H, now)
+    window_weekly = await _active_window(db, user_id, WINDOW_WEEKLY, now)
+    usage_5h = await _usage_since(db, user_id, window_5h.started_at) if window_5h else 0.0
+    usage_weekly = await _usage_since(db, user_id, window_weekly.started_at) if window_weekly else 0.0
     prepaid = await _prepaid_balance(db, user_id)
 
     source = compute_source(tier, usage_5h, usage_weekly, prepaid)
-    # Best-effort reset: the 5h window is the most frequently binding one.
-    resets_at = now + WINDOW_5H if source != "tier" else None
 
     return AllowanceState(
         allowed=source != "blocked",
@@ -164,5 +216,5 @@ async def get_allowance_state(
         weekly_limit=tier.weekly_credits,
         prepaid_balance=prepaid,
         source=source,
-        resets_at=resets_at,
+        resets_at=window_5h.expires_at if window_5h else None,
     )
