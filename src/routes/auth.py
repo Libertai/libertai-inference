@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import fastapi
 import jwt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from libertai_utils.chains.ethereum import format_eth_address
 from libertai_utils.chains.index import is_signature_valid
@@ -144,12 +144,16 @@ async def wallet_verify(request: WalletVerifyRequest) -> TokenPairResponse:
 
 
 @router.post("/login/email", status_code=status.HTTP_204_NO_CONTENT)
-async def login_email(request: EmailLoginRequest) -> None:
-    """Send a magic-link email (token + 6-digit code)."""
+async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTasks) -> None:
+    """Send a magic-link email (token + 6-digit code).
+
+    The email is dispatched in the background so SMTP latency/failures never block the
+    login request (the magic link is persisted before we return).
+    """
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
         await db.commit()
-    await magic_link.send_magic_link_email(request.email, token, code)
+    background_tasks.add_task(magic_link.send_magic_link_email, request.email, token, code)
 
 
 @router.post("/verify-magic-link")

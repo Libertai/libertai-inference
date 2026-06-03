@@ -108,7 +108,7 @@ def _send_smtp(email: str, html: str) -> None:
     msg["To"] = email
     msg.attach(MIMEText(html, "html"))
 
-    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT) as server:
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as server:
         if config.SMTP_USE_TLS:
             server.starttls()
         if config.SMTP_USER and config.SMTP_PASSWORD:
