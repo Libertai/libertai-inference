@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
+from src.config import config
 from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
@@ -427,10 +428,15 @@ class ApiKeyService:
 
                 # Pre-fetch dual fixed-window entitlement inputs (usage within each user's
                 # active 5h + weekly window, active tier) so the per-key loop is pure computation.
-                now = datetime.now()
-                window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
-                weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
-                active_tiers = await active_tiers_by_users(db, user_ids)
+                # Only needed while subscriptions/tier windows are enabled.
+                window_5h_usage: dict[uuid.UUID, float] = {}
+                weekly_usage: dict[uuid.UUID, float] = {}
+                active_tiers: dict[uuid.UUID, str] = {}
+                if config.SUBSCRIPTIONS_ENABLED:
+                    now = datetime.now()
+                    window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
+                    weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
+                    active_tiers = await active_tiers_by_users(db, user_ids)
 
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
@@ -486,22 +492,33 @@ class ApiKeyService:
                     elif key.type == ApiKeyType.api:
                         if not key.user_id:
                             continue
-                        # Per-key monthly limit is an extra cap (if the user set one).
-                        if key.monthly_limit is not None:
-                            key_usage = monthly_usage.get(key.id, 0.0)
-                            if key_usage >= key.monthly_limit:
+                        if config.SUBSCRIPTIONS_ENABLED:
+                            # Per-key monthly limit is an extra cap (if the user set one).
+                            if key.monthly_limit is not None:
+                                key_usage = monthly_usage.get(key.id, 0.0)
+                                if key_usage >= key.monthly_limit:
+                                    continue
+                            # Dual-window entitlement: free tier (or larger paid windows) by
+                            # default, prepaid balance as the overflow path.
+                            tier = get_tier(active_tiers.get(key.user_id, DEFAULT_TIER))
+                            source = compute_source(
+                                tier,
+                                window_5h_usage.get(key.user_id, 0.0),
+                                weekly_usage.get(key.user_id, 0.0),
+                                balances.get(key.user_id, 0.0),
+                            )
+                            if source == "blocked":
                                 continue
-                        # Dual-window entitlement: free tier (or larger paid windows) by
-                        # default, prepaid balance as the overflow path.
-                        tier = get_tier(active_tiers.get(key.user_id, DEFAULT_TIER))
-                        source = compute_source(
-                            tier,
-                            window_5h_usage.get(key.user_id, 0.0),
-                            weekly_usage.get(key.user_id, 0.0),
-                            balances.get(key.user_id, 0.0),
-                        )
-                        if source == "blocked":
-                            continue
+                        else:
+                            # Subscriptions disabled: gate purely on prepaid balance.
+                            user_balance = balances.get(key.user_id, 0.0)
+                            if key.monthly_limit is not None:
+                                key_usage = monthly_usage.get(key.id, 0.0)
+                                effective_limit = min(max(0.0, key.monthly_limit - key_usage), user_balance)
+                            else:
+                                effective_limit = user_balance
+                            if effective_limit < 0.02:
+                                continue
 
                     # chat keys and valid liberclaw/api keys pass through
                     result.append(key.key)
@@ -571,18 +588,23 @@ class ApiKeyService:
                     if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402)
                     else None
                 )
-                if chargeable_user_id is not None:
+                if chargeable_user_id is not None and config.SUBSCRIPTIONS_ENABLED:
                     # Open/reset this user's fixed windows so usage accrues against them.
                     await open_windows(db, chargeable_user_id, now)
 
                 await db.commit()
 
                 # Deduct credits from user's balance (skip for liberclaw and x402 keys).
-                # Usage covered by a live tier window is NOT charged to prepaid — only
-                # overflow beyond the fixed-window allowance draws down the balance.
                 if chargeable_user_id is not None:
-                    state = await get_allowance_state(db, chargeable_user_id, now)
-                    if state.source != "tier":
+                    if config.SUBSCRIPTIONS_ENABLED:
+                        # Usage covered by a live tier window is NOT charged to prepaid — only
+                        # overflow beyond the fixed-window allowance draws down the balance.
+                        state = await get_allowance_state(db, chargeable_user_id, now)
+                        deduct = state.source != "tier"
+                    else:
+                        # Subscriptions disabled: always deduct prepaid credits.
+                        deduct = True
+                    if deduct:
                         success = await CreditService.use_credits(chargeable_user_id, credits_used)
                         if not success:
                             logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")

@@ -52,6 +52,11 @@ def _checkout_redirect() -> str:
     return f"{base}/billing"
 
 
+def _require_subscriptions_enabled() -> None:
+    if not config.SUBSCRIPTIONS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriptions are not available")
+
+
 def _require_provider(provider_id: str):
     try:
         provider = payment_registry.get(provider_id)
@@ -124,6 +129,7 @@ async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> C
 
 @router.post("/subscribe", description="Open a checkout to subscribe to a paid tier")  # type: ignore
 async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+    _require_subscriptions_enabled()
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -137,6 +143,7 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
 
 @router.post("/upgrade", description="Upgrade to a higher paid tier")  # type: ignore
 async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+    _require_subscriptions_enabled()
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -150,6 +157,7 @@ async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)
 
 @router.post("/downgrade", description="Queue a downgrade for the end of the billing period")  # type: ignore
 async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_user)) -> DowngradeResponse:
+    _require_subscriptions_enabled()
     async with AsyncSessionLocal() as db:
         sub = (
             await db.execute(
@@ -171,6 +179,7 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
 
 @router.post("/cancel", description="Cancel the current subscription at period end")  # type: ignore
 async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
+    _require_subscriptions_enabled()
     async with AsyncSessionLocal() as db:
         sub = (
             await db.execute(
