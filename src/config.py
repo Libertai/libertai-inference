@@ -67,6 +67,10 @@ class _Config:
     API_URL: str
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int
 
+    # Subscriptions / tiered entitlement windows. Disabled for now: no free or paid
+    # subscriptions, API access is gated on prepaid balance only.
+    SUBSCRIPTIONS_ENABLED: bool
+
     # Provider-agnostic fiat payments (Revolut first)
     REVOLUT_SECRET_KEY: str
     REVOLUT_WEBHOOK_SECRET: str
@@ -137,6 +141,8 @@ class _Config:
         self.FRONTEND_URL = os.getenv("FRONTEND_URL", "")
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+
+        self.SUBSCRIPTIONS_ENABLED = os.getenv("SUBSCRIPTIONS_ENABLED", "False").lower() == "true"
 
         # Payments (Revolut)
         self.REVOLUT_SECRET_KEY = os.getenv("REVOLUT_SECRET_KEY", "")
