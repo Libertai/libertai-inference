@@ -56,7 +56,9 @@ class AllowanceState:
     weekly_limit: float
     prepaid_balance: float
     source: str  # "tier" | "prepaid" | "blocked"
-    resets_at: datetime | None  # when the 5h window resets (None if no active window)
+    # When each active window resets (None if no active window of that kind).
+    window_5h_resets_at: datetime | None
+    weekly_resets_at: datetime | None
 
 
 def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepaid: float) -> str:
@@ -216,5 +218,6 @@ async def get_allowance_state(
         weekly_limit=tier.weekly_credits,
         prepaid_balance=prepaid,
         source=source,
-        resets_at=window_5h.expires_at if window_5h else None,
+        window_5h_resets_at=window_5h.expires_at if window_5h else None,
+        weekly_resets_at=window_weekly.expires_at if window_weekly else None,
     )

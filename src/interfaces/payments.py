@@ -54,8 +54,10 @@ class SubscriptionResponse(BaseModel):
     # Dual-window allowance snapshot (free tier by default, larger if subscribed).
     window_5h_used: float = 0.0
     window_5h_limit: float = 0.0
+    window_5h_resets_at: datetime | None = None
     weekly_used: float = 0.0
     weekly_limit: float = 0.0
+    weekly_resets_at: datetime | None = None
     prepaid_balance: float = 0.0
 
 

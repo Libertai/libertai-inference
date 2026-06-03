@@ -215,8 +215,10 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         is_trial=sub.is_trial if sub else False,
         window_5h_used=allowance.window_5h_used,
         window_5h_limit=allowance.window_5h_limit,
+        window_5h_resets_at=allowance.window_5h_resets_at,
         weekly_used=allowance.weekly_used,
         weekly_limit=allowance.weekly_limit,
+        weekly_resets_at=allowance.weekly_resets_at,
         prepaid_balance=allowance.prepaid_balance,
     )
 
