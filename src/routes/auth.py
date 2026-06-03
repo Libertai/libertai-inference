@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import secrets
 import uuid
@@ -18,6 +19,8 @@ from src.interfaces.auth import (
     AuthMessageRequest,
     AuthMessageResponse,
     AuthStatusResponse,
+    CliCodeRequest,
+    CliCodeResponse,
     CurrentUserResponse,
     EmailLoginRequest,
     ExchangeRequest,
@@ -48,6 +51,13 @@ _AUTH_CODE_TTL_SECONDS = 60
 
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _pkce_matches(verifier: str, challenge: str) -> bool:
+    """PKCE S256: base64url(SHA256(verifier)) without padding must equal the stored challenge."""
+    digest = hashlib.sha256(verifier.encode()).digest()
+    expected = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    return secrets.compare_digest(expected, challenge)
 
 
 async def _issue_token_pair(db, user: User, device_info: str | None = None) -> TokenPairResponse:
@@ -241,12 +251,43 @@ async def exchange_code(request: ExchangeRequest) -> TokenPairResponse:
         ).scalars().first()
         if auth_code is None or auth_code.expires_at < datetime.now():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+        # PKCE-bound codes (CLI loopback) require the matching verifier; OAuth codes don't.
+        if auth_code.challenge is not None:
+            if request.verifier is None or not _pkce_matches(request.verifier, auth_code.challenge):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid PKCE verifier")
         pair = TokenPairResponse(
             access_token=decrypt(auth_code.access_token), refresh_token=decrypt(auth_code.refresh_token)
         )
         await db.delete(auth_code)
         await db.commit()
     return pair
+
+
+@router.post("/cli/code")
+async def cli_code(request: CliCodeRequest, user: User = Depends(get_current_user)) -> CliCodeResponse:
+    """Mint a one-time, PKCE-bound code for the CLI loopback flow.
+
+    Called by the console SPA once the user is authenticated (by any method). The code is
+    bound to the supplied PKCE challenge and exchanged by the CLI at /auth/exchange.
+    """
+    async with AsyncSessionLocal() as db:
+        db_user = await db.get(User, user.id)
+        if db_user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        pair = await _issue_token_pair(db, db_user)
+        one_time_code = secrets.token_urlsafe(32)
+        db.add(
+            AuthCode(
+                code_hash=_hash(one_time_code),
+                user_id=db_user.id,
+                access_token=encrypt(pair.access_token),
+                refresh_token=encrypt(pair.refresh_token),
+                expires_at=datetime.now() + timedelta(seconds=_AUTH_CODE_TTL_SECONDS),
+                challenge=request.challenge,
+            )
+        )
+        await db.commit()
+    return CliCodeResponse(code=one_time_code)
 
 
 # --- Refresh / logout ---

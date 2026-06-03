@@ -10,6 +10,7 @@ class ApiKeyType(str, Enum):
     chat = "chat"
     liberclaw = "liberclaw"
     x402 = "x402"
+    cli = "cli"
 
 
 class InferenceCallType(str, Enum):
@@ -20,6 +21,11 @@ class InferenceCallType(str, Enum):
 class ApiKeyCreate(BaseModel):
     name: str
     monthly_limit: float | None = None
+
+
+class CliApiKeyCreate(BaseModel):
+    # Optional device label; the key is named "libertai-cli@<host>" and rotated in place.
+    host: str | None = None
 
 
 class ApiKeyUpdate(BaseModel):
@@ -62,6 +68,7 @@ class ApiKey(BaseModel):
     is_active: bool
     monthly_limit: float | None = None
     type: ApiKeyType
+    expires_at: datetime | None = None
 
 
 class FullApiKey(ApiKey):

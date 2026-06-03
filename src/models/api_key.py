@@ -34,6 +34,9 @@ class ApiKey(Base):
     # history) are preserved. A deleted key is hidden from the user and unusable.
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     monthly_limit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Credits limit per month
+    # Optional expiry. Used by CLI keys (type=cli) which must be re-minted via `libertai login`
+    # once expired; null means the key never expires (standard keys).
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     type: Mapped[ApiKeyType] = mapped_column(Enum(ApiKeyType), nullable=False, default=ApiKeyType.api)
     liberclaw_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, ForeignKey("liberclaw_users.id", ondelete="CASCADE"), nullable=True
@@ -59,6 +62,7 @@ class ApiKey(Base):
         monthly_limit: float | None = None,
         type: ApiKeyType = ApiKeyType.api,
         liberclaw_user_id: uuid.UUID | None = None,
+        expires_at: datetime | None = None,
     ):
         self.key = key
         self.name = name
@@ -67,6 +71,7 @@ class ApiKey(Base):
         self.monthly_limit = monthly_limit
         self.type = type
         self.liberclaw_user_id = liberclaw_user_id
+        self.expires_at = expires_at
 
     @property
     def masked_key(self) -> str:

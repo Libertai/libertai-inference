@@ -27,6 +27,9 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# CLI API keys expire and must be re-minted via `libertai login`.
+CLI_KEY_TTL_DAYS = 30
+
 
 class ApiKeyService:
     @staticmethod
@@ -106,6 +109,108 @@ class ApiKeyService:
         except Exception as e:
             logger.error(f"Error creating API key for user {user_id}: {str(e)}", exc_info=True)
             raise
+
+    @staticmethod
+    async def rotate_or_create_cli_api_key(
+        user_id: uuid.UUID,
+        host: str | None = None,
+        user_address: str | None = None,
+    ) -> FullApiKey:
+        """Mint — or rotate in place — the CLI API key for a user/device.
+
+        Keyed on (user_id, name, type=cli) so the row, and its related inference_calls
+        (usage history), survives re-login: only the secret key value and expiry are
+        regenerated. Used as the final step of the CLI browser-SSO login flow.
+        """
+        name = f"libertai-cli@{host}" if host else "libertai-cli"
+        expires_at = datetime.now() + timedelta(days=CLI_KEY_TTL_DAYS)
+
+        try:
+            async with AsyncSessionLocal() as db:
+                existing = (
+                    (
+                        await db.execute(
+                            select(ApiKeyDB).where(
+                                ApiKeyDB.user_id == user_id,
+                                ApiKeyDB.name == name,
+                                ApiKeyDB.type == ApiKeyType.cli,
+                                ApiKeyDB.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
+                key = ApiKeyDB.generate_key()
+                if existing is not None:
+                    # Rotate in place: same row (and usage history), new secret + expiry.
+                    existing.key = key
+                    existing.expires_at = expires_at
+                    existing.is_active = True
+                    api_key = existing
+                else:
+                    api_key = ApiKeyDB(
+                        key=key,
+                        name=name,
+                        user_id=user_id,
+                        user_address=user_address,
+                        type=ApiKeyType.cli,
+                        expires_at=expires_at,
+                    )
+                    db.add(api_key)
+                await db.commit()
+
+                return FullApiKey(
+                    id=api_key.id,
+                    key=api_key.masked_key,
+                    full_key=key,
+                    name=api_key.name,
+                    user_address=api_key.user_address,
+                    created_at=api_key.created_at,
+                    is_active=api_key.is_active,
+                    monthly_limit=api_key.monthly_limit,
+                    type=api_key.type,
+                    expires_at=api_key.expires_at,
+                )
+
+        except Exception as e:
+            logger.error(f"Error rotating CLI API key for user {user_id}: {str(e)}", exc_info=True)
+            raise
+
+    @staticmethod
+    async def get_cli_api_keys(user_id: uuid.UUID) -> list[ApiKey]:
+        """List a user's CLI API keys (masked) so they can be reviewed/revoked separately
+        from standard api keys."""
+        async with AsyncSessionLocal() as db:
+            cli_keys = (
+                (
+                    await db.execute(
+                        select(ApiKeyDB).where(
+                            ApiKeyDB.user_id == user_id,
+                            ApiKeyDB.type == ApiKeyType.cli,
+                            ApiKeyDB.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                ApiKey(
+                    id=key.id,
+                    key=key.masked_key,
+                    name=key.name,
+                    user_id=key.user_id,
+                    user_address=key.user_address,
+                    created_at=key.created_at,
+                    is_active=key.is_active,
+                    monthly_limit=key.monthly_limit,
+                    type=key.type,
+                    expires_at=key.expires_at,
+                )
+                for key in cli_keys
+            ]
 
     @staticmethod
     async def get_or_create_chat_api_key(user_id: uuid.UUID, user_address: str | None = None) -> FullApiKey:
@@ -222,6 +327,7 @@ class ApiKeyService:
                         created_at=key.created_at,
                         is_active=key.is_active,
                         type=key.type,
+                        expires_at=key.expires_at,
                     )
                     result.append(detached_key)
 
@@ -403,8 +509,11 @@ class ApiKeyService:
                     .all()
                 )
 
+                # CLI keys are credit-gated exactly like standard api keys.
+                chargeable_api_types = (ApiKeyType.api, ApiKeyType.cli)
+
                 # Pre-fetch balances for all users to avoid N+1 queries
-                user_ids = {k.user_id for k in api_keys if k.user_id and k.type == ApiKeyType.api}
+                user_ids = {k.user_id for k in api_keys if k.user_id and k.type in chargeable_api_types}
                 balances: dict[uuid.UUID, float] = {}
                 if user_ids:
                     from src.models.credit_transaction import CreditTransaction
@@ -440,7 +549,7 @@ class ApiKeyService:
 
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
-                    k for k in api_keys if k.type == ApiKeyType.api and k.monthly_limit is not None
+                    k for k in api_keys if k.type in chargeable_api_types and k.monthly_limit is not None
                 ]
                 monthly_usage: dict[uuid.UUID, float] = {}
                 if api_keys_with_limits:
@@ -466,8 +575,12 @@ class ApiKeyService:
                     monthly_usage = {row[0]: float(row[1]) for row in usage_rows}
 
                 # Filter keys with sufficient credits available
+                expiry_now = datetime.now()
                 result = []
                 for key in api_keys:
+                    # Expired keys (CLI keys past their TTL) drop off the whitelist -> 401 at the gateway.
+                    if key.expires_at is not None and key.expires_at < expiry_now:
+                        continue
                     if key.type == ApiKeyType.liberclaw:
                         # Check rolling window usage against tier limit
                         if key.liberclaw_user_id is None:
@@ -489,7 +602,7 @@ class ApiKeyService:
                         )
                         if usage >= tier_config["credits_limit"]:
                             continue
-                    elif key.type == ApiKeyType.api:
+                    elif key.type in chargeable_api_types:
                         if not key.user_id:
                             continue
                         if config.SUBSCRIPTIONS_ENABLED:

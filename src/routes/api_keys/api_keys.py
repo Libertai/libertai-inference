@@ -11,6 +11,7 @@ from src.interfaces.api_keys import (
     ApiKeyType,
     ApiKeyUpdate,
     ChatApiKeyResponse,
+    CliApiKeyCreate,
     FullApiKey,
     ImageInferenceCallData,
     InferenceCallData,
@@ -61,6 +62,33 @@ async def get_chat_api_key(user: User = Depends(get_current_user)) -> ChatApiKey
         return ChatApiKeyResponse(key=chat_api_key.full_key)
     except Exception as e:
         logger.error(f"Error getting or creating chat API key: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+
+
+@router.post("/cli")  # type: ignore
+async def create_cli_api_key(
+    cli_create: CliApiKeyCreate, user: User = Depends(get_current_user)
+) -> FullApiKey:
+    """Mint (or rotate in place) the CLI API key for the caller's device.
+
+    Final step of the CLI browser-SSO login: the CLI calls this with the freshly
+    exchanged session token. Returns the full key once (stored by the CLI).
+    """
+    try:
+        return await ApiKeyService.rotate_or_create_cli_api_key(
+            user_id=user.id, host=cli_create.host, user_address=user.address
+        )
+    except Exception as e:
+        logger.error(f"Error creating CLI API key: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+
+
+@router.get("/cli")  # type: ignore
+async def get_cli_api_keys(user: User = Depends(get_current_user)) -> list[ApiKey]:
+    try:
+        return await ApiKeyService.get_cli_api_keys(user_id=user.id)
+    except Exception as e:
+        logger.error(f"Error getting CLI API keys: {str(e)}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
 
 
