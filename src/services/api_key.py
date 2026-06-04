@@ -28,7 +28,7 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 # CLI API keys expire and must be re-minted via `libertai login`.
-CLI_KEY_TTL_DAYS = 30
+CLI_KEY_TTL_DAYS = 90
 
 
 class ApiKeyService:
