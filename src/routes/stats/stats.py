@@ -2,6 +2,7 @@ from datetime import date
 
 from fastapi import Depends, Query
 
+from src.interfaces.api_keys import ApiKeyType, InferenceKeyType
 from src.interfaces.stats import (
     DashboardStats,
     UsageStats,
@@ -44,40 +45,8 @@ async def get_usage_stats(
         raise
 
 
-@router.get("/global/api/credits", response_model=GlobalCreditsStats)  # type: ignore
-async def get_credits_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalCreditsStats:
-    try:
-        return await StatsService.get_global_credits_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/api/calls", response_model=GlobalApiStats)  # type: ignore
-async def get_api_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalApiStats:
-    try:
-        return await StatsService.get_global_api_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in credits stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/api/tokens", response_model=GlobalTokensStats)  # type: ignore
-async def get_tokens_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalTokensStats:
-    try:
-        return await StatsService.get_global_tokens_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in token stats route: {str(e)}", exc_info=True)
-        raise
+# --- Chat stats: separate table (chat_requests), no key-type filter, no credits ---
+# Registered before the generic /global/{key_type}/... routes below.
 
 
 @router.get("/global/chat/calls", response_model=GlobalChatCallsStats)  # type: ignore
@@ -104,75 +73,45 @@ async def get_chat_tokens_stats(
         raise
 
 
-@router.get("/global/liberclaw/calls", response_model=GlobalApiStats)  # type: ignore
-async def get_liberclaw_calls_stats(
+# --- Generic inference stats: one set of routes for api / liberclaw / x402 / cli ---
+
+
+@router.get("/global/{key_type}/calls", response_model=GlobalApiStats)  # type: ignore
+async def get_inference_calls_stats(
+    key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalApiStats:
     try:
-        return await StatsService.get_global_liberclaw_calls_stats(start_date, end_date)
+        return await StatsService._get_inference_api_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in liberclaw calls stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} calls stats route: {str(e)}", exc_info=True)
         raise
 
 
-@router.get("/global/liberclaw/tokens", response_model=GlobalTokensStats)  # type: ignore
-async def get_liberclaw_tokens_stats(
+@router.get("/global/{key_type}/tokens", response_model=GlobalTokensStats)  # type: ignore
+async def get_inference_tokens_stats(
+    key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalTokensStats:
     try:
-        return await StatsService.get_global_liberclaw_tokens_stats(start_date, end_date)
+        return await StatsService._get_inference_tokens_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in liberclaw tokens stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} tokens stats route: {str(e)}", exc_info=True)
         raise
 
 
-@router.get("/global/liberclaw/credits", response_model=GlobalCreditsStats)  # type: ignore
-async def get_liberclaw_credits_stats(
+@router.get("/global/{key_type}/credits", response_model=GlobalCreditsStats)  # type: ignore
+async def get_inference_credits_stats(
+    key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
 ) -> GlobalCreditsStats:
     try:
-        return await StatsService.get_global_liberclaw_credits_stats(start_date, end_date)
+        return await StatsService._get_inference_credits_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in liberclaw credits stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/x402/calls", response_model=GlobalApiStats)  # type: ignore
-async def get_x402_calls_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalApiStats:
-    try:
-        return await StatsService.get_global_x402_calls_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in x402 calls stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/x402/tokens", response_model=GlobalTokensStats)  # type: ignore
-async def get_x402_tokens_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalTokensStats:
-    try:
-        return await StatsService.get_global_x402_tokens_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in x402 tokens stats route: {str(e)}", exc_info=True)
-        raise
-
-
-@router.get("/global/x402/credits", response_model=GlobalCreditsStats)  # type: ignore
-async def get_x402_credits_stats(
-    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
-    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-) -> GlobalCreditsStats:
-    try:
-        return await StatsService.get_global_x402_credits_stats(start_date, end_date)
-    except Exception as e:
-        logger.error(f"Error in x402 credits stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} credits stats route: {str(e)}", exc_info=True)
         raise
 
 
