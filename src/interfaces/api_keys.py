@@ -13,6 +13,19 @@ class ApiKeyType(str, Enum):
     cli = "cli"
 
 
+class InferenceKeyType(str, Enum):
+    """Key types whose usage is recorded in ``inference_calls`` (everything but chat).
+
+    Used as a stats route path param so global inference stats are served by a single
+    set of routes; invalid / chat values are rejected with HTTP 422 automatically.
+    """
+
+    api = "api"
+    liberclaw = "liberclaw"
+    x402 = "x402"
+    cli = "cli"
+
+
 class InferenceCallType(str, Enum):
     text = "text"
     image = "image"

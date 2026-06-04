@@ -286,14 +286,6 @@ class StatsService:
             return GlobalCreditsStats(total_credits_used=total, credits_usage=credits_usage)
 
     @staticmethod
-    async def get_global_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
-        try:
-            return await StatsService._get_inference_credits_stats(ApiKeyType.api, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving credits stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
     async def _get_inference_api_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalApiStats:
         async with AsyncSessionLocal() as db:
             start_datetime = datetime.combine(start_date, datetime.min.time())
@@ -331,14 +323,6 @@ class StatsService:
                 )
 
             return GlobalApiStats(total_calls=total, api_usage=api_usage)
-
-    @staticmethod
-    async def get_global_api_stats(start_date: date, end_date: date) -> GlobalApiStats:
-        try:
-            return await StatsService._get_inference_api_stats(ApiKeyType.api, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving api stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
     async def _get_inference_tokens_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalTokensStats:
@@ -383,14 +367,6 @@ class StatsService:
                 )
 
             return GlobalTokensStats(total_input_tokens=total_input, total_output_tokens=total_output, calls=calls)
-
-    @staticmethod
-    async def get_global_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
-        try:
-            return await StatsService._get_inference_tokens_stats(ApiKeyType.api, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving token stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
     async def get_global_chat_calls_stats(start_date: date, end_date: date) -> GlobalChatCallsStats:
@@ -481,54 +457,6 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving chat token stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_liberclaw_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
-        try:
-            return await StatsService._get_inference_api_stats(ApiKeyType.liberclaw, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving liberclaw calls stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_liberclaw_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
-        try:
-            return await StatsService._get_inference_tokens_stats(ApiKeyType.liberclaw, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving liberclaw token stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_liberclaw_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
-        try:
-            return await StatsService._get_inference_credits_stats(ApiKeyType.liberclaw, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving liberclaw credits stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_x402_calls_stats(start_date: date, end_date: date) -> GlobalApiStats:
-        try:
-            return await StatsService._get_inference_api_stats(ApiKeyType.x402, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving x402 calls stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_x402_tokens_stats(start_date: date, end_date: date) -> GlobalTokensStats:
-        try:
-            return await StatsService._get_inference_tokens_stats(ApiKeyType.x402, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving x402 token stats: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error")
-
-    @staticmethod
-    async def get_global_x402_credits_stats(start_date: date, end_date: date) -> GlobalCreditsStats:
-        try:
-            return await StatsService._get_inference_credits_stats(ApiKeyType.x402, start_date, end_date)
-        except Exception as e:
-            logger.error(f"Error retrieving x402 credits stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
