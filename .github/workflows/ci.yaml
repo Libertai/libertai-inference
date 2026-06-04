@@ -17,7 +17,7 @@ jobs:
           cache: 'poetry'
       - name: Install dependencies
         run: poetry install
-      - uses: tsuyoshicho/action-mypy@v4
+      - uses: tsuyoshicho/action-mypy@v5
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           reporter: github-check
