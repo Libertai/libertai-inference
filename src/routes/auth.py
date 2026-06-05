@@ -24,6 +24,7 @@ from src.interfaces.auth import (
     CurrentUserResponse,
     EmailLoginRequest,
     ExchangeRequest,
+    LogoutRequest,
     RefreshRequest,
     TokenPairResponse,
     VerifyMagicLinkRequest,
@@ -336,9 +337,11 @@ async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: RefreshRequest, response: fastapi.Response) -> None:
-    """Revoke the session backing a refresh token."""
+async def logout(response: fastapi.Response, request: LogoutRequest = fastapi.Body(default=LogoutRequest())) -> None:
+    """Clear the session cookie; optionally revoke the session if a refresh token is given."""
     response.delete_cookie("libertai_auth", path="/")
+    if not request.refresh_token:
+        return
     try:
         payload = decode_token(request.refresh_token, REFRESH)
     except jwt.PyJWTError:

@@ -102,3 +102,9 @@ class CliCodeResponse(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    # Optional: cookie-based clients log out via the session cookie and send no body;
+    # token-based clients may pass a refresh_token to also revoke the session.
+    refresh_token: str | None = None
