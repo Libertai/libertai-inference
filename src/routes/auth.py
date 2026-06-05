@@ -49,6 +49,19 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 _AUTH_CODE_TTL_SECONDS = 60
 
 
+def _set_session_cookie(response: fastapi.Response, access_token: str) -> None:
+    """Set the shared session cookie so console + chat web apps share login across *.libertai.io."""
+    response.set_cookie(
+        key="libertai_auth",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=config.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -152,7 +165,7 @@ async def wallet_challenge(request: WalletChallengeRequest) -> WalletChallengeRe
 
 
 @router.post("/wallet/verify")
-async def wallet_verify(request: WalletVerifyRequest) -> TokenPairResponse:
+async def wallet_verify(request: WalletVerifyRequest, response: fastapi.Response) -> TokenPairResponse:
     """Verify a signed challenge and return a token pair (creates/links the wallet user)."""
     async with AsyncSessionLocal() as db:
         if not await wallet_auth.verify_signature(db, request.address, request.signature):
@@ -160,6 +173,7 @@ async def wallet_verify(request: WalletVerifyRequest) -> TokenPairResponse:
         user = await get_or_create_user_by_wallet(db, format_eth_address(request.address), "base")
         pair = await _issue_token_pair(db, user)
         await db.commit()
+    _set_session_cookie(response, pair.access_token)
     return pair
 
 
@@ -180,7 +194,7 @@ async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTa
 
 
 @router.post("/verify-magic-link")
-async def verify_magic_link_route(request: VerifyMagicLinkRequest) -> TokenPairResponse:
+async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fastapi.Response) -> TokenPairResponse:
     """Verify a magic link (by token or email+code) and return a token pair."""
     async with AsyncSessionLocal() as db:
         email = await magic_link.verify_magic_link(
@@ -191,6 +205,7 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest) -> TokenPairR
         user, _ = await get_or_create_user_by_email(db, email)
         pair = await _issue_token_pair(db, user)
         await db.commit()
+    _set_session_cookie(response, pair.access_token)
     return pair
 
 
@@ -243,7 +258,7 @@ async def oauth_callback(
 
 
 @router.post("/exchange")
-async def exchange_code(request: ExchangeRequest) -> TokenPairResponse:
+async def exchange_code(request: ExchangeRequest, response: fastapi.Response) -> TokenPairResponse:
     """Exchange a one-time OAuth code for the token pair (single-use)."""
     async with AsyncSessionLocal() as db:
         auth_code = (
@@ -260,6 +275,7 @@ async def exchange_code(request: ExchangeRequest) -> TokenPairResponse:
         )
         await db.delete(auth_code)
         await db.commit()
+    _set_session_cookie(response, pair.access_token)
     return pair
 
 
@@ -320,8 +336,9 @@ async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: RefreshRequest) -> None:
+async def logout(request: RefreshRequest, response: fastapi.Response) -> None:
     """Revoke the session backing a refresh token."""
+    response.delete_cookie("libertai_auth", path="/")
     try:
         payload = decode_token(request.refresh_token, REFRESH)
     except jwt.PyJWTError:
