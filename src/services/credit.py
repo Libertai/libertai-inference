@@ -120,7 +120,8 @@ class CreditService:
 
     @staticmethod
     async def use_credits(user_id: uuid.UUID, amount: float) -> bool:
-        """Deduct credits from a user's active transactions (oldest-expiring first).
+        """Deduct credits from a user's active transactions (oldest-expiring first,
+        then oldest top-up first among transactions that share an expiry / have none).
 
         Returns ``True`` if the full amount was deducted, ``False`` if the balance was
         insufficient (the available credits are still drained to 0 in that case).
@@ -136,7 +137,10 @@ class CreditService:
                         CreditTransaction.is_active == True,  # noqa: E712
                         CreditTransaction.status == CreditTransactionStatus.completed,
                     )
-                    .order_by(CreditTransaction.expired_at.asc().nullslast())
+                    .order_by(
+                        CreditTransaction.expired_at.asc().nullslast(),
+                        CreditTransaction.created_at.asc(),
+                    )
                 )
                 transactions = result.scalars().all()
 

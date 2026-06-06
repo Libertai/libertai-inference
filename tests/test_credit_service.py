@@ -5,6 +5,8 @@ test DB) and assert the address->user resolution + user_id wiring. Each test use
 a unique address so committed rows don't collide within the session.
 """
 
+from datetime import datetime
+
 from sqlalchemy import select
 
 from src.interfaces.credits import CreditTransactionProvider
@@ -73,6 +75,73 @@ async def test_use_credits_reports_full_vs_insufficient():
     # Overdraft -> False, and the remaining balance is drained to 0.
     assert await CreditService.use_credits(user.id, 5.0) is False
     assert await user.get_credit_balance() == 0.0
+
+
+async def test_use_credits_drains_oldest_top_up_first():
+    """Among non-expiring top-ups, the oldest (by created_at) must drain first,
+    regardless of insertion order."""
+    address = "0x0LdE000000000000000000000000000000000005"
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, address)
+        await db.commit()
+        user_id = user.id
+
+        # Insert the NEWER top-up first so physical/insert order != age order.
+        newer = CreditTransaction(
+            user_id=user_id, amount=10.0, amount_left=10.0, provider=CreditTransactionProvider.voucher
+        )
+        newer.created_at = datetime(2025, 1, 1)
+        older = CreditTransaction(
+            user_id=user_id, amount=10.0, amount_left=10.0, provider=CreditTransactionProvider.voucher
+        )
+        older.created_at = datetime(2024, 1, 1)
+        db.add(newer)
+        db.add(older)
+        await db.commit()
+        older_id, newer_id = older.id, newer.id
+
+    # Deduct an amount only one top-up can cover -> must come from the older one.
+    assert await CreditService.use_credits(user_id, 4.0) is True
+
+    async with AsyncSessionLocal() as db:
+        older_row = await db.get(CreditTransaction, older_id)
+        newer_row = await db.get(CreditTransaction, newer_id)
+        assert older_row.amount_left == 6.0  # oldest drained first
+        assert newer_row.amount_left == 10.0  # newer untouched
+
+
+async def test_use_credits_prefers_expiring_over_older_unexpiring():
+    """A newer top-up that expires must drain before an older one with no expiry."""
+    address = "0xExp1000000000000000000000000000000000006"
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, address)
+        await db.commit()
+        user_id = user.id
+
+        old_no_expiry = CreditTransaction(
+            user_id=user_id, amount=10.0, amount_left=10.0, provider=CreditTransactionProvider.voucher
+        )
+        old_no_expiry.created_at = datetime(2024, 1, 1)
+        newer_expiring = CreditTransaction(
+            user_id=user_id,
+            amount=10.0,
+            amount_left=10.0,
+            provider=CreditTransactionProvider.voucher,
+            expired_at=datetime(2030, 1, 1),
+        )
+        newer_expiring.created_at = datetime(2025, 1, 1)
+        db.add(old_no_expiry)
+        db.add(newer_expiring)
+        await db.commit()
+        old_id, exp_id = old_no_expiry.id, newer_expiring.id
+
+    assert await CreditService.use_credits(user_id, 4.0) is True
+
+    async with AsyncSessionLocal() as db:
+        old_row = await db.get(CreditTransaction, old_id)
+        exp_row = await db.get(CreditTransaction, exp_id)
+        assert exp_row.amount_left == 6.0  # expiring drained first
+        assert old_row.amount_left == 10.0  # non-expiring untouched
 
 
 async def test_create_api_key_sets_user_id():
