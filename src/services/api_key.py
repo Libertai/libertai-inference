@@ -695,10 +695,12 @@ class ApiKeyService:
                 usage.used_at = now
                 db.add(usage)
 
-                # Chargeable keys (not liberclaw/x402) with an owner accrue against fixed windows.
+                # Chargeable keys (not liberclaw/x402/chat) with an owner accrue against fixed windows.
+                # Chat keys power the free chat UI: they pass the gateway whitelist unconditionally and
+                # must NOT draw down the user's prepaid balance.
                 chargeable_user_id = (
                     api_key.user_id
-                    if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402)
+                    if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402, ApiKeyType.chat)
                     else None
                 )
                 if chargeable_user_id is not None and config.SUBSCRIPTIONS_ENABLED:
@@ -707,7 +709,7 @@ class ApiKeyService:
 
                 await db.commit()
 
-                # Deduct credits from user's balance (skip for liberclaw and x402 keys).
+                # Deduct credits from user's balance (skip for liberclaw, x402 and chat keys).
                 if chargeable_user_id is not None:
                     if config.SUBSCRIPTIONS_ENABLED:
                         # Usage covered by a live tier window is NOT charged to prepaid — only
