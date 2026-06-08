@@ -215,8 +215,20 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
 # --- OAuth (Google / GitHub) ---
 
 
+def _resolve_frontend_base(redirect_base: str | None) -> str:
+    """Pick the frontend to return the user to after OAuth. Honour the caller's origin only if it's
+    an allowed frontend (chat vs console); otherwise fall back to the default FRONTEND_URL. Mirrors the
+    magic-link redirect_base handling so OAuth isn't pinned to a single app."""
+    if redirect_base:
+        candidate = redirect_base.rstrip("/")
+        if candidate in {url.rstrip("/") for url in config.ALLOWED_FRONTEND_URLS}:
+            return candidate
+        logger.warning(f"Ignoring disallowed OAuth redirect_base: {redirect_base}")
+    return config.FRONTEND_URL.rstrip("/")
+
+
 @router.get("/oauth/{provider}")
-async def oauth_start(provider: str) -> RedirectResponse:
+async def oauth_start(provider: str, redirect_base: str | None = None) -> RedirectResponse:
     """Redirect to the provider's consent screen."""
     if provider not in oauth.SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown provider")
@@ -224,12 +236,26 @@ async def oauth_start(provider: str) -> RedirectResponse:
     redirect_uri = f"{config.API_URL}/auth/oauth/{provider}/callback"
     response = RedirectResponse(oauth.get_authorize_url(provider, state, redirect_uri))
     response.set_cookie("oauth_state", state, httponly=True, max_age=600, samesite="lax", secure=True)
+    # Remember (validated) which frontend to return to, so the callback lands the user back on the
+    # app they started from (chat vs console) instead of the single default FRONTEND_URL.
+    response.set_cookie(
+        "oauth_redirect",
+        _resolve_frontend_base(redirect_base),
+        httponly=True,
+        max_age=600,
+        samesite="lax",
+        secure=True,
+    )
     return response
 
 
 @router.get("/oauth/{provider}/callback")
 async def oauth_callback(
-    provider: str, code: str, state: str, oauth_state: str = Cookie(default=None)
+    provider: str,
+    code: str,
+    state: str,
+    oauth_state: str = Cookie(default=None),
+    oauth_redirect: str = Cookie(default=None),
 ) -> RedirectResponse:
     """Provider redirect target: verify state, mint tokens, hand back a one-time code to the frontend."""
     if provider not in oauth.SUPPORTED_PROVIDERS:
@@ -255,8 +281,11 @@ async def oauth_callback(
         )
         await db.commit()
 
-    response = RedirectResponse(f"{config.FRONTEND_URL}/auth/callback?code={one_time_code}")
+    # Re-validate the carried base (defence in depth — cookies are client-supplied) before redirecting.
+    frontend_base = _resolve_frontend_base(oauth_redirect)
+    response = RedirectResponse(f"{frontend_base}/auth/callback?code={one_time_code}")
     response.delete_cookie("oauth_state")
+    response.delete_cookie("oauth_redirect")
     return response
 
 
