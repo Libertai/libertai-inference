@@ -23,12 +23,23 @@ class EmbeddingPricing(BaseModel):
     price_per_million_input_tokens: float
 
 
+class AudioCapability(BaseModel):
+    languages: list[str]
+    voices: list[str]
+
+
+class AudioPricing(BaseModel):
+    price_per_million_input_characters: float
+
+
 class ModelInfo(BaseModel):
     id: str
     name: str
     hf_id: str | None = None
-    capabilities: dict[str, TextCapability | EmbeddingCapability | bool]  # bool for image/search capability
-    pricing: dict[str, TextPricing | EmbeddingPricing | float]  # float for image/search pricing
+    # bool for image/search capability
+    capabilities: dict[str, TextCapability | EmbeddingCapability | AudioCapability | bool]
+    # float for image/search pricing
+    pricing: dict[str, TextPricing | EmbeddingPricing | AudioPricing | float]
 
 
 class RedirectionType(StrEnum):
