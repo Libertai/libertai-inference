@@ -2,7 +2,7 @@ import time
 
 import aiohttp
 
-from src.interfaces.aleph import AlephAPIResponse, EmbeddingPricing, ModelInfo, TextPricing
+from src.interfaces.aleph import AlephAPIResponse, AudioPricing, EmbeddingPricing, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -107,6 +107,16 @@ class AlephService:
             if not isinstance(pricing, EmbeddingPricing):
                 raise ValueError(f"Invalid embedding pricing format for model: {model_id}")
             total_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
+
+        # Audio (TTS) pricing: input-only, billed per character (input_tokens carries char count)
+        elif "audio" in model.pricing:
+            if image_count > 0:
+                raise ValueError(f"Audio model {model_id} cannot process images")
+
+            pricing = model.pricing["audio"]
+            if not isinstance(pricing, AudioPricing):
+                raise ValueError(f"Invalid audio pricing format for model: {model_id}")
+            total_price = input_tokens / 1_000_000 * pricing.price_per_million_input_characters
 
         # Image model pricing
         elif "image" in model.pricing:
