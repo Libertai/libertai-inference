@@ -123,3 +123,21 @@ class GlobalSummaryStats(BaseModel):
     total_requests: int
     total_input_tokens: int
     total_output_tokens: int
+
+
+class DailyActiveUsers(BaseModel):
+    """Number of distinct users active on a single day."""
+
+    date: str
+    active_users: int
+
+
+class GlobalUsersStats(BaseModel):
+    """Distinct-user (DAU) statistics for a date range.
+
+    ``total_unique_users`` counts distinct users over the whole range (NOT the sum of
+    the daily counts, since a user active on several days is counted once).
+    """
+
+    total_unique_users: int
+    daily_active_users: list[DailyActiveUsers]

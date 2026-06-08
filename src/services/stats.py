@@ -2,7 +2,7 @@ from calendar import month_abbr
 from datetime import datetime, timedelta, date
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, cast, Date, Integer, select
+from sqlalchemy import func, cast, Date, Integer, select, distinct
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import (
@@ -22,6 +22,8 @@ from src.interfaces.stats import (
     GlobalChatTokensStats,
     ChatTokenUsage,
     GlobalSummaryStats,
+    DailyActiveUsers,
+    GlobalUsersStats,
 )
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
@@ -367,6 +369,189 @@ class StatsService:
                 )
 
             return GlobalTokensStats(total_input_tokens=total_input, total_output_tokens=total_output, calls=calls)
+
+    @staticmethod
+    async def _get_inference_users_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalUsersStats:
+        """Daily active users + range-wide unique users for an inference key type.
+
+        Identity is the owning user: ``api_keys.user_id`` for api/cli, ``api_keys.liberclaw_user_id``
+        for liberclaw. NULL identities (legacy keys) are excluded. x402 has no identity at all, so
+        it returns empty rather than relying on its NULL ``user_id`` to coincidentally count nothing.
+        """
+        if key_type == ApiKeyType.x402:
+            return GlobalUsersStats(total_unique_users=0, daily_active_users=[])
+
+        async with AsyncSessionLocal() as db:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+
+            identity = ApiKey.liberclaw_user_id if key_type == ApiKeyType.liberclaw else ApiKey.user_id
+            base_filter = (
+                ApiKey.type == key_type,
+                identity.isnot(None),
+                InferenceCall.used_at >= start_datetime,
+                InferenceCall.used_at <= end_datetime,
+            )
+
+            daily_rows = (
+                await db.execute(
+                    select(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        func.count(distinct(identity)).label("active_users"),
+                    )
+                    .select_from(InferenceCall)
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .where(*base_filter)
+                    .group_by(cast(InferenceCall.used_at, Date))
+                    .order_by(cast(InferenceCall.used_at, Date))
+                )
+            ).all()
+
+            total = (
+                await db.execute(
+                    select(func.count(distinct(identity)))
+                    .select_from(InferenceCall)
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .where(*base_filter)
+                )
+            ).scalar() or 0
+
+            return GlobalUsersStats(
+                total_unique_users=int(total),
+                daily_active_users=[
+                    DailyActiveUsers(date=r.date.strftime("%Y-%m-%d"), active_users=int(r.active_users or 0))
+                    for r in daily_rows
+                ],
+            )
+
+    @staticmethod
+    async def get_global_chat_users_stats(start_date: date, end_date: date) -> GlobalUsersStats:
+        """Daily active users + range-wide unique users for chat (separate chat_requests table)."""
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                base_filter = (
+                    ApiKey.user_id.isnot(None),
+                    ChatRequest.created_at >= start_datetime,
+                    ChatRequest.created_at <= end_datetime,
+                )
+
+                daily_rows = (
+                    await db.execute(
+                        select(
+                            cast(ChatRequest.created_at, Date).label("date"),
+                            func.count(distinct(ApiKey.user_id)).label("active_users"),
+                        )
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .where(*base_filter)
+                        .group_by(cast(ChatRequest.created_at, Date))
+                        .order_by(cast(ChatRequest.created_at, Date))
+                    )
+                ).all()
+
+                total = (
+                    await db.execute(
+                        select(func.count(distinct(ApiKey.user_id)))
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .where(*base_filter)
+                    )
+                ).scalar() or 0
+
+                return GlobalUsersStats(
+                    total_unique_users=int(total),
+                    daily_active_users=[
+                        DailyActiveUsers(date=r.date.strftime("%Y-%m-%d"), active_users=int(r.active_users or 0))
+                        for r in daily_rows
+                    ],
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving chat users stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_users_stats(start_date: date, end_date: date) -> GlobalUsersStats:
+        """Aggregate distinct users across api / cli / chat / liberclaw, deduplicated.
+
+        api/cli/chat share ``users.id`` (namespaced ``u:``); liberclaw lives in its own
+        identity space (``liberclaw_users.id``, namespaced ``l:``). A user active across
+        several of api/cli/chat is therefore counted once. x402 keys have no identity and
+        are excluded. Aggregation runs in Python over distinct (day, identity) rows — fine
+        at DAU scale; revisit if the active-user volume grows large.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                inference_rows = (
+                    await db.execute(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            ApiKey.type.label("type"),
+                            ApiKey.user_id.label("user_id"),
+                            ApiKey.liberclaw_user_id.label("liberclaw_user_id"),
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        .where(
+                            ApiKey.type.in_([ApiKeyType.api, ApiKeyType.cli, ApiKeyType.liberclaw]),
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                        )
+                        .distinct()
+                    )
+                ).all()
+
+                chat_rows = (
+                    await db.execute(
+                        select(
+                            cast(ChatRequest.created_at, Date).label("date"),
+                            ApiKey.user_id.label("user_id"),
+                        )
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .where(
+                            ApiKey.user_id.isnot(None),
+                            ChatRequest.created_at >= start_datetime,
+                            ChatRequest.created_at <= end_datetime,
+                        )
+                        .distinct()
+                    )
+                ).all()
+
+                per_day: dict[str, set[str]] = {}
+                overall: set[str] = set()
+
+                def _add(day: str, ident: str | None) -> None:
+                    if ident is None:
+                        return
+                    per_day.setdefault(day, set()).add(ident)
+                    overall.add(ident)
+
+                for r in inference_rows:
+                    day = r.date.strftime("%Y-%m-%d")
+                    if r.type == ApiKeyType.liberclaw:
+                        _add(day, f"l:{r.liberclaw_user_id}" if r.liberclaw_user_id else None)
+                    else:
+                        _add(day, f"u:{r.user_id}" if r.user_id else None)
+
+                for cr in chat_rows:
+                    _add(cr.date.strftime("%Y-%m-%d"), f"u:{cr.user_id}" if cr.user_id else None)
+
+                return GlobalUsersStats(
+                    total_unique_users=len(overall),
+                    daily_active_users=[
+                        DailyActiveUsers(date=day, active_users=len(idents))
+                        for day, idents in sorted(per_day.items())
+                    ],
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving aggregate users stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
     async def get_global_chat_calls_stats(start_date: date, end_date: date) -> GlobalChatCallsStats:

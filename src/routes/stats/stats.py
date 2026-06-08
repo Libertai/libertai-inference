@@ -12,6 +12,7 @@ from src.interfaces.stats import (
     GlobalChatCallsStats,
     GlobalChatTokensStats,
     GlobalSummaryStats,
+    GlobalUsersStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -73,6 +74,18 @@ async def get_chat_tokens_stats(
         raise
 
 
+@router.get("/global/chat/users", response_model=GlobalUsersStats)  # type: ignore
+async def get_chat_users_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalUsersStats:
+    try:
+        return await StatsService.get_global_chat_users_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in chat users stats route: {str(e)}", exc_info=True)
+        raise
+
+
 # --- Generic inference stats: one set of routes for api / liberclaw / x402 / cli ---
 
 
@@ -112,6 +125,31 @@ async def get_inference_credits_stats(
         return await StatsService._get_inference_credits_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
         logger.error(f"Error in {key_type.value} credits stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/{key_type}/users", response_model=GlobalUsersStats)  # type: ignore
+async def get_inference_users_stats(
+    key_type: InferenceKeyType,
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalUsersStats:
+    try:
+        return await StatsService._get_inference_users_stats(ApiKeyType(key_type.value), start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in {key_type.value} users stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/users", response_model=GlobalUsersStats)  # type: ignore
+async def get_aggregate_users_stats(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalUsersStats:
+    try:
+        return await StatsService.get_global_users_stats(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in aggregate users stats route: {str(e)}", exc_info=True)
         raise
 
 
