@@ -27,6 +27,7 @@ from src.interfaces.auth import (
     LogoutRequest,
     RefreshRequest,
     TokenPairResponse,
+    UpdateProfileRequest,
     VerifyMagicLinkRequest,
     WalletChallengeRequest,
     WalletChallengeResponse,
@@ -39,7 +40,13 @@ from src.models.user import User
 from src.services import magic_link, oauth, wallet_auth
 from src.services.auth import create_access_token, get_current_user, verify_token
 from src.services.auth_tokens import REFRESH, create_access_token as create_user_access_token, create_refresh_token, decode_token
-from src.services.users import get_or_create_user_by_email, get_or_create_user_by_oauth, get_or_create_user_by_wallet, link_wallet
+from src.services.users import (
+    get_or_create_user_by_email,
+    get_or_create_user_by_oauth,
+    get_or_create_user_by_wallet,
+    link_wallet,
+    update_user_profile,
+)
 from src.utils.encryption import decrypt, encrypt
 from src.utils.logger import setup_logger
 
@@ -151,6 +158,23 @@ async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
         avatar_url=user.avatar_url,
         address=user.address,
     )
+
+
+@router.patch("/me")
+async def update_me(
+    request: UpdateProfileRequest, user: User = Depends(get_current_user)
+) -> CurrentUserResponse:
+    """Update the authenticated user's editable profile (display name)."""
+    async with AsyncSessionLocal() as db:
+        updated = await update_user_profile(db, user.id, request.display_name)
+        await db.commit()
+        return CurrentUserResponse(
+            id=str(updated.id),
+            email=updated.email,
+            display_name=updated.display_name,
+            avatar_url=updated.avatar_url,
+            address=updated.address,
+        )
 
 
 # --- Wallet (EVM) challenge/verify ---

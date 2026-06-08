@@ -134,3 +134,13 @@ async def link_wallet(db: AsyncSession, user: User, address: str, chain: str | N
     db.add(wallet)
     await db.flush()
     return wallet
+
+
+async def update_user_profile(db: AsyncSession, user_id: uuid.UUID, display_name: str | None) -> User:
+    """Update the user's editable profile fields (currently just the display name)."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise ValueError(f"User {user_id} not found")
+    user.display_name = display_name
+    await db.flush()
+    return user

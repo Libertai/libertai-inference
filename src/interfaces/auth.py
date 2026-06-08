@@ -88,6 +88,23 @@ class CurrentUserResponse(BaseModel):
     address: str | None = None
 
 
+class UpdateProfileRequest(BaseModel):
+    # The user's chosen display name. Trimmed; an empty value clears it (UI then falls back to
+    # email/address). Capped to keep it sane in headers/labels.
+    display_name: str | None = None
+
+    @field_validator("display_name")
+    def normalize_display_name(cls, value: str | None):
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > 50:
+            raise ValueError("display_name must be at most 50 characters")
+        return trimmed
+
+
 class ExchangeRequest(BaseModel):
     code: str
     # PKCE proof: the raw code_verifier whose SHA256 must match the stored challenge.
