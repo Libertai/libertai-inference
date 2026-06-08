@@ -116,11 +116,26 @@ def _send_smtp(email: str, html: str) -> None:
         server.sendmail(config.SMTP_FROM, [email], msg.as_string())
 
 
-async def send_magic_link_email(email: str, token: str, code: str) -> None:
-    """Send the magic-link email via SMTP. With no SMTP host configured (dev), log it instead."""
+def _resolve_redirect_base(redirect_base: str | None) -> str:
+    """Pick the base URL for the sign-in link. Honour the caller's origin only if it's an
+    allowed frontend (prevents the email from pointing at an attacker-controlled URL);
+    otherwise fall back to the default FRONTEND_URL."""
+    if redirect_base:
+        candidate = redirect_base.rstrip("/")
+        if candidate in {url.rstrip("/") for url in config.ALLOWED_FRONTEND_URLS}:
+            return candidate
+        logger.warning(f"Ignoring disallowed magic-link redirect_base: {redirect_base}")
+    return config.FRONTEND_URL.rstrip("/")
+
+
+async def send_magic_link_email(email: str, token: str, code: str, redirect_base: str | None = None) -> None:
+    """Send the magic-link email via SMTP. With no SMTP host configured (dev), log it instead.
+
+    `redirect_base` is the origin of the app the user signed in from (chat vs console); the link
+    points back there when it's an allowed frontend, else falls back to FRONTEND_URL."""
     import asyncio
 
-    link = f"{config.FRONTEND_URL}/auth/verify?token={token}"
+    link = f"{_resolve_redirect_base(redirect_base)}/auth/verify?token={token}"
     if not config.SMTP_HOST:
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return

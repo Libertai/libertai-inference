@@ -64,6 +64,8 @@ class _Config:
 
     # URLs + token lifetimes
     FRONTEND_URL: str
+    # Frontends allowed to receive a user (CORS + magic-link redirect target).
+    ALLOWED_FRONTEND_URLS: list[str]
     API_URL: str
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int
 
@@ -139,6 +141,15 @@ class _Config:
 
         # URLs + token lifetimes
         self.FRONTEND_URL = os.getenv("FRONTEND_URL", "")
+        # Origins we're willing to send a logged-in user to. Used both for CORS and to
+        # validate the magic-link redirect target so the sign-in email points back to the
+        # app the request came from (chat vs console), never an attacker-supplied URL.
+        self.ALLOWED_FRONTEND_URLS = [
+            "https://console.libertai.io",
+            "https://analytics.libertai.io",
+            "https://beta.chat.libertai.io",
+            "https://chat.libertai.io",
+        ] + (["http://localhost:5173", "http://localhost:3000"] if self.IS_DEVELOPMENT else [])
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 

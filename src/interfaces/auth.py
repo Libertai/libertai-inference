@@ -68,6 +68,10 @@ class WalletVerifyRequest(BaseModel):
 
 class EmailLoginRequest(BaseModel):
     email: str
+    # Origin of the app the user is signing in from (e.g. https://chat.libertai.io), so the
+    # magic-link email points back there. Validated against an allowlist server-side; ignored
+    # if missing or not allowed (falls back to FRONTEND_URL).
+    redirect_base: str | None = None
 
 
 class VerifyMagicLinkRequest(BaseModel):
