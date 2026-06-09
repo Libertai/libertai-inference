@@ -76,6 +76,20 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
             }
         },
     ),
+    "power": TierConfig(
+        name="power",
+        price_cents=10000,
+        currency=DEFAULT_CURRENCY,
+        window_5h_credits=25.0,
+        weekly_credits=60.0,
+        provider_plan_ids={
+            # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
+            "revolut": {
+                "plan_id": "d66f42c8-5b08-4dc0-9bd1-8f17f3f70b7b",
+                "variation_id": "71a36c44-4277-495d-9258-6eba1c325559",
+            }
+        },
+    ),
 }
 
 # Higher index = higher tier (used for up/downgrade validation).
