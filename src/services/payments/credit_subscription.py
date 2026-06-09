@@ -81,13 +81,13 @@ class CreditSubscriptionService:
             )
         ).scalar_one_or_none()
         if existing:
-            raise ValueError("Already subscribed")
+            raise ValueError("You already have an active subscription")
 
         price = CreditSubscriptionService.monthly_price(tier)
-        if await CreditService.get_balance(user.id) < price:
+        if await CreditService.get_balance(user.id, db=db) < price:
             raise ValueError("Insufficient credits — top up first")
 
-        ok = await CreditService.use_credits(user.id, price)
+        ok = await CreditService.use_credits(user.id, price, db=db)
         if not ok:
             raise ValueError("Insufficient credits — top up first")
 
@@ -127,9 +127,9 @@ class CreditSubscriptionService:
         )
 
         if charge > 0:
-            if await CreditService.get_balance(user.id) < charge:
+            if await CreditService.get_balance(user.id, db=db) < charge:
                 raise ValueError("Insufficient credits — top up first")
-            ok = await CreditService.use_credits(user.id, charge)
+            ok = await CreditService.use_credits(user.id, charge, db=db)
             if not ok:
                 raise ValueError("Insufficient credits — top up first")
 
@@ -202,13 +202,19 @@ class CreditSubscriptionService:
             target = sub.pending_tier or sub.tier
             price = CreditSubscriptionService.monthly_price(target)
 
-            if await CreditService.get_balance(sub.user_id) < price:
+            if await CreditService.get_balance(sub.user_id, db=db) < price:
                 sub.status = "expired"
                 await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
                 count += 1
                 continue
 
-            await CreditService.use_credits(sub.user_id, price)
+            ok = await CreditService.use_credits(sub.user_id, price, db=db)
+            if not ok:
+                sub.status = "expired"
+                await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
+                count += 1
+                continue
+
             sub.tier = target
             sub.pending_tier = None
             sub.current_period_start = now
