@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 DEFAULT_TIER = "free"
-DEFAULT_CURRENCY = "EUR"
+DEFAULT_CURRENCY = "USD"
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,6 @@ class TierConfig:
         return self.price_cents > 0
 
 
-# NOTE: placeholder plan IDs (ported from the liberclaw Revolut dashboard). Replace
-# with the LibertAI Revolut product's real plan/variation UUIDs before going live.
 SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
     "free": TierConfig(
         name="free",
@@ -50,42 +48,31 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         weekly_credits=2.0,
         provider_plan_ids={},
     ),
-    "starter": TierConfig(
-        name="starter",
-        price_cents=700,
+    "go": TierConfig(
+        name="go",
+        price_cents=800,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=2.0,
-        weekly_credits=10.0,
+        window_5h_credits=2.5,
+        weekly_credits=5.0,
         provider_plan_ids={
+            # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
             "revolut": {
                 "plan_id": "a9a0b97f-753f-4e13-ac60-f86733809dce",
                 "variation_id": "88e34b68-abea-497a-9743-01874274dcdf",
             }
         },
     ),
-    "pro": TierConfig(
-        name="pro",
-        price_cents=1900,
+    "plus": TierConfig(
+        name="plus",
+        price_cents=2000,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=8.0,
-        weekly_credits=40.0,
+        window_5h_credits=5.0,
+        weekly_credits=12.0,
         provider_plan_ids={
+            # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
             "revolut": {
                 "plan_id": "c4c23aef-c39d-419d-99b6-f84034102615",
                 "variation_id": "2bdb31f1-78d5-48ad-88eb-c9c41fac57ef",
-            }
-        },
-    ),
-    "team": TierConfig(
-        name="team",
-        price_cents=4900,
-        currency=DEFAULT_CURRENCY,
-        window_5h_credits=25.0,
-        weekly_credits=120.0,
-        provider_plan_ids={
-            "revolut": {
-                "plan_id": "d66f42c8-5b08-4dc0-9bd1-8f17f3f70b7b",
-                "variation_id": "71a36c44-4277-495d-9258-6eba1c325559",
             }
         },
     ),

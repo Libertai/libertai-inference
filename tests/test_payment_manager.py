@@ -37,7 +37,7 @@ class FakeProvider(PaymentProvider):
             kind=PaymentProviderKind.fiat,
             label="Fake",
             capabilities=[PaymentCapability.topup, PaymentCapability.subscription],
-            currencies=["EUR"],
+            currencies=["USD"],
         )
 
     async def create_topup(self, *, amount, currency, redirect_url, user_email=None, metadata=None):
@@ -136,7 +136,7 @@ async def test_subscribe_activates_tier(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
 
-    await mgr.start_checkout(user, tier="pro", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x")
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "pending"
     assert await mgr.current_tier(user.id) == "free"  # not active yet
@@ -149,14 +149,14 @@ async def test_subscribe_activates_tier(db):
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"
     assert sub.current_period_end is not None
-    assert await mgr.current_tier(user.id) == "pro"
+    assert await mgr.current_tier(user.id) == "plus"
 
 
 @pytest.mark.asyncio
 async def test_subscription_event_dedup(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="starter", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x")
 
     event = PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                          provider_event_id="ORDER_COMPLETED:setup_1",
@@ -180,17 +180,17 @@ async def test_upgrade_parks_then_cancels_old(db):
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
 
-    # Active starter sub.
-    await mgr.start_checkout(user, tier="starter", redirect_url="http://x")
+    # Active go sub.
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x")
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                      provider_event_id="ORDER_COMPLETED:setup_1",
                      provider_subscription_id="psub_1", order_id="setup_1")
     )
-    assert await mgr.current_tier(user.id) == "starter"
+    assert await mgr.current_tier(user.id) == "go"
 
-    # Upgrade to pro -> parks old as "upgrading", new pending sub created.
-    await mgr.upgrade(user, new_tier="pro", redirect_url="http://x")
+    # Upgrade to plus -> parks old as "upgrading", new pending sub created.
+    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x")
     parked = (
         await db.execute(
             select(PlanSubscription).where(
@@ -198,15 +198,15 @@ async def test_upgrade_parks_then_cancels_old(db):
             )
         )
     ).scalar_one()
-    assert parked.tier == "starter"
+    assert parked.tier == "go"
 
-    # Pay the new sub -> activates pro, old gets cancelled.
+    # Pay the new sub -> activates plus, old gets cancelled.
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                      provider_event_id="ORDER_COMPLETED:setup_2",
                      provider_subscription_id="psub_2", order_id="setup_2")
     )
-    assert await mgr.current_tier(user.id) == "pro"
+    assert await mgr.current_tier(user.id) == "plus"
     assert "psub_1" in provider.cancelled
     refreshed_old = await db.get(PlanSubscription, parked.id)
     assert refreshed_old.status == "cancelled"
@@ -217,7 +217,7 @@ async def test_cancel_sets_period_end_flag(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="pro", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x")
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                      provider_event_id="ORDER_COMPLETED:setup_1",
