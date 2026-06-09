@@ -31,25 +31,10 @@ async def _balance(user_id) -> float:
         return await user.get_credit_balance()
 
 
-async def test_per_user_chat_key_deducts_when_subscriptions_disabled(monkeypatch):
-    """Subscriptions off: a per-user chat key now draws down prepaid (no longer free)."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", False)
-    address = "0xC4A7000000000000000000000000000000000010"
-    user_id = await _seed_user_with_credits(address, 10.0)
-    chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
-
-    ok = await ApiKeyService.register_inference_call(
-        key=chat_key.full_key, credits_used=3.0, model_name="test-model"
-    )
-    assert ok is True
-    assert await _balance(user_id) == 7.0  # chat now metered
-
-
-async def test_per_user_chat_window_then_overflow_to_prepaid(monkeypatch):
-    """Subscriptions on: a per-user chat key is covered by the free tier window until it's
+async def test_per_user_chat_window_then_overflow_to_prepaid():
+    """A per-user chat key is covered by the free tier window until it's
     exhausted, then overflow draws from prepaid. This proves the window logic actually engages
     (the key isn't silently free)."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000013"
     user_id = await _seed_user_with_credits(address, 10.0)
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
@@ -73,7 +58,6 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
     """The anonymous service key (config.LIBERTAI_CHAT_API_KEY) stays free even once the free
     window is exhausted (source != "tier"), where a normal key WOULD deduct. This makes the
     is_shared_free_key guard the thing under test: removing it would fail this test."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000014"
     user_id = await _seed_user_with_credits(address, 10.0)
 
@@ -97,11 +81,10 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
     assert await _balance(user_id) == balance_after_priming  # shared free key is never charged
 
 
-async def test_api_key_usage_deducts_credits(monkeypatch):
-    """Contrast: a standard api key DOES draw down the balance (subscriptions disabled)."""
-    # Pin the gate-on-prepaid path explicitly rather than relying on the env default, so the
-    # contrast holds regardless of a developer's local SUBSCRIPTIONS_ENABLED setting.
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", False)
+async def test_api_key_usage_beyond_free_window_deducts():
+    """Contrast: a standard api key DOES draw down the balance once usage exceeds the free
+    weekly window (2.0). A single 3.0-credit call overflows the window, so the overflow is
+    charged to prepaid."""
     address = "0xA9100000000000000000000000000000000000011"
     user_id = await _seed_user_with_credits(address, 10.0)
 
@@ -115,11 +98,10 @@ async def test_api_key_usage_deducts_credits(monkeypatch):
     assert await _balance(user_id) == 7.0
 
 
-async def test_chat_key_whitelisted_at_gateway_with_zero_balance(monkeypatch):
+async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
     """The gateway invariant that makes chat free: a chat key for a user with NO credits must still
     appear in the admin whitelist (free tier window covers them). A soft-deleted one must not."""
-    # With subscriptions on, a user with zero usage is within their free window -> whitelisted.
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+    # A user with zero usage is within their free window -> whitelisted.
     address = "0xC4A7000000000000000000000000000000000012"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
@@ -151,9 +133,8 @@ async def test_chat_api_key_for_email_user():
     assert isinstance(chat_key.full_key, str) and len(chat_key.full_key) > 0
 
 
-async def test_blocked_chat_key_drops_from_whitelist(monkeypatch):
-    """Subscriptions on: a chat user who exhausted the free window AND has no prepaid is dropped."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+async def test_blocked_chat_key_drops_from_whitelist():
+    """A chat user who exhausted the free window AND has no prepaid is dropped."""
     address = "0xC4A7000000000000000000000000000000000015"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
@@ -170,7 +151,6 @@ async def test_blocked_chat_key_drops_from_whitelist(monkeypatch):
 
 
 async def test_shared_free_chat_key_always_whitelisted(monkeypatch):
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000016"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
