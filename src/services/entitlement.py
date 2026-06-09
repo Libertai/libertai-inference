@@ -45,6 +45,11 @@ WINDOW_DURATIONS: dict[str, timedelta] = {
     WINDOW_WEEKLY: timedelta(days=7),
 }
 
+# Key types whose usage accrues against a user's entitlement windows + prepaid balance.
+# Mirrors the chargeable set in api_key.py (everything except liberclaw / x402, and the
+# shared anonymous chat service key which is filtered by value there).
+CHARGEABLE_KEY_TYPES = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
+
 
 @dataclass
 class AllowanceState:
@@ -124,7 +129,7 @@ async def _usage_since(db: AsyncSession, user_id: uuid.UUID, cutoff: datetime) -
             .join(ApiKeyDB, InferenceCall.api_key_id == ApiKeyDB.id)
             .where(
                 ApiKeyDB.user_id == user_id,
-                ApiKeyDB.type == ApiKeyType.api,
+                ApiKeyDB.type.in_(CHARGEABLE_KEY_TYPES),
                 InferenceCall.used_at >= cutoff,
             )
         )
@@ -170,7 +175,7 @@ async def window_usage_by_users(
             )
             .where(
                 ApiKeyDB.user_id.in_(user_ids),
-                ApiKeyDB.type == ApiKeyType.api,
+                ApiKeyDB.type.in_(CHARGEABLE_KEY_TYPES),
                 EntitlementWindow.expires_at > now,
                 InferenceCall.used_at >= EntitlementWindow.started_at,
             )

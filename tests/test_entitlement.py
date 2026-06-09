@@ -14,7 +14,7 @@ from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
-from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, get_allowance_state, open_windows
+from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, get_allowance_state, open_windows, window_usage_by_users
 
 NOW = datetime(2026, 6, 3, 12, 0, 0)
 
@@ -160,3 +160,17 @@ async def test_open_windows_creates_resets_and_preserves(db):
     ).scalar_one()
     assert w5_reset.started_at == NOW + timedelta(hours=6)
     assert w5_reset.expires_at == NOW + timedelta(hours=11)
+
+
+@pytest.mark.asyncio
+async def test_chat_key_usage_counts_in_window(db):
+    user = await _user(db)
+    chat_key = ApiKeyDB(key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.chat)
+    db.add(chat_key)
+    await db.flush()
+
+    await open_windows(db, user.id, now=NOW)
+    await _use(db, chat_key.id, 1.5, NOW)
+
+    result = await window_usage_by_users(db, {user.id}, WINDOW_WEEKLY, NOW)
+    assert result.get(user.id) == pytest.approx(1.5)
