@@ -269,8 +269,7 @@ async def test_upgrade_insufficient_credits_raises_no_change(db):
 
 async def test_downgrade_plus_to_go_then_renewal_charges_go_price(db):
     user = await _make_user(db)
-    plus_price = get_tier("plus").price_cents / 100  # 20.0
-    go_price = get_tier("go").price_cents / 100      # 8.0
+    go_price = get_tier("go").price_cents / 100  # 8.0
     await _add_credits(db, user.id, 60.0)
 
     now = datetime.now()
