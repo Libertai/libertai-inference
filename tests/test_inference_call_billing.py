@@ -54,6 +54,26 @@ async def test_per_user_chat_window_then_overflow_to_prepaid():
     assert await _balance(user_id) < 10.0  # overflow charged to prepaid
 
 
+async def test_call_within_tighter_window_then_split_charge():
+    """Pin the split-charge math across two calls. Free tier: 5h=0.5, weekly=2.0.
+    Call 1 (0.5) exactly fills the 5h window -> fully tier-covered, no charge.
+    Call 2 (1.0) finds 5h remaining 0.0 -> entirely overflow -> balance 10.0 - 1.0 = 9.0."""
+    address = "0xA9100000000000000000000000000000000000021"
+    user_id = await _seed_user_with_credits(address, 10.0)
+
+    api_key = await ApiKeyService.create_api_key(user_id=user_id, name="split", user_address=address)
+
+    await ApiKeyService.register_inference_call(
+        key=api_key.full_key, credits_used=0.5, model_name="test-model"
+    )
+    assert await _balance(user_id) == 10.0  # exactly fills the 5h window, nothing overflows
+
+    await ApiKeyService.register_inference_call(
+        key=api_key.full_key, credits_used=1.0, model_name="test-model"
+    )
+    assert await _balance(user_id) == 9.0  # 5h window full -> whole 1.0 overflows to prepaid
+
+
 async def test_shared_free_chat_key_never_deducts(monkeypatch):
     """The anonymous service key (config.LIBERTAI_CHAT_API_KEY) stays free even once the free
     window is exhausted (source != "tier"), where a normal key WOULD deduct. This makes the
@@ -81,10 +101,11 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
     assert await _balance(user_id) == balance_after_priming  # shared free key is never charged
 
 
-async def test_api_key_usage_beyond_free_window_deducts():
-    """Contrast: a standard api key DOES draw down the balance once usage exceeds the free
-    weekly window (2.0). A single 3.0-credit call overflows the window, so the overflow is
-    charged to prepaid."""
+async def test_api_key_usage_beyond_free_window_charges_only_overflow():
+    """A single call straddling the free window is charged ONLY for its overflow, not in full.
+    The free tier's tighter window is 5h=0.5 (weekly=2.0), so a 3.0-credit call against an empty
+    window is covered 0.5 by the tier and overflows 2.5 to prepaid -> balance 10.0 - 2.5 = 7.5.
+    Falsifiable: the pre-fix behavior charged the full 3.0 (balance 7.0)."""
     address = "0xA9100000000000000000000000000000000000011"
     user_id = await _seed_user_with_credits(address, 10.0)
 
@@ -95,7 +116,7 @@ async def test_api_key_usage_beyond_free_window_deducts():
     )
 
     assert ok is True
-    assert await _balance(user_id) == 7.0
+    assert await _balance(user_id) == 7.5
 
 
 async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
