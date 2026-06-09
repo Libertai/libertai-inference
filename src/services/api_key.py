@@ -560,7 +560,8 @@ class ApiKeyService:
                 )
 
                 # CLI keys are credit-gated exactly like standard api keys.
-                chargeable_api_types = (ApiKeyType.api, ApiKeyType.cli)
+                # Per-user chat keys are also chargeable; only the shared anonymous service key is exempt.
+                chargeable_api_types = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
 
                 # Pre-fetch balances for all users to avoid N+1 queries
                 user_ids = {k.user_id for k in api_keys if k.user_id and k.type in chargeable_api_types}
@@ -653,6 +654,10 @@ class ApiKeyService:
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type in chargeable_api_types:
+                        if key.key == config.LIBERTAI_CHAT_API_KEY:
+                            # Shared anonymous chat service key: always allowed, never gated.
+                            result.append(key.key)
+                            continue
                         if not key.user_id:
                             continue
                         if config.SUBSCRIPTIONS_ENABLED:
@@ -683,7 +688,7 @@ class ApiKeyService:
                             if effective_limit < 0.02:
                                 continue
 
-                    # chat keys and valid liberclaw/api keys pass through
+                    # valid liberclaw/api/cli/chat keys pass through
                     result.append(key.key)
 
                 return result

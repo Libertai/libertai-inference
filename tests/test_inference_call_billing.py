@@ -115,9 +115,11 @@ async def test_api_key_usage_deducts_credits(monkeypatch):
     assert await _balance(user_id) == 7.0
 
 
-async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
+async def test_chat_key_whitelisted_at_gateway_with_zero_balance(monkeypatch):
     """The gateway invariant that makes chat free: a chat key for a user with NO credits must still
-    appear in the admin whitelist (chat keys bypass the balance gate). A soft-deleted one must not."""
+    appear in the admin whitelist (free tier window covers them). A soft-deleted one must not."""
+    # With subscriptions on, a user with zero usage is within their free window -> whitelisted.
+    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000012"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
@@ -127,7 +129,7 @@ async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
     whitelist = await ApiKeyService.get_admin_all_api_keys()
-    assert chat_key.full_key in whitelist  # present despite zero balance
+    assert chat_key.full_key in whitelist  # present: zero usage is within free tier window
 
     await ApiKeyService.delete_api_key(chat_key.id)
     whitelist_after = await ApiKeyService.get_admin_all_api_keys()
@@ -147,3 +149,37 @@ async def test_chat_api_key_for_email_user():
 
     assert chat_key.type == ApiKeyType.chat
     assert isinstance(chat_key.full_key, str) and len(chat_key.full_key) > 0
+
+
+async def test_blocked_chat_key_drops_from_whitelist(monkeypatch):
+    """Subscriptions on: a chat user who exhausted the free window AND has no prepaid is dropped."""
+    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+    address = "0xC4A7000000000000000000000000000000000015"
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, address)
+        await db.commit()
+        user_id = user.id
+    chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
+
+    # Drain past the free weekly window (2.0) with zero prepaid -> blocked.
+    await ApiKeyService.register_inference_call(
+        key=chat_key.full_key, credits_used=2.5, model_name="m"
+    )
+    whitelist = await ApiKeyService.get_admin_all_api_keys()
+    assert chat_key.full_key not in whitelist
+
+
+async def test_shared_free_chat_key_always_whitelisted(monkeypatch):
+    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+    address = "0xC4A7000000000000000000000000000000000016"
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, address)
+        await db.commit()
+        user_id = user.id
+    chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
+    monkeypatch.setattr(config, "LIBERTAI_CHAT_API_KEY", chat_key.full_key)
+    # Even with usage that would block a normal user:
+    await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=5.0, model_name="m")
+
+    whitelist = await ApiKeyService.get_admin_all_api_keys()
+    assert chat_key.full_key in whitelist
