@@ -22,8 +22,12 @@ from src.models.user import User
 from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
 from src.services.users import get_or_create_user_by_email
+from src.subscription_tiers import get_tier
 
 pytestmark = pytest.mark.asyncio
+
+# Drain enough to exhaust the free tier weekly window (derived so it tracks the tier cap).
+_FREE_WINDOW_DRAIN = get_tier("free").weekly_credits + 1.0
 
 # A fixed price returned by the monkeypatched aleph_service.
 _FIXED_PRICE = 3.0
@@ -114,11 +118,11 @@ async def test_per_user_chat_key_text_metered_after_window_exhausted(monkeypatch
         initial_balance = await _balance(user_id)
         assert initial_balance == 10.0
 
-        # First call: exhaust the free weekly window (2.0) by calling register_inference_call
+        # First call: exhaust the free weekly window by calling register_inference_call
         # directly so the window is used up, then test the route for the deduction path.
-        # Use the service directly to drain the window (credits_used > 2.0 weekly cap).
+        # The drain amount is derived from the tier so it tracks the cap if it changes.
         await ApiKeyService.register_inference_call(
-            key=chat_key.full_key, credits_used=2.5, model_name="seed-model"
+            key=chat_key.full_key, credits_used=_FREE_WINDOW_DRAIN, model_name="seed-model"
         )
         balance_after_drain = await _balance(user_id)
         assert balance_after_drain < 10.0, "Window was exhausted, prepaid should have been charged"
@@ -209,6 +213,98 @@ async def test_shared_chat_key_no_inference_call_no_deduction(monkeypatch, async
         # Balance MUST NOT change.
         assert await _balance(user_id) == initial_balance, (
             "Shared key must not deduct from prepaid balance"
+        )
+
+    finally:
+        await _cleanup(user_id)
+
+
+# ---------------------------------------------------------------------------
+# (c) Per-user chat key: IMAGE usage past the free window meters (InferenceCall + ChatRequest)
+# ---------------------------------------------------------------------------
+
+
+async def test_per_user_chat_key_image_metered_after_window_exhausted(monkeypatch, async_client):
+    """POST an image usage log (ImageInferenceCallData shape) for a per-user chat key with the
+    free window exhausted: an InferenceCall row (+1) and a ChatRequest row (+1) must be written."""
+    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+
+    import src.routes.api_keys.api_keys as route_module
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
+
+    email = "chat-metered-image@example.com"
+    user_id, chat_key = await _seed_user_with_chat_key(email, prepaid=10.0)
+    key_id = chat_key.id
+
+    try:
+        # Exhaust the free weekly window so the image call's overflow meters to prepaid.
+        await ApiKeyService.register_inference_call(
+            key=chat_key.full_key, credits_used=_FREE_WINDOW_DRAIN, model_name="seed-model"
+        )
+        assert await _balance(user_id) < 10.0
+
+        ic_before = await _inference_call_count(key_id)
+        cr_before = await _chat_request_count(key_id)
+
+        resp = await async_client.post(
+            "/api-keys/admin/usage",
+            json={
+                "key": chat_key.full_key,
+                "model_name": "test-image-model",
+                "image_count": 2,
+                "type": "image",
+            },
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        # Both a ChatRequest and an InferenceCall row must have been written.
+        assert await _chat_request_count(key_id) == cr_before + 1
+        assert await _inference_call_count(key_id) == ic_before + 1
+
+    finally:
+        await _cleanup(user_id)
+
+
+# ---------------------------------------------------------------------------
+# (d) Shared key, IMAGE usage: ChatRequest written, ZERO InferenceCall
+# ---------------------------------------------------------------------------
+
+
+async def test_shared_chat_key_image_no_inference_call(monkeypatch, async_client):
+    """POST an image usage log for the shared anonymous chat key: a ChatRequest row (+1) must be
+    written but NO InferenceCall row."""
+    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
+
+    import src.routes.api_keys.api_keys as route_module
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
+
+    email = "chat-shared-image@example.com"
+    user_id, chat_key = await _seed_user_with_chat_key(email, prepaid=10.0)
+    key_id = chat_key.id
+
+    monkeypatch.setattr(config, "LIBERTAI_CHAT_API_KEY", chat_key.full_key)
+
+    try:
+        ic_before = await _inference_call_count(key_id)
+        cr_before = await _chat_request_count(key_id)
+
+        resp = await async_client.post(
+            "/api-keys/admin/usage",
+            json={
+                "key": chat_key.full_key,
+                "model_name": "test-image-model",
+                "image_count": 2,
+                "type": "image",
+            },
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        # ChatRequest MUST be created; InferenceCall MUST NOT.
+        assert await _chat_request_count(key_id) == cr_before + 1
+        assert await _inference_call_count(key_id) == ic_before, (
+            "Shared key must not write an InferenceCall row (image path)"
         )
 
     finally:
