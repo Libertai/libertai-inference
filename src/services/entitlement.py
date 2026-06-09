@@ -46,8 +46,8 @@ WINDOW_DURATIONS: dict[str, timedelta] = {
 }
 
 # Key types whose usage accrues against a user's entitlement windows + prepaid balance.
-# Mirrors the chargeable set in api_key.py (everything except liberclaw / x402, and the
-# shared anonymous chat service key which is filtered by value there).
+# Excludes liberclaw and x402 (separate billing paths); the shared anonymous chat
+# service key is excluded by value in register_inference_call, not by type here.
 CHARGEABLE_KEY_TYPES = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
 
 
@@ -122,7 +122,7 @@ async def get_active_tier(db: AsyncSession, user_id: uuid.UUID) -> str:
 
 
 async def _usage_since(db: AsyncSession, user_id: uuid.UUID, cutoff: datetime) -> float:
-    """Credits used across a user's ``api`` keys since ``cutoff``."""
+    """Credits used across a user's chargeable keys (api, cli, chat) since ``cutoff``."""
     total = (
         await db.execute(
             select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0))

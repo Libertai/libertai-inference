@@ -174,3 +174,8 @@ async def test_chat_key_usage_counts_in_window(db):
 
     result = await window_usage_by_users(db, {user.id}, WINDOW_WEEKLY, NOW)
     assert result.get(user.id) == pytest.approx(1.5)
+
+    # Same widened filter must propagate through get_allowance_state.
+    state = await get_allowance_state(db, user.id, now=NOW)
+    assert state.weekly_used == pytest.approx(1.5)
+    assert state.window_5h_used == pytest.approx(1.5)
