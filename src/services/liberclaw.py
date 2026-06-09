@@ -11,6 +11,7 @@ from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.models.liberclaw_user import LiberclawUser
+from src.services.api_key_pool import ApiKeyPoolService
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -54,15 +55,27 @@ class LiberclawService:
             if existing_key:
                 return LiberclawApiKeyResponse(key=existing_key.key, is_new=False)
 
-            key = ApiKeyDB.generate_key()
-            api_key = ApiKeyDB(
-                key=key,
+            claimed = await ApiKeyPoolService.claim_warm_key(
+                db,
+                target_type=ApiKeyType.liberclaw,
                 name=f"liberclaw-{user_id}",
-                type=ApiKeyType.liberclaw,
                 liberclaw_user_id=lc_user.id,
             )
-            db.add(api_key)
+            if claimed is not None:
+                api_key = claimed
+            else:
+                api_key = ApiKeyDB(
+                    key=ApiKeyDB.generate_key(),
+                    name=f"liberclaw-{user_id}",
+                    type=ApiKeyType.liberclaw,
+                    liberclaw_user_id=lc_user.id,
+                )
+                db.add(api_key)
+            key = api_key.key
             await db.commit()
+
+            if claimed is not None:
+                ApiKeyPoolService.schedule_refill()
 
             return LiberclawApiKeyResponse(key=key, is_new=True)
 
