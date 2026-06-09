@@ -37,7 +37,7 @@ class DowngradeRequest(BaseModel):
 
 
 class CheckoutResponse(BaseModel):
-    checkout_url: str
+    checkout_url: str | None = None
 
 
 class SubscriptionResponse(BaseModel):
