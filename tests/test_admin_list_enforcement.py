@@ -24,14 +24,6 @@ from src.services.entitlement import WINDOW_5H
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.fixture(autouse=True)
-def _enable_subscriptions(monkeypatch):
-    """These tests exercise the tier-window entitlement path, which is gated behind the flag."""
-    from src.config import config
-
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
-
-
 async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
     """Create a user + api key with optional usage in an active/expired 5h window.
 
@@ -89,22 +81,6 @@ async def test_free_key_included_within_window():
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:
         await _cleanup(user_id)
-
-
-async def test_subscriptions_disabled_gates_on_prepaid_only(monkeypatch):
-    from src.config import config
-
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", False)
-    # No prepaid, no subscription -> excluded (no free allowance when subscriptions are off).
-    no_credit_user, no_credit_key = await _setup()
-    paid_user, paid_key = await _setup(prepaid=5.0)
-    try:
-        keys = await ApiKeyService.get_admin_all_api_keys()
-        assert no_credit_key not in keys
-        assert paid_key in keys
-    finally:
-        await _cleanup(no_credit_user)
-        await _cleanup(paid_user)
 
 
 async def test_free_key_excluded_when_window_exhausted_no_prepaid():

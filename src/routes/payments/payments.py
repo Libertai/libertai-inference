@@ -26,7 +26,7 @@ from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
 from src.services.auth import get_current_user
-from src.services.entitlement import PREPAID_MIN, get_allowance_state
+from src.services.entitlement import get_allowance_state
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
@@ -50,11 +50,6 @@ async def expire_subscriptions() -> int:
 def _checkout_redirect() -> str:
     base = config.FRONTEND_URL.rstrip("/") if config.FRONTEND_URL else ""
     return f"{base}/billing"
-
-
-def _require_subscriptions_enabled() -> None:
-    if not config.SUBSCRIPTIONS_ENABLED:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriptions are not available")
 
 
 def _require_provider(provider_id: str):
@@ -129,7 +124,6 @@ async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> C
 
 @router.post("/subscribe", description="Open a checkout to subscribe to a paid tier")  # type: ignore
 async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
-    _require_subscriptions_enabled()
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -143,7 +137,6 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
 
 @router.post("/upgrade", description="Upgrade to a higher paid tier")  # type: ignore
 async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
-    _require_subscriptions_enabled()
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -157,7 +150,6 @@ async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)
 
 @router.post("/downgrade", description="Queue a downgrade for the end of the billing period")  # type: ignore
 async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_user)) -> DowngradeResponse:
-    _require_subscriptions_enabled()
     async with AsyncSessionLocal() as db:
         sub = (
             await db.execute(
@@ -179,7 +171,6 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
 
 @router.post("/cancel", description="Cancel the current subscription at period end")  # type: ignore
 async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
-    _require_subscriptions_enabled()
     async with AsyncSessionLocal() as db:
         sub = (
             await db.execute(
@@ -212,14 +203,6 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         ).scalars().first()
         allowance = await get_allowance_state(db, user.id)
 
-    if config.SUBSCRIPTIONS_ENABLED:
-        resp_allowed = allowance.allowed
-        resp_source = allowance.source
-    else:
-        # Subscriptions disabled: the gateway gates on prepaid balance only.
-        resp_allowed = allowance.prepaid_balance >= PREPAID_MIN
-        resp_source = "prepaid" if resp_allowed else "blocked"
-
     has_sub = sub is not None
     return SubscriptionResponse(
         tier=(sub.tier if sub and sub.status == "active" else DEFAULT_TIER),
@@ -230,8 +213,8 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         cancel_at_period_end=sub.cancel_at_period_end if sub else False,
         pending_tier=sub.pending_tier if sub else None,
         is_trial=sub.is_trial if sub else False,
-        allowed=resp_allowed,
-        source=resp_source,
+        allowed=allowance.allowed,
+        source=allowance.source,
         window_5h_used=allowance.window_5h_used,
         window_5h_limit=allowance.window_5h_limit,
         window_5h_resets_at=allowance.window_5h_resets_at,
