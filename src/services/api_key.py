@@ -559,8 +559,10 @@ class ApiKeyService:
                     .all()
                 )
 
-                # CLI keys are credit-gated exactly like standard api keys.
-                # Per-user chat keys are also chargeable; only the shared anonymous service key is exempt.
+                # Tuple gating three downstream paths: (1) balance pre-fetch, (2) monthly-limit
+                # pre-fetch, (3) the per-key credit gate. Chat is included so per-user chat keys are
+                # credit-gated like api/cli. (The monthly-limit path is a no-op for chat today because
+                # chat keys are created with monthly_limit=None.)
                 chargeable_api_types = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
 
                 # Pre-fetch balances for all users to avoid N+1 queries
@@ -676,7 +678,7 @@ class ApiKeyService:
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type in chargeable_api_types:
-                        if key.key == config.LIBERTAI_CHAT_API_KEY:
+                        if config.LIBERTAI_CHAT_API_KEY and key.key == config.LIBERTAI_CHAT_API_KEY:
                             # Shared anonymous chat service key: always allowed, never gated.
                             result.append(key.key)
                             continue
@@ -775,7 +777,7 @@ class ApiKeyService:
                 # Chargeable keys (everything except liberclaw / x402, and the shared
                 # anonymous chat service key) with an owner accrue against fixed windows
                 # then prepaid balance. Per-user chat keys are chargeable like api/cli.
-                is_shared_free_key = key == config.LIBERTAI_CHAT_API_KEY
+                is_shared_free_key = bool(config.LIBERTAI_CHAT_API_KEY) and key == config.LIBERTAI_CHAT_API_KEY
                 chargeable_user_id = (
                     api_key.user_id
                     if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and not is_shared_free_key
