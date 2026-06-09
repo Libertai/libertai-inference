@@ -3,6 +3,7 @@ import uuid
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 
+from src.config import config
 from src.interfaces.api_keys import (
     ApiKey,
     ApiKeyAdminListResponse,
@@ -182,7 +183,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found")
 
             if api_key.type == ApiKeyType.chat:
-                logger.debug(f"Logging chat request for key {usage_log.key}")
+                # Always keep the lightweight chat-history log.
                 if isinstance(usage_log, ImageInferenceCallData):
                     await ChatRequestService.add_chat_request(
                         api_key_id=api_key.id,
@@ -200,6 +201,34 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         cached_tokens=usage_log.cached_tokens,
                         model_name=usage_log.model_name,
                     )
+                # The shared anonymous chat key stays free; per-user chat keys are metered
+                # (window -> prepaid) via register_inference_call, like api/cli keys.
+                if not (config.LIBERTAI_CHAT_API_KEY and usage_log.key == config.LIBERTAI_CHAT_API_KEY):
+                    if isinstance(usage_log, ImageInferenceCallData):
+                        credits_used = await aleph_service.calculate_price(
+                            model_id=usage_log.model_name,
+                            image_count=usage_log.image_count,
+                        )
+                        await ApiKeyService.register_inference_call(
+                            key=usage_log.key,
+                            credits_used=credits_used,
+                            model_name=usage_log.model_name,
+                            image_count=usage_log.image_count,
+                        )
+                    else:
+                        credits_used = await aleph_service.calculate_price(
+                            model_id=usage_log.model_name,
+                            input_tokens=usage_log.input_tokens,
+                            output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                        )
+                        await ApiKeyService.register_inference_call(
+                            key=usage_log.key,
+                            credits_used=credits_used,
+                            model_name=usage_log.model_name,
+                            input_tokens=usage_log.input_tokens,
+                            output_tokens=usage_log.output_tokens,
+                            cached_tokens=usage_log.cached_tokens,
+                        )
             elif api_key.type == ApiKeyType.liberclaw:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
