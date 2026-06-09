@@ -73,6 +73,12 @@ class _Config:
     # subscriptions, API access is gated on prepaid balance only.
     SUBSCRIPTIONS_ENABLED: bool
 
+    # Warm API-key pool: keys pre-created and pre-propagated to instances so a freshly
+    # "created" key is recognized immediately (no ~30s propagation wait).
+    POOL_SIZE: int
+    POOL_WARM_THRESHOLD_SECONDS: int
+    POOL_RECONCILE_INTERVAL_SECONDS: int
+
     # Provider-agnostic fiat payments (Revolut first)
     REVOLUT_SECRET_KEY: str
     REVOLUT_WEBHOOK_SECRET: str
@@ -154,6 +160,11 @@ class _Config:
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
         self.SUBSCRIPTIONS_ENABLED = os.getenv("SUBSCRIPTIONS_ENABLED", "False").lower() == "true"
+
+        # Warm API-key pool
+        self.POOL_SIZE = int(os.getenv("POOL_SIZE", "5"))
+        self.POOL_WARM_THRESHOLD_SECONDS = int(os.getenv("POOL_WARM_THRESHOLD_SECONDS", "60"))
+        self.POOL_RECONCILE_INTERVAL_SECONDS = int(os.getenv("POOL_RECONCILE_INTERVAL_SECONDS", "300"))
 
         # Payments (Revolut)
         self.REVOLUT_SECRET_KEY = os.getenv("REVOLUT_SECRET_KEY", "")
