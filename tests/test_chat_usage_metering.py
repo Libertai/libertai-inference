@@ -151,11 +151,9 @@ async def test_per_user_chat_key_text_metered_after_window_exhausted(monkeypatch
         # An InferenceCall row must have been created (metering).
         assert await _inference_call_count(key_id) == ic_before + 1
 
-        # Balance must have dropped (overflow -> prepaid deduction).
+        # Balance must have dropped by exactly the fixed price (overflow -> prepaid deduction).
         balance_after_route = await _balance(user_id)
-        assert balance_after_route < balance_before_route, (
-            f"Expected balance to drop from {balance_before_route}, got {balance_after_route}"
-        )
+        assert balance_before_route - balance_after_route == pytest.approx(_FIXED_PRICE)
 
     finally:
         await _cleanup(user_id)

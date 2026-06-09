@@ -15,6 +15,7 @@ from src.models.inference_call import InferenceCall
 from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
+    CHARGEABLE_KEY_TYPES,
     WINDOW_5H,
     WINDOW_WEEKLY,
     active_tiers_by_users,
@@ -563,7 +564,7 @@ class ApiKeyService:
                 # pre-fetch, (3) the per-key credit gate. Chat is included so per-user chat keys are
                 # credit-gated like api/cli. (The monthly-limit path is a no-op for chat today because
                 # chat keys are created with monthly_limit=None.)
-                chargeable_api_types = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
+                chargeable_api_types = CHARGEABLE_KEY_TYPES
 
                 # Pre-fetch balances for all users to avoid N+1 queries
                 user_ids = {k.user_id for k in api_keys if k.user_id and k.type in chargeable_api_types}

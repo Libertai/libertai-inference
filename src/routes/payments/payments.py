@@ -26,7 +26,7 @@ from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
 from src.services.auth import get_current_user
-from src.services.entitlement import get_allowance_state
+from src.services.entitlement import PREPAID_MIN, get_allowance_state
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
@@ -212,6 +212,14 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         ).scalars().first()
         allowance = await get_allowance_state(db, user.id)
 
+    if config.SUBSCRIPTIONS_ENABLED:
+        resp_allowed = allowance.allowed
+        resp_source = allowance.source
+    else:
+        # Subscriptions disabled: the gateway gates on prepaid balance only.
+        resp_allowed = allowance.prepaid_balance >= PREPAID_MIN
+        resp_source = "prepaid" if resp_allowed else "blocked"
+
     has_sub = sub is not None
     return SubscriptionResponse(
         tier=(sub.tier if sub and sub.status == "active" else DEFAULT_TIER),
@@ -222,8 +230,8 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         cancel_at_period_end=sub.cancel_at_period_end if sub else False,
         pending_tier=sub.pending_tier if sub else None,
         is_trial=sub.is_trial if sub else False,
-        allowed=allowance.allowed,
-        source=allowance.source,
+        allowed=resp_allowed,
+        source=resp_source,
         window_5h_used=allowance.window_5h_used,
         window_5h_limit=allowance.window_5h_limit,
         window_5h_resets_at=allowance.window_5h_resets_at,
