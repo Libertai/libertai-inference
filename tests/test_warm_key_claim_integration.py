@@ -160,6 +160,32 @@ async def test_chat_get_existing_does_not_consume_pool(monkeypatch):
         await _cleanup_user(user_id)
 
 
+async def test_liberclaw_create_uses_warm_pool_key(monkeypatch):
+    from src.services import api_key_pool
+    from src.services.liberclaw import LiberclawService
+    from src.models.liberclaw_user import LiberclawUser
+
+    monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
+
+    warm = await _add_warm_pool_key()
+    user_id = f"lc-{uuid.uuid4().hex}"
+    try:
+        result = await LiberclawService.get_or_create_api_key(user_id=user_id, user_type="discord")
+        assert result.is_new is True
+        assert result.key == warm  # warm, already-propagated string
+    finally:
+        async with AsyncSessionLocal() as db:
+            lc = (
+                await db.execute(
+                    __import__("sqlalchemy").select(LiberclawUser).where(LiberclawUser.user_id == user_id)
+                )
+            ).scalars().first()
+            if lc is not None:
+                await db.execute(delete(ApiKeyDB).where(ApiKeyDB.liberclaw_user_id == lc.id))
+                await db.execute(delete(LiberclawUser).where(LiberclawUser.id == lc.id))
+                await db.commit()
+
+
 async def _pool_count_cli_helper() -> int:
     from sqlalchemy import func, select
 
