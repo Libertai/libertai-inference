@@ -154,6 +154,26 @@ async def test_prepaid_not_charged_while_within_window_then_charged_on_overflow(
         await _cleanup(user_id)
 
 
+async def test_pool_keys_are_included_in_whitelist_unconditionally():
+    """Unclaimed pool keys must ride in the whitelist (no owner, no credits) so they
+    propagate to instances and are warm by the time they're claimed."""
+    from src.services.api_key_pool import POOL_SENTINEL_NAME
+
+    async with AsyncSessionLocal() as db:
+        pool_key = ApiKeyDB.generate_key()
+        row = ApiKeyDB(key=pool_key, name=POOL_SENTINEL_NAME, type=ApiKeyType.pool)
+        db.add(row)
+        await db.commit()
+    try:
+        assert pool_key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import delete
+
+            await db.execute(delete(ApiKeyDB).where(ApiKeyDB.key == pool_key))
+            await db.commit()
+
+
 async def _balance(user_id) -> float:
     from sqlalchemy import func, select
 
