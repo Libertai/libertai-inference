@@ -36,7 +36,7 @@ async def test_tiers_endpoint(async_client):
     resp = await async_client.get("/payments/tiers")
     assert resp.status_code == 200
     names = {t["name"] for t in resp.json()}
-    assert {"free", "starter", "pro", "team"} <= names
+    assert {"free", "go", "plus"} == names
 
 
 async def test_subscription_requires_auth(async_client):

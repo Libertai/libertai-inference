@@ -124,7 +124,7 @@ async def test_key_returns_after_window_resets():
 
 
 async def test_paid_tier_gets_larger_window():
-    user_id, key = await _setup(usage=0.5, window="active", tier="pro")  # exhausts free, fine for pro
+    user_id, key = await _setup(usage=0.5, window="active", tier="plus")  # exhausts free, fine for plus
     try:
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:

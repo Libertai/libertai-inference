@@ -66,13 +66,13 @@ def test_migration_creates_tables_and_enforces_one_active_sub(scratch_db):
         # One active subscription per user: the second active insert must fail.
         conn.execute(
             "INSERT INTO plan_subscriptions (id, user_id, tier, status, provider) "
-            "VALUES (%s, %s, 'pro', 'active', 'revolut')",
+            "VALUES (%s, %s, 'plus', 'active', 'revolut')",
             (uuid.uuid4(), user_id),
         )
         with pytest.raises(psycopg.errors.UniqueViolation):
             conn.execute(
                 "INSERT INTO plan_subscriptions (id, user_id, tier, status, provider) "
-                "VALUES (%s, %s, 'starter', 'active', 'revolut')",
+                "VALUES (%s, %s, 'go', 'active', 'revolut')",
                 (uuid.uuid4(), user_id),
             )
 
