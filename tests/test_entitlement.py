@@ -109,13 +109,13 @@ async def test_weekly_window_independent_of_5h(db):
 async def test_paid_tier_gets_larger_window(db):
     user = await _user(db)
     key = await _api_key(db, user.id)
-    await _subscribe(db, user.id, "pro")
+    await _subscribe(db, user.id, "plus")
     await _window(db, user.id, WINDOW_5H, started_at=NOW, expires_at=NOW + timedelta(hours=5))
-    await _use(db, key.id, 0.5, NOW + timedelta(minutes=1))  # would exhaust free, fine for pro
+    await _use(db, key.id, 0.5, NOW + timedelta(minutes=1))  # would exhaust free, fine for plus
 
     state = await get_allowance_state(db, user.id, now=NOW + timedelta(hours=1))
-    assert state.tier == "pro"
-    assert state.window_5h_limit == 8.0
+    assert state.tier == "plus"
+    assert state.window_5h_limit == 5.0
     assert state.source == "tier"
 
 
