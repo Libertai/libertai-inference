@@ -83,7 +83,6 @@ async def test_ensure_pool_tops_up_partial_pool(monkeypatch):
 
 async def test_claim_returns_warm_row_and_resets_metadata():
     warm = await _add_pool_key(age_seconds=120)
-    user_id = uuid.uuid4()
     async with AsyncSessionLocal() as db:
         # Need a real user row for the FK; create a throwaway user.
         from src.models.user import User
