@@ -69,10 +69,6 @@ class _Config:
     API_URL: str
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int
 
-    # Subscriptions / tiered entitlement windows. Disabled for now: no free or paid
-    # subscriptions, API access is gated on prepaid balance only.
-    SUBSCRIPTIONS_ENABLED: bool
-
     # Warm API-key pool: keys pre-created and pre-propagated to instances so a freshly
     # "created" key is recognized immediately (no ~30s propagation wait).
     POOL_SIZE: int
@@ -158,8 +154,6 @@ class _Config:
         ] + (["http://localhost:5173", "http://localhost:3000"] if self.IS_DEVELOPMENT else [])
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
-
-        self.SUBSCRIPTIONS_ENABLED = os.getenv("SUBSCRIPTIONS_ENABLED", "True").lower() == "true"
 
         # Warm API-key pool
         self.POOL_SIZE = int(os.getenv("POOL_SIZE", "5"))

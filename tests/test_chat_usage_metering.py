@@ -98,13 +98,11 @@ async def _cleanup(user_id):
 
 
 async def test_per_user_chat_key_text_metered_after_window_exhausted(monkeypatch, async_client):
-    """POST /api-keys/admin/usage for a per-user chat key with SUBSCRIPTIONS_ENABLED=True:
+    """POST /api-keys/admin/usage for a per-user chat key:
     - usage past the free weekly window (2.0 credits) should deduct from prepaid
     - a ChatRequest row must be created
     - an InferenceCall row must be created
     """
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
-
     # Patch aleph_service on the route module so no network call occurs.
     import src.routes.api_keys.api_keys as route_module
 
@@ -170,8 +168,6 @@ async def test_shared_chat_key_no_inference_call_no_deduction(monkeypatch, async
     - MUST NOT create an InferenceCall row
     - MUST NOT deduct from the user's prepaid balance
     """
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
-
     import src.routes.api_keys.api_keys as route_module
 
     monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
@@ -225,8 +221,6 @@ async def test_shared_chat_key_no_inference_call_no_deduction(monkeypatch, async
 async def test_per_user_chat_key_image_metered_after_window_exhausted(monkeypatch, async_client):
     """POST an image usage log (ImageInferenceCallData shape) for a per-user chat key with the
     free window exhausted: an InferenceCall row (+1) and a ChatRequest row (+1) must be written."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
-
     import src.routes.api_keys.api_keys as route_module
 
     monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
@@ -272,8 +266,6 @@ async def test_per_user_chat_key_image_metered_after_window_exhausted(monkeypatc
 async def test_shared_chat_key_image_no_inference_call(monkeypatch, async_client):
     """POST an image usage log for the shared anonymous chat key: a ChatRequest row (+1) must be
     written but NO InferenceCall row."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
-
     import src.routes.api_keys.api_keys as route_module
 
     monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)

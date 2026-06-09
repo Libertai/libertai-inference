@@ -7,7 +7,6 @@ import time
 
 from sqlalchemy import delete, func, select
 
-from src.config import config
 from src.interfaces.credits import CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -128,20 +127,5 @@ async def test_subscription_exposes_allowed_and_source(async_client):
         assert body["tier"] == "free"
         assert body["allowed"] is True
         assert body["source"] == "tier"
-    finally:
-        await _cleanup(user.id)
-
-
-async def test_subscription_allowed_source_when_subscriptions_disabled(async_client, monkeypatch):
-    """When SUBSCRIPTIONS_ENABLED is False and prepaid balance is zero,
-    allowed must be False and source must be 'blocked'."""
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", False)
-    user, headers = await _auth_user()
-    try:
-        resp = await async_client.get("/payments/subscription", headers=headers)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["allowed"] is False
-        assert body["source"] == "blocked"
     finally:
         await _cleanup(user.id)
