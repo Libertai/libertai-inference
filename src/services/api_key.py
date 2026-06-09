@@ -289,18 +289,32 @@ class ApiKeyService:
                         type=existing_key.type,
                     )
 
-                # Create new chat API key
-                key = ApiKeyDB.generate_key()
-                api_key = ApiKeyDB(
-                    key=key,
-                    name="Chat API Key",
+                # Create new chat API key — prefer a pre-warmed pool key.
+                claimed = await ApiKeyPoolService.claim_warm_key(
+                    db,
+                    target_type=ApiKeyType.chat,
                     user_id=user_id,
-                    user_address=user_address,
+                    name="Chat API Key",
                     monthly_limit=None,
-                    type=ApiKeyType.chat,
+                    user_address=user_address,
                 )
-                db.add(api_key)
+                if claimed is not None:
+                    api_key = claimed
+                else:
+                    api_key = ApiKeyDB(
+                        key=ApiKeyDB.generate_key(),
+                        name="Chat API Key",
+                        user_id=user_id,
+                        user_address=user_address,
+                        monthly_limit=None,
+                        type=ApiKeyType.chat,
+                    )
+                    db.add(api_key)
+                key = api_key.key
                 await db.commit()
+
+                if claimed is not None:
+                    ApiKeyPoolService.schedule_refill()
 
                 return FullApiKey(
                     id=api_key.id,
