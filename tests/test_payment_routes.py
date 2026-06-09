@@ -7,11 +7,13 @@ import time
 
 from sqlalchemy import delete, func, select
 
-from src.interfaces.credits import CreditTransactionStatus
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.auth_tokens import create_access_token
+from src.services.credit import CreditService
 from src.services.payments.base import CheckoutResult
 from src.services.payments.registry import payment_registry
 
@@ -28,6 +30,8 @@ async def _auth_user() -> tuple[User, dict]:
 async def _cleanup(user_id):
     async with AsyncSessionLocal() as db:
         await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
+        # PlanSubscriptionEvent rows cascade-delete with PlanSubscription.
+        await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id == user_id))
         await db.execute(delete(User).where(User.id == user_id))
         await db.commit()
 
@@ -127,5 +131,40 @@ async def test_subscription_exposes_allowed_and_source(async_client):
         assert body["tier"] == "free"
         assert body["allowed"] is True
         assert body["source"] == "tier"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_credits_subscribe_success(async_client):
+    user, headers = await _auth_user()
+    try:
+        # Seed enough credits for a "go" subscription.
+        await CreditService.add_credits_for_user(user.id, 50.0, CreditTransactionProvider.voucher)
+
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "credits", "tier": "go"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["checkout_url"] is None
+
+        sub_resp = await async_client.get("/payments/subscription", headers=headers)
+        assert sub_resp.status_code == 200
+        body = sub_resp.json()
+        assert body["tier"] == "go"
+        assert body["has_subscription"] is True
+        assert body["status"] == "active"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_credits_subscribe_insufficient(async_client):
+    user, headers = await _auth_user()
+    try:
+        # No credits seeded — should return 400.
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "credits", "tier": "go"}, headers=headers
+        )
+        assert resp.status_code == 400
+        assert "credits" in resp.json()["detail"].lower()
     finally:
         await _cleanup(user.id)

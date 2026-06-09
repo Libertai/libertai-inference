@@ -28,6 +28,7 @@ from src.routes.payments import router
 from src.services.auth import get_current_user
 from src.services.entitlement import get_allowance_state
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
+from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
@@ -43,6 +44,14 @@ async def expire_subscriptions() -> int:
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(payment_registry.get("revolut"), db)
         count = await manager.check_expirations()
+        await db.commit()
+    return count
+
+
+@scheduler.scheduled_job("interval", hours=1)
+async def renew_credit_subscriptions() -> int:
+    async with AsyncSessionLocal() as db:
+        count = await CreditSubscriptionService.process_renewals(db)
         await db.commit()
     return count
 
@@ -124,6 +133,14 @@ async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> C
 
 @router.post("/subscribe", description="Open a checkout to subscribe to a paid tier")  # type: ignore
 async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+    if body.provider == "credits":
+        async with AsyncSessionLocal() as db:
+            try:
+                await CreditSubscriptionService.subscribe(db, user, body.tier)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await db.commit()
+        return CheckoutResponse(checkout_url=None)
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -137,6 +154,14 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
 
 @router.post("/upgrade", description="Upgrade to a higher paid tier")  # type: ignore
 async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+    if body.provider == "credits":
+        async with AsyncSessionLocal() as db:
+            try:
+                await CreditSubscriptionService.upgrade(db, user, body.tier)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await db.commit()
+        return CheckoutResponse(checkout_url=None)
     provider = _require_provider(body.provider)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
@@ -159,6 +184,13 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
                 )
             )
         ).scalar_one_or_none()
+        if sub and sub.provider == "credits":
+            try:
+                res = await CreditSubscriptionService.request_downgrade(db, user, body.tier)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await db.commit()
+            return DowngradeResponse(new_tier=res["new_tier"], effective_date=res["effective_date"])
         provider = _require_provider(sub.provider) if sub else _require_provider("revolut")
         manager = PaymentManager(provider, db)
         try:
@@ -182,6 +214,13 @@ async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
         ).scalar_one_or_none()
         if not sub:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription")
+        if sub.provider == "credits":
+            try:
+                res = await CreditSubscriptionService.cancel(db, user)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await db.commit()
+            return CancelResponse(message=res["message"], effective_date=res["effective_date"])
         manager = PaymentManager(_require_provider(sub.provider), db)
         result = await manager.cancel(user)
         await db.commit()
