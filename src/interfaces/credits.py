@@ -69,7 +69,10 @@ class ThirdwebTransactionDetails(BaseModel):
 
 
 class ThirdwebPurchaseData(BaseModel):
-    userAddress: str
+    # Prefer crediting by user id (works for email/OAuth users who pay via a just-connected wallet);
+    # fall back to the wallet address for older clients / wallet-native flows.
+    userId: str | None = None
+    userAddress: str | None = None
 
 
 # Token definition used in both webhook types

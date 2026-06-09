@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import time
+import uuid
 
 from fastapi import HTTPException, Header, Request
 from libertai_utils.chains.index import format_address
@@ -14,6 +15,7 @@ from src.interfaces.credits import (
     CreditTransactionProvider,
     ThirdwebOnchainTransactionData,
     ThirdwebOnrampTransactionData,
+    ThirdwebPurchaseData,
     CreditTransactionStatus,
 )
 from src.models.base import AsyncSessionLocal
@@ -110,6 +112,32 @@ async def thirdweb_webhook(
         logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
 
 
+async def _credit_thirdweb_purchase(
+    purchase: ThirdwebPurchaseData, amount_usd: float, transaction_hash: str, status: CreditTransactionStatus
+) -> None:
+    """Credit a Thirdweb purchase. Prefer the user id (so email/OAuth users who paid via a
+    just-connected wallet get funded on their account); fall back to the wallet address."""
+    if purchase.userId:
+        await CreditService.add_credits_for_user(
+            user_id=uuid.UUID(purchase.userId),
+            amount=amount_usd,
+            provider=CreditTransactionProvider.thirdweb,
+            transaction_hash=transaction_hash,
+            status=status,
+        )
+    elif purchase.userAddress:
+        await CreditService.add_credits(
+            provider=CreditTransactionProvider.thirdweb,
+            address=format_address(LibertaiChain.base, purchase.userAddress),
+            amount=amount_usd,
+            transaction_hash=transaction_hash,
+            block_number=None,
+            status=status,
+        )
+    else:
+        logger.warning(f"Thirdweb purchase {transaction_hash} has neither userId nor userAddress; skipping credit")
+
+
 async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
     if data is None:
         raise HTTPException(status_code=400, detail="Missing onchain transaction data")
@@ -125,7 +153,6 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
             return
 
         transaction_hash = base_transaction.transactionHash
-        sender_address = data.purchaseData.userAddress
 
         amount_usd = int(data.destinationAmount) / (10**data.destinationToken.decimals)
 
@@ -150,14 +177,7 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
             await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             return
 
-        await CreditService.add_credits(
-            provider=CreditTransactionProvider.thirdweb,
-            address=format_address(LibertaiChain.base, sender_address),
-            amount=amount_usd,
-            transaction_hash=transaction_hash,
-            block_number=None,
-            status=tx_status,
-        )
+        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, transaction_hash, tx_status)
 
     except Exception as e:
         logger.error(f"Error processing Thirdweb onchain webhook: {str(e)}", exc_info=True)
@@ -174,7 +194,6 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
 
     try:
         transaction_hash = data.id
-        sender_address = data.purchaseData.userAddress
 
         amount_usd = int(data.amount) / (10**data.token.decimals)
 
@@ -200,14 +219,7 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
                 await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
             return
 
-        await CreditService.add_credits(
-            provider=CreditTransactionProvider.thirdweb,
-            address=format_address(LibertaiChain.base, sender_address),
-            amount=amount_usd,
-            transaction_hash=transaction_hash,
-            block_number=None,
-            status=tx_status,
-        )
+        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, transaction_hash, tx_status)
 
     except Exception as e:
         logger.error(f"Error processing Thirdweb onramp webhook: {str(e)}", exc_info=True)
