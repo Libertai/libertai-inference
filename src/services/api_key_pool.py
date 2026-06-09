@@ -107,3 +107,36 @@ class ApiKeyPoolService:
         row.deleted_at = None
         row.created_at = datetime.now()
         return row
+
+    @staticmethod
+    async def claim_warm_string(db) -> str | None:
+        """Claim a warm pool key as a raw string and delete its pool row, for callers
+        that must keep an existing row (CLI rotation adopts the warm string into the
+        pre-existing CLI row to preserve usage history). Runs in the caller's
+        transaction. The deleted pool row is flushed before the caller reassigns the
+        string elsewhere, so the UNIQUE(key) constraint is never momentarily violated.
+        """
+        ready_before = datetime.now() - timedelta(seconds=config.POOL_WARM_THRESHOLD_SECONDS)
+        stmt = (
+            select(ApiKeyDB)
+            .where(ApiKeyDB.type == ApiKeyType.pool, ApiKeyDB.created_at < ready_before)
+            .order_by(ApiKeyDB.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        row = (await db.execute(stmt)).scalars().first()
+        if row is None:
+            return None
+        key = row.key
+        await db.delete(row)
+        await db.flush()
+        return key
+
+    @staticmethod
+    def schedule_refill() -> asyncio.Task:
+        """Fire-and-forget refill of the pool back to POOL_SIZE. Returns the task so
+        callers/tests can await it; production callers ignore the return value."""
+        task = asyncio.create_task(ApiKeyPoolService.ensure_pool())
+        _pending_refills.add(task)
+        task.add_done_callback(_pending_refills.discard)
+        return task

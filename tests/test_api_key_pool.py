@@ -157,3 +157,30 @@ async def test_concurrent_claims_get_distinct_rows():
 
         await db.execute(delete(U).where(U.id == user_id))
         await db.commit()
+
+
+async def test_claim_warm_string_returns_key_and_removes_pool_row():
+    warm = await _add_pool_key(age_seconds=120)
+    async with AsyncSessionLocal() as db:
+        s = await ApiKeyPoolService.claim_warm_string(db)
+        await db.commit()
+        assert s == warm
+    # the pool row is gone (consumed), so the pool is now empty
+    assert await _pool_count() == 0
+
+
+async def test_claim_warm_string_returns_none_when_no_ready_key():
+    await _add_pool_key(age_seconds=0)  # too fresh
+    async with AsyncSessionLocal() as db:
+        s = await ApiKeyPoolService.claim_warm_string(db)
+        await db.rollback()
+        assert s is None
+
+
+async def test_schedule_refill_tops_up(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setattr(config, "POOL_SIZE", 2)
+    task = ApiKeyPoolService.schedule_refill()
+    await task
+    assert await _pool_count() == 2
