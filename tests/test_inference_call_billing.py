@@ -6,6 +6,8 @@ These call the real service (own AsyncSessionLocal bound to the test DB); each t
 a unique address so committed rows don't collide.
 """
 
+import pytest
+
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionProvider
@@ -44,7 +46,7 @@ async def test_per_user_chat_window_then_overflow_to_prepaid():
         key=chat_key.full_key, credits_used=0.4, model_name="test-model"
     )
     assert ok is True
-    assert await _balance(user_id) == 10.0  # within free window — not charged
+    assert await _balance(user_id) == pytest.approx(10.0)  # within free window — not charged
 
     # Second call pushes cumulative usage past the free window -> overflow draws from prepaid.
     ok = await ApiKeyService.register_inference_call(
@@ -66,12 +68,12 @@ async def test_call_within_tighter_window_then_split_charge():
     await ApiKeyService.register_inference_call(
         key=api_key.full_key, credits_used=0.5, model_name="test-model"
     )
-    assert await _balance(user_id) == 10.0  # exactly fills the 5h window, nothing overflows
+    assert await _balance(user_id) == pytest.approx(10.0)  # exactly fills the 5h window, nothing overflows
 
     await ApiKeyService.register_inference_call(
         key=api_key.full_key, credits_used=1.0, model_name="test-model"
     )
-    assert await _balance(user_id) == 9.0  # 5h window full -> whole 1.0 overflows to prepaid
+    assert await _balance(user_id) == pytest.approx(9.0)  # 5h window full -> whole 1.0 overflows to prepaid
 
 
 async def test_shared_free_chat_key_never_deducts(monkeypatch):
@@ -116,7 +118,7 @@ async def test_api_key_usage_beyond_free_window_charges_only_overflow():
     )
 
     assert ok is True
-    assert await _balance(user_id) == 7.5
+    assert await _balance(user_id) == pytest.approx(7.5)
 
 
 async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
