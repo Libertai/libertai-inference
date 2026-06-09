@@ -4,8 +4,6 @@ import time
 import uuid
 
 from fastapi import HTTPException, Header, Request
-from libertai_utils.chains.index import format_address
-from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel
 from sqlalchemy import select
 from web3 import Web3
@@ -115,27 +113,15 @@ async def thirdweb_webhook(
 async def _credit_thirdweb_purchase(
     purchase: ThirdwebPurchaseData, amount_usd: float, transaction_hash: str, status: CreditTransactionStatus
 ) -> None:
-    """Credit a Thirdweb purchase. Prefer the user id (so email/OAuth users who paid via a
-    just-connected wallet get funded on their account); fall back to the wallet address."""
-    if purchase.userId:
-        await CreditService.add_credits_for_user(
-            user_id=uuid.UUID(purchase.userId),
-            amount=amount_usd,
-            provider=CreditTransactionProvider.thirdweb,
-            transaction_hash=transaction_hash,
-            status=status,
-        )
-    elif purchase.userAddress:
-        await CreditService.add_credits(
-            provider=CreditTransactionProvider.thirdweb,
-            address=format_address(LibertaiChain.base, purchase.userAddress),
-            amount=amount_usd,
-            transaction_hash=transaction_hash,
-            block_number=None,
-            status=status,
-        )
-    else:
-        logger.warning(f"Thirdweb purchase {transaction_hash} has neither userId nor userAddress; skipping credit")
+    """Credit a Thirdweb purchase to the signed-in user's account (the wallet that paid may not be
+    the user's own — email/OAuth users pay via a just-connected wallet)."""
+    await CreditService.add_credits_for_user(
+        user_id=uuid.UUID(purchase.userId),
+        amount=amount_usd,
+        provider=CreditTransactionProvider.thirdweb,
+        transaction_hash=transaction_hash,
+        status=status,
+    )
 
 
 async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
