@@ -159,7 +159,7 @@ class _Config:
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
-        self.SUBSCRIPTIONS_ENABLED = os.getenv("SUBSCRIPTIONS_ENABLED", "False").lower() == "true"
+        self.SUBSCRIPTIONS_ENABLED = os.getenv("SUBSCRIPTIONS_ENABLED", "True").lower() == "true"
 
         # Warm API-key pool
         self.POOL_SIZE = int(os.getenv("POOL_SIZE", "5"))
