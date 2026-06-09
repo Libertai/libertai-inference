@@ -45,33 +45,56 @@ async def test_per_user_chat_key_deducts_when_subscriptions_disabled(monkeypatch
     assert await _balance(user_id) == 7.0  # chat now metered
 
 
-async def test_per_user_chat_within_free_window_does_not_deduct(monkeypatch):
-    """Subscriptions on, usage within the free weekly window (2.0): covered by tier, no deduct."""
+async def test_per_user_chat_window_then_overflow_to_prepaid(monkeypatch):
+    """Subscriptions on: a per-user chat key is covered by the free tier window until it's
+    exhausted, then overflow draws from prepaid. This proves the window logic actually engages
+    (the key isn't silently free)."""
     monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000013"
     user_id = await _seed_user_with_credits(address, 10.0)
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
+    # First call stays within the free window (5h cap 0.5, weekly cap 2.0): covered by tier.
     ok = await ApiKeyService.register_inference_call(
         key=chat_key.full_key, credits_used=0.4, model_name="test-model"
     )
     assert ok is True
     assert await _balance(user_id) == 10.0  # within free window — not charged
 
+    # Second call pushes cumulative usage past the free window -> overflow draws from prepaid.
+    ok = await ApiKeyService.register_inference_call(
+        key=chat_key.full_key, credits_used=2.0, model_name="test-model"
+    )
+    assert ok is True
+    assert await _balance(user_id) < 10.0  # overflow charged to prepaid
+
 
 async def test_shared_free_chat_key_never_deducts(monkeypatch):
-    """The anonymous service key (config.LIBERTAI_CHAT_API_KEY) stays free regardless of flag."""
+    """The anonymous service key (config.LIBERTAI_CHAT_API_KEY) stays free even once the free
+    window is exhausted (source != "tier"), where a normal key WOULD deduct. This makes the
+    is_shared_free_key guard the thing under test: removing it would fail this test."""
     monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", True)
     address = "0xC4A7000000000000000000000000000000000014"
     user_id = await _seed_user_with_credits(address, 10.0)
+
+    # Exhaust the free window via a normal (non-shared) api key so the next call's source
+    # is no longer "tier" — i.e. a per-user key in this state would now draw from prepaid.
+    api_key = await ApiKeyService.create_api_key(user_id=user_id, name="primer", user_address=address)
+    ok = await ApiKeyService.register_inference_call(
+        key=api_key.full_key, credits_used=2.5, model_name="test-model"  # > free weekly cap 2.0
+    )
+    assert ok is True
+    balance_after_priming = await _balance(user_id)
+    assert balance_after_priming < 10.0  # confirms a normal key deducts once past the window
+
+    # Now route a call through the shared free key: it must NOT deduct despite source != "tier".
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
     monkeypatch.setattr(config, "LIBERTAI_CHAT_API_KEY", chat_key.full_key)
-
     ok = await ApiKeyService.register_inference_call(
         key=chat_key.full_key, credits_used=5.0, model_name="test-model"
     )
     assert ok is True
-    assert await _balance(user_id) == 10.0  # shared free key is never charged
+    assert await _balance(user_id) == balance_after_priming  # shared free key is never charged
 
 
 async def test_api_key_usage_deducts_credits(monkeypatch):
