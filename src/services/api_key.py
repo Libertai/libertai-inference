@@ -12,6 +12,7 @@ from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
+from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
     WINDOW_5H,
@@ -78,18 +79,33 @@ class ApiKeyService:
                     await db.rollback()
                     raise ValueError(f"API key with name '{name}' already exists")
 
-                # Create new API key
-                key = ApiKeyDB.generate_key()
-                api_key = ApiKeyDB(
-                    key=key,
-                    name=name,
+                # Prefer a pre-warmed pool key (already propagated to instances);
+                # fall back to cold generation when none is ready.
+                claimed = await ApiKeyPoolService.claim_warm_key(
+                    db,
+                    target_type=key_type,
                     user_id=user_id,
-                    user_address=user_address,
+                    name=name,
                     monthly_limit=monthly_limit,
-                    type=key_type,
+                    user_address=user_address,
                 )
-                db.add(api_key)
+                if claimed is not None:
+                    api_key = claimed
+                else:
+                    api_key = ApiKeyDB(
+                        key=ApiKeyDB.generate_key(),
+                        name=name,
+                        user_id=user_id,
+                        user_address=user_address,
+                        monthly_limit=monthly_limit,
+                        type=key_type,
+                    )
+                    db.add(api_key)
+                key = api_key.key
                 await db.commit()
+
+                if claimed is not None:
+                    ApiKeyPoolService.schedule_refill()
 
                 # Create a clean detached copy of the object with all required attributes
                 # For newly created keys, we DO want to return the full key
