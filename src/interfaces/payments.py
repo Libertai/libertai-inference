@@ -51,6 +51,9 @@ class SubscriptionResponse(BaseModel):
     cancel_at_period_end: bool = False
     pending_tier: str | None = None
     is_trial: bool = False
+    # Live gateway decision for the next call: lets the UI show the paywall directly.
+    allowed: bool = True
+    source: str = "tier"  # "tier" | "prepaid" | "blocked"
     # Dual-window allowance snapshot (free tier by default, larger if subscribed).
     window_5h_used: float = 0.0
     window_5h_limit: float = 0.0

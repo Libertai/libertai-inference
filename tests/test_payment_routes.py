@@ -116,3 +116,16 @@ async def test_webhook_bad_signature_rejected(async_client, monkeypatch):
 
 async def test_unknown_provider_webhook_404(async_client):
     assert (await async_client.post("/payments/webhook/nope", content=b"{}")).status_code == 404
+
+
+async def test_subscription_exposes_allowed_and_source(async_client):
+    user, headers = await _auth_user()
+    try:
+        resp = await async_client.get("/payments/subscription", headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tier"] == "free"
+        assert body["allowed"] is True
+        assert body["source"] == "tier"
+    finally:
+        await _cleanup(user.id)
