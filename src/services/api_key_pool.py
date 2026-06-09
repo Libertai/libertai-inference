@@ -1,4 +1,6 @@
 import asyncio
+import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.sql import func as sql_func
@@ -59,3 +61,47 @@ class ApiKeyPoolService:
         except Exception as e:
             logger.error(f"Error ensuring warm API-key pool: {str(e)}", exc_info=True)
             return 0
+
+    @staticmethod
+    async def claim_warm_key(
+        db,
+        *,
+        target_type: ApiKeyType,
+        name: str,
+        user_id: uuid.UUID | None = None,
+        monthly_limit: float | None = None,
+        user_address: str | None = None,
+        expires_at: datetime | None = None,
+        liberclaw_user_id: uuid.UUID | None = None,
+    ) -> ApiKeyDB | None:
+        """Atomically claim the oldest pool row that has been alive long enough to have
+        propagated, repurposing it into the target key. Runs inside the caller's
+        transaction (the caller commits). Returns the claimed row, or None if no warm
+        pool key is ready (caller should fall back to cold generation).
+
+        Concurrency: SELECT ... FOR UPDATE SKIP LOCKED guarantees two simultaneous
+        claims never grab the same row. created_at is reset to now() so the
+        user-facing creation time is correct; the warmth came from the key string
+        already being in the whitelist, independent of created_at.
+        """
+        ready_before = datetime.now() - timedelta(seconds=config.POOL_WARM_THRESHOLD_SECONDS)
+        stmt = (
+            select(ApiKeyDB)
+            .where(ApiKeyDB.type == ApiKeyType.pool, ApiKeyDB.created_at < ready_before)
+            .order_by(ApiKeyDB.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        row = (await db.execute(stmt)).scalars().first()
+        if row is None:
+            return None
+
+        row.type = target_type
+        row.user_id = user_id
+        row.name = name
+        row.monthly_limit = monthly_limit
+        row.user_address = user_address
+        row.expires_at = expires_at
+        row.liberclaw_user_id = liberclaw_user_id
+        row.created_at = datetime.now()
+        return row
