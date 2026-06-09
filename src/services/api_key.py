@@ -158,24 +158,44 @@ class ApiKeyService:
                     .first()
                 )
 
-                key = ApiKeyDB.generate_key()
+                claimed = False
                 if existing is not None:
                     # Rotate in place: same row (and usage history), new secret + expiry.
-                    existing.key = key
+                    # Adopt a warm string if one is ready; the pool row is deleted first
+                    # (inside claim_warm_string) so UNIQUE(key) is never violated.
+                    warm = await ApiKeyPoolService.claim_warm_string(db)
+                    existing.key = warm if warm is not None else ApiKeyDB.generate_key()
                     existing.expires_at = expires_at
                     existing.is_active = True
                     api_key = existing
+                    claimed = warm is not None
                 else:
-                    api_key = ApiKeyDB(
-                        key=key,
-                        name=name,
+                    pool_row = await ApiKeyPoolService.claim_warm_key(
+                        db,
+                        target_type=ApiKeyType.cli,
                         user_id=user_id,
+                        name=name,
                         user_address=user_address,
-                        type=ApiKeyType.cli,
                         expires_at=expires_at,
                     )
-                    db.add(api_key)
+                    if pool_row is not None:
+                        api_key = pool_row
+                        claimed = True
+                    else:
+                        api_key = ApiKeyDB(
+                            key=ApiKeyDB.generate_key(),
+                            name=name,
+                            user_id=user_id,
+                            user_address=user_address,
+                            type=ApiKeyType.cli,
+                            expires_at=expires_at,
+                        )
+                        db.add(api_key)
+                key = api_key.key
                 await db.commit()
+
+                if claimed:
+                    ApiKeyPoolService.schedule_refill()
 
                 return FullApiKey(
                     id=api_key.id,

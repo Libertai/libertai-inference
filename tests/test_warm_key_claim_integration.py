@@ -86,3 +86,55 @@ async def test_create_api_key_falls_back_to_cold_when_pool_empty(monkeypatch):
         assert result.type == ApiKeyType.api
     finally:
         await _cleanup_user(user_id)
+
+
+async def test_cli_create_uses_warm_pool_key(monkeypatch):
+    from src.services import api_key_pool
+
+    monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
+
+    warm = await _add_warm_pool_key()
+    user_id = await _make_user()
+    try:
+        result = await ApiKeyService.rotate_or_create_cli_api_key(user_id=user_id, host="laptop")
+        assert result.full_key == warm
+        assert result.type == ApiKeyType.cli
+        assert result.expires_at is not None
+    finally:
+        await _cleanup_user(user_id)
+
+
+async def test_cli_rotate_adopts_warm_string_in_place(monkeypatch):
+    from src.services import api_key_pool
+
+    monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
+
+    user_id = await _make_user()
+    try:
+        # First mint with an empty pool -> cold key on a brand-new row.
+        first = await ApiKeyService.rotate_or_create_cli_api_key(user_id=user_id, host="laptop")
+        original_id = first.id
+
+        # Now a warm key is ready; rotating must adopt the warm string into the SAME row.
+        warm = await _add_warm_pool_key()
+        second = await ApiKeyService.rotate_or_create_cli_api_key(user_id=user_id, host="laptop")
+        assert second.id == original_id  # same row -> usage history preserved
+        assert second.full_key == warm  # adopted the warm, already-propagated string
+        # the consumed pool row is gone
+        assert await _pool_count_cli_helper() == 0
+    finally:
+        await _cleanup_user(user_id)
+
+
+async def _pool_count_cli_helper() -> int:
+    from sqlalchemy import func, select
+
+    async with AsyncSessionLocal() as db:
+        return int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool)
+                )
+            ).scalar()
+            or 0
+        )
