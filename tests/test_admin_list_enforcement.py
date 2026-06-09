@@ -125,9 +125,10 @@ async def test_prepaid_not_charged_while_within_window_then_charged_on_overflow(
         await ApiKeyService.register_inference_call(key, credits_used=0.4, model_name="m")
         assert await _balance(user_id) == pytest.approx(5.0)
 
-        # Second call pushes past the 0.5 window -> overflow draws from prepaid.
+        # Second 0.4 call straddles the 0.5 window (0.1 left) -> only the 0.3 overflow is
+        # charged, not the whole call. (Pre-fix this deducted the full 0.4 -> 4.6.)
         await ApiKeyService.register_inference_call(key, credits_used=0.4, model_name="m")
-        assert await _balance(user_id) == pytest.approx(4.6)
+        assert await _balance(user_id) == pytest.approx(4.7)
     finally:
         await _cleanup(user_id)
 

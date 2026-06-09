@@ -776,14 +776,21 @@ class ApiKeyService:
 
                 # Deduct credits from user's balance (skip for liberclaw, x402 and the shared free chat key).
                 if chargeable_user_id is not None:
-                    # Usage covered by a live tier window is NOT charged to prepaid — only
-                    # overflow beyond the fixed-window allowance draws down the balance.
+                    # Split this call between the tier windows and prepaid: only the portion that
+                    # overflows the fixed-window allowance draws down the balance (a call straddling
+                    # the cap is charged just for its overflow, not in full). The window usage in
+                    # `state` already includes this call (its row was committed above), so subtract
+                    # it to recover the allowance free *before* this call. Coverage is bounded by the
+                    # tighter remaining window, since a call is tier-covered only while both have room.
                     state = await get_allowance_state(db, chargeable_user_id, now)
-                    deduct = state.source != "tier"
-                    if deduct:
-                        success = await CreditService.use_credits(chargeable_user_id, credits_used)
+                    remaining_5h = max(0.0, state.window_5h_limit - (state.window_5h_used - credits_used))
+                    remaining_weekly = max(0.0, state.weekly_limit - (state.weekly_used - credits_used))
+                    tier_covered = min(credits_used, remaining_5h, remaining_weekly)
+                    overflow = credits_used - tier_covered
+                    if overflow > 0:
+                        success = await CreditService.use_credits(chargeable_user_id, overflow)
                         if not success:
-                            logger.warning(f"Failed to deduct {credits_used} credits for API key {key}")
+                            logger.warning(f"Failed to deduct {overflow} credits for API key {key}")
 
                 return True
 
