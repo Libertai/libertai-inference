@@ -11,6 +11,7 @@ class ApiKeyType(str, Enum):
     liberclaw = "liberclaw"
     x402 = "x402"
     cli = "cli"
+    pool = "pool"
 
 
 class InferenceKeyType(str, Enum):
