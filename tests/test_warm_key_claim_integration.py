@@ -126,6 +126,40 @@ async def test_cli_rotate_adopts_warm_string_in_place(monkeypatch):
         await _cleanup_user(user_id)
 
 
+async def test_chat_create_uses_warm_pool_key(monkeypatch):
+    from src.services import api_key_pool
+
+    monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
+
+    warm = await _add_warm_pool_key()
+    user_id = await _make_user()
+    try:
+        result = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id)
+        assert result.full_key == warm
+        assert result.type == ApiKeyType.chat
+    finally:
+        await _cleanup_user(user_id)
+
+
+async def test_chat_get_existing_does_not_consume_pool(monkeypatch):
+    from src.services import api_key_pool
+
+    monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
+
+    # First create (empty pool -> cold), then add a warm key and fetch again:
+    # the second call must return the EXISTING chat key, not consume the pool.
+    user_id = await _make_user()
+    try:
+        first = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id)
+        warm = await _add_warm_pool_key()
+        second = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id)
+        assert second.full_key == first.full_key  # existing key returned
+        assert second.full_key != warm
+        assert await _pool_count_cli_helper() == 1  # pool untouched
+    finally:
+        await _cleanup_user(user_id)
+
+
 async def _pool_count_cli_helper() -> int:
     from sqlalchemy import func, select
 
