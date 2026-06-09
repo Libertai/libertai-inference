@@ -48,13 +48,13 @@ class ApiKeyPoolService:
                     if deficit <= 0:
                         return 0
                     for _ in range(deficit):
-                        db.add(
-                            ApiKeyDB(
-                                key=ApiKeyDB.generate_key(),
-                                name=POOL_SENTINEL_NAME,
-                                type=ApiKeyType.pool,
-                            )
+                        row = ApiKeyDB(
+                            key=ApiKeyDB.generate_key(),
+                            name=POOL_SENTINEL_NAME,
+                            type=ApiKeyType.pool,
                         )
+                        row.created_at = datetime.now()
+                        db.add(row)
                     await db.commit()
                     logger.info(f"Warm pool topped up by {deficit} (target {config.POOL_SIZE})")
                     return deficit
@@ -103,5 +103,7 @@ class ApiKeyPoolService:
         row.user_address = user_address
         row.expires_at = expires_at
         row.liberclaw_user_id = liberclaw_user_id
+        row.is_active = True
+        row.deleted_at = None
         row.created_at = datetime.now()
         return row
