@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -369,8 +369,13 @@ class PaymentManager:
 
     # ------------------------------------------------------------------ periodic
     async def check_expirations(self) -> int:
-        """Expire subscriptions past their period end (24h grace to avoid racing webhooks)."""
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        """Expire subscriptions past their period end (24h grace to avoid racing webhooks).
+
+        Naive ``datetime.now()`` on purpose: the TIMESTAMP columns are naive and every
+        other period computation (credit_subscription, entitlement) uses naive local
+        time — mixing in an aware UTC cutoff here skewed the comparison on non-UTC hosts.
+        """
+        cutoff = datetime.now() - timedelta(hours=24)
         result = await self.db.execute(
             select(PlanSubscription)
             .where(
