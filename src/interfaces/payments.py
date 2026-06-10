@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, Field
 
@@ -29,9 +30,18 @@ class RegionResponse(BaseModel):
 
 class TopupRequest(BaseModel):
     provider: str = "revolut"
-    amount: float = Field(gt=0)
+    # USD regions: arbitrary amount, credited 1:1 (10k sanity cap). EUR regions: omit and send pack_id instead.
+    amount: Annotated[float, Field(gt=0, le=10_000)] | None = None
+    # Fixed EUR pack id (see GET /payments/topup-packs); required for EUR regions.
+    pack_id: str | None = None
     # Origin of the app the user paid from (chat vs console); checkout returns there if allowlisted.
     redirect_base: str | None = None
+
+
+class TopupPackResponse(BaseModel):
+    id: str
+    usd_credits: float  # credited to the (USD-denominated) prepaid balance
+    eur_charge: float  # gross EUR charged (VAT-inclusive)
 
 
 class SubscribeRequest(BaseModel):
