@@ -37,7 +37,6 @@ from src.subscription_tiers import (
     DEFAULT_CURRENCY,
     DEFAULT_TIER,
     PAID_TIERS,
-    get_tier,
     is_downgrade,
     is_upgrade,
 )
@@ -152,7 +151,7 @@ class PaymentManager:
         return True
 
     # ------------------------------------------------------------------ subscriptions
-    async def start_checkout(self, user: User, tier: str, redirect_url: str) -> CheckoutResult:
+    async def start_checkout(self, user: User, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
         if tier not in PAID_TIERS:
             raise ValueError(f"Invalid paid tier: {tier}")
         if not self.provider.supports(PaymentCapability.subscription):
@@ -186,7 +185,7 @@ class PaymentManager:
         result = await self.provider.create_subscription(
             user_email=user.email,
             tier=tier,
-            currency=get_tier(tier).currency,
+            currency=currency,
             redirect_url=redirect_url,
             provider_customer_id=prev_customer_id,
         )
@@ -198,7 +197,9 @@ class PaymentManager:
             provider=self.provider.id,
             provider_subscription_id=result.provider_subscription_id,
             provider_customer_id=result.provider_customer_id,
-            currency=get_tier(tier).currency,
+            # Locked at checkout time: renewals bill through the provider's
+            # currency-specific plan, so the currency never changes mid-life.
+            currency=currency,
         )
         self.db.add(sub)
         try:
@@ -208,7 +209,7 @@ class PaymentManager:
         await self._log_event(sub, "created", metadata={"tier": tier})
         return result
 
-    async def upgrade(self, user: User, new_tier: str, redirect_url: str) -> CheckoutResult:
+    async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
         if new_tier not in PAID_TIERS:
             raise ValueError(f"Invalid tier: {new_tier}")
         current = await self.current_tier(user.id)
@@ -221,7 +222,7 @@ class PaymentManager:
             existing.status = "upgrading"
             await self._log_event(existing, "upgrading", metadata={"new_tier": new_tier})
             await self.db.flush()
-        return await self.start_checkout(user, new_tier, redirect_url)
+        return await self.start_checkout(user, new_tier, redirect_url, currency)
 
     async def cancel(self, user: User) -> dict:
         sub = await self._active_subscription(user.id)
