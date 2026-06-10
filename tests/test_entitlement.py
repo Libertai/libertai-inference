@@ -39,7 +39,8 @@ async def _window(db, user_id, kind, started_at, expires_at):
 
 
 async def _use(db, api_key_id, credits, when: datetime):
-    call = InferenceCall(api_key_id=api_key_id, credits_used=credits, model_name="m")
+    # Seeded usage simulates tier-covered calls, so the full amount counts against windows.
+    call = InferenceCall(api_key_id=api_key_id, credits_used=credits, model_name="m", tier_credits_used=credits)
     call.used_at = when
     db.add(call)
     await db.flush()

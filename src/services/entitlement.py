@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
 
@@ -81,22 +82,30 @@ async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | Non
 
     Creates a window if none exists, or resets an expired one to start now. Active
     windows are left untouched. Flushes; the caller controls the commit.
+
+    Creation is an upsert: two concurrent first-ever calls would otherwise both see
+    "no row" (nothing to lock yet) and one would die on the unique constraint,
+    rolling back its usage row. The subsequent FOR UPDATE select also serializes
+    concurrent billing splits for the same user.
     """
     now = now or datetime.now()
     for kind, duration in WINDOW_DURATIONS.items():
+        await db.execute(
+            pg_insert(EntitlementWindow)
+            .values(id=uuid.uuid4(), user_id=user_id, kind=kind, started_at=now, expires_at=now + duration)
+            .on_conflict_do_nothing(constraint="uq_entitlement_window_user_kind")
+        )
         window = (
             await db.execute(
                 select(EntitlementWindow)
                 .where(EntitlementWindow.user_id == user_id, EntitlementWindow.kind == kind)
                 .with_for_update()
             )
-        ).scalar_one_or_none()
-        if window is None:
-            db.add(EntitlementWindow(user_id=user_id, kind=kind, started_at=now, expires_at=now + duration))
-        elif window.expires_at <= now:
+        ).scalar_one()
+        if window.expires_at <= now:
             window.started_at = now
             window.expires_at = now + duration
-        # else: still active — leave it.
+        # else: still active (or just created) — leave it.
     await db.flush()
 
 
@@ -122,10 +131,14 @@ async def get_active_tier(db: AsyncSession, user_id: uuid.UUID) -> str:
 
 
 async def _usage_since(db: AsyncSession, user_id: uuid.UUID, cutoff: datetime) -> float:
-    """Credits used across a user's chargeable keys (api, cli, chat) since ``cutoff``."""
+    """Tier-subsidized credits across a user's chargeable keys (api, cli, chat) since ``cutoff``.
+
+    Sums ``tier_credits_used`` (not ``credits_used``): the portion of a call paid from
+    prepaid balance must not drain the window allowance.
+    """
     total = (
         await db.execute(
-            select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0))
+            select(sql_func.coalesce(sql_func.sum(InferenceCall.tier_credits_used), 0.0))
             .join(ApiKeyDB, InferenceCall.api_key_id == ApiKeyDB.id)
             .where(
                 ApiKeyDB.user_id == user_id,
@@ -153,7 +166,9 @@ async def _prepaid_balance(db: AsyncSession, user_id: uuid.UUID) -> float:
 async def window_usage_by_users(
     db: AsyncSession, user_ids: set[uuid.UUID], kind: str, now: datetime
 ) -> dict[uuid.UUID, float]:
-    """Batched usage within each user's *active* window of ``kind`` (avoids N+1 at the gateway).
+    """Batched tier-subsidized usage within each user's *active* window of ``kind``
+    (avoids N+1 at the gateway). Sums ``tier_credits_used`` — prepaid-paid usage
+    doesn't drain the allowance.
 
     Users with no active window are absent from the result (treated as 0 used).
     """
@@ -163,7 +178,7 @@ async def window_usage_by_users(
         await db.execute(
             select(
                 ApiKeyDB.user_id,
-                sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
+                sql_func.coalesce(sql_func.sum(InferenceCall.tier_credits_used), 0.0),
             )
             .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
             .join(

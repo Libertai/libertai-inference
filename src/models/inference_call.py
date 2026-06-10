@@ -26,6 +26,10 @@ class InferenceCall(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     api_key_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=False)
     credits_used: Mapped[float] = mapped_column(Float, nullable=False)
+    # Portion of credits_used covered by the tier's entitlement windows; the rest was
+    # paid from prepaid balance. Window usage sums this column, so prepaid-paid usage
+    # never drains the allowance.
+    tier_credits_used: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -39,6 +43,7 @@ class InferenceCall(Base):
     # (SUM(credits_used) WHERE api_key_id = ? AND used_at >= ?).
     __table_args__ = (
         CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),
+        CheckConstraint("tier_credits_used >= 0", name="check_tier_credits_used_non_negative"),
         Index("ix_inference_calls_api_key_id_used_at", "api_key_id", "used_at"),
     )
 
@@ -51,6 +56,7 @@ class InferenceCall(Base):
         output_tokens: int = 0,
         cached_tokens: int = 0,
         image_count: int = 0,
+        tier_credits_used: float = 0.0,
     ):
         self.api_key_id = api_key_id
         self.credits_used = credits_used
@@ -59,3 +65,4 @@ class InferenceCall(Base):
         self.output_tokens = output_tokens
         self.cached_tokens = cached_tokens
         self.image_count = image_count
+        self.tier_credits_used = tier_credits_used
