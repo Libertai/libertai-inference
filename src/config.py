@@ -75,6 +75,9 @@ class _Config:
     POOL_WARM_THRESHOLD_SECONDS: int
     POOL_RECONCILE_INTERVAL_SECONDS: int
 
+    # GeoIP database (MaxMind GeoLite2 Country), mounted in prod; missing in dev -> USD fallback
+    GEOIP_DB_PATH: str
+
     # Provider-agnostic fiat payments (Revolut first)
     REVOLUT_SECRET_KEY: str
     REVOLUT_WEBHOOK_SECRET: str
@@ -159,6 +162,9 @@ class _Config:
         self.POOL_SIZE = int(os.getenv("POOL_SIZE", "5"))
         self.POOL_WARM_THRESHOLD_SECONDS = int(os.getenv("POOL_WARM_THRESHOLD_SECONDS", "60"))
         self.POOL_RECONCILE_INTERVAL_SECONDS = int(os.getenv("POOL_RECONCILE_INTERVAL_SECONDS", "300"))
+
+        # GeoIP database
+        self.GEOIP_DB_PATH = os.getenv("GEOIP_DB_PATH", "/data/GeoLite2-Country.mmdb")
 
         # Payments (Revolut)
         self.REVOLUT_SECRET_KEY = os.getenv("REVOLUT_SECRET_KEY", "")
