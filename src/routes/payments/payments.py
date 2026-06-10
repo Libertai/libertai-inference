@@ -66,6 +66,20 @@ def _checkout_redirect(redirect_base: str | None) -> str:
     return f"{resolve_frontend_base(redirect_base)}/payment/callback"
 
 
+async def _user_wallet_chains(db, user_id) -> list[str]:
+    """Chains of the user's connected wallets; empty for email/OAuth-only accounts."""
+    return list(
+        (
+            await db.execute(select(WalletConnection.chain).where(WalletConnection.user_id == user_id))
+        ).scalars().all()
+    )
+
+
+# Rails are split by account type: wallet users pay on-chain, email users pay by card.
+_WALLET_MUST_PAY_ONCHAIN = "Wallet accounts pay on-chain — use the credits provider"
+_CREDITS_REQUIRE_WALLET = "Credits subscriptions require a connected wallet"
+
+
 def _require_provider(provider_id: str):
     try:
         provider = payment_registry.get(provider_id)
@@ -82,13 +96,7 @@ def _require_provider(provider_id: str):
 @router.get("/providers", description="Payment providers available to the authenticated user")  # type: ignore
 async def list_providers(user: User = Depends(get_current_user)) -> list[PaymentProviderResponse]:
     async with AsyncSessionLocal() as db:
-        chains = list(
-            (
-                await db.execute(
-                    select(WalletConnection.chain).where(WalletConnection.user_id == user.id)
-                )
-            ).scalars().all()
-        )
+        chains = await _user_wallet_chains(db, user.id)
     return [
         PaymentProviderResponse(
             id=d.id,
@@ -167,6 +175,11 @@ async def topup(body: TopupRequest, request: Request, user: User = Depends(get_c
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="amount is required")
         usd_credits, charge_amount, charge_currency = body.amount, body.amount, "USD"
     async with AsyncSessionLocal() as db:
+        if await _user_wallet_chains(db, user.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Wallet accounts top up on-chain — use your connected wallet",
+            )
         manager = PaymentManager(provider, db)
         try:
             result = await manager.start_topup(
@@ -188,6 +201,8 @@ async def subscribe(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            if not await _user_wallet_chains(db, user.id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
             try:
                 await CreditSubscriptionService.subscribe(db, user, body.tier)
             except ValueError as e:
@@ -197,6 +212,8 @@ async def subscribe(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        if await _user_wallet_chains(db, user.id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_WALLET_MUST_PAY_ONCHAIN)
         manager = PaymentManager(provider, db)
         try:
             result = await manager.start_checkout(
@@ -214,6 +231,8 @@ async def upgrade(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            if not await _user_wallet_chains(db, user.id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
             try:
                 await CreditSubscriptionService.upgrade(db, user, body.tier)
             except ValueError as e:
@@ -223,6 +242,19 @@ async def upgrade(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        if await _user_wallet_chains(db, user.id):
+            # A wallet user may still hold a fiat subscription opened before they
+            # connected a wallet — let them upgrade it on its original provider.
+            sub = (
+                await db.execute(
+                    select(PlanSubscription).where(
+                        PlanSubscription.user_id == user.id,
+                        PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    )
+                )
+            ).scalar_one_or_none()
+            if sub is None or sub.provider != provider.id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_WALLET_MUST_PAY_ONCHAIN)
         manager = PaymentManager(provider, db)
         try:
             result = await manager.upgrade(

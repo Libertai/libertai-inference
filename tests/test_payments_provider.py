@@ -89,23 +89,23 @@ async def test_crypto_provider_create_topup_unsupported():
         await solana.create_topup(amount=5.0, currency="USDC", redirect_url="http://x")
 
 
-def test_registry_available_for_chains_filters_crypto_by_wallet():
+def test_registry_available_for_chains_splits_fiat_and_crypto_by_wallet():
     registry = PaymentRegistry()
     registry.register(_provider())  # revolut, enabled (creds present)
     registry.register(ThirdwebPaymentProvider(contract_address="0xabc"))
     registry.register(SolanaPaymentProvider(contract_address="So111"))
 
-    # Email-only user (no wallets): fiat only.
+    # Email-only user (no wallets): fiat only, never crypto.
     ids = [d.id for d in registry.available_for_chains([])]
     assert ids == ["revolut"]
 
-    # EVM wallet user: fiat + thirdweb, not solana.
+    # EVM wallet user: on-chain only — thirdweb, no fiat, no solana.
     ids = {d.id for d in registry.available_for_chains(["base"])}
-    assert ids == {"revolut", "thirdweb"}
+    assert ids == {"thirdweb"}
 
-    # Solana wallet user.
+    # Solana wallet user: on-chain only.
     ids = {d.id for d in registry.available_for_chains(["solana"])}
-    assert ids == {"revolut", "solana"}
+    assert ids == {"solana"}
 
 
 def test_registry_hides_disabled_providers():
@@ -115,4 +115,5 @@ def test_registry_hides_disabled_providers():
         RevolutProvider(secret_key="", webhook_secret="", api_url="https://x", api_version="v")
     )
     registry.register(ThirdwebPaymentProvider(contract_address=None))
+    assert registry.available_for_chains([]) == []
     assert registry.available_for_chains(["base"]) == []
