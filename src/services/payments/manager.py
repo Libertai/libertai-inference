@@ -392,6 +392,30 @@ class PaymentManager:
             sub.status = "expired"
             await self._log_event(sub, "expired", metadata={"new_tier": sub.pending_tier or DEFAULT_TIER})
             count += 1
+
+        # Abandoned upgrades: ``upgrade()`` parks the old sub as "upgrading" until the
+        # new checkout's ORDER_COMPLETED cancels it. If the user never pays, the parked
+        # sub would stay "upgrading" forever — no entitlement, while the provider keeps
+        # billing it. Revert to "active" after 1h (no provider call: the old plan was
+        # never cancelled). Skip users who still have a live row (the new checkout's
+        # pending sub): reverting would violate the one-active-sub index, and that
+        # row's completion cancels the parked sub anyway.
+        stale_cutoff = datetime.now() - timedelta(hours=1)
+        stale = await self.db.execute(
+            select(PlanSubscription)
+            .where(
+                PlanSubscription.status == "upgrading",
+                PlanSubscription.updated_at < stale_cutoff,
+            )
+            .with_for_update()
+        )
+        for sub in stale.scalars().all():
+            if await self._active_subscription(sub.user_id, lock=False):
+                continue
+            sub.status = "active"
+            await self._log_event(sub, "upgrade_abandoned_reverted")
+            count += 1
+
         if count:
             await self.db.flush()
         return count
