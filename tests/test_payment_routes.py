@@ -13,6 +13,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
+from src.models.wallet_connection import WalletConnection
 from src.services.auth_tokens import create_access_token
 from src.services.credit import CreditService
 from src.services.payments.base import CheckoutResult
@@ -21,12 +22,22 @@ from src.topup_packs import TOPUP_PACKS
 
 
 async def _auth_user() -> tuple[User, dict]:
+    """Email/OAuth user with no wallet connection (fiat rail)."""
     async with AsyncSessionLocal() as db:
         user = User(email=f"pay-route-{int(time.time()*1000)}@example.com", email_verified=True)
         db.add(user)
         await db.commit()
         await db.refresh(user)
     return user, {"Authorization": f"Bearer {create_access_token(user.id)}"}
+
+
+async def _wallet_user(chain: str = "base") -> tuple[User, dict]:
+    """Wallet user (has a WalletConnection — on-chain rail)."""
+    user, headers = await _auth_user()
+    async with AsyncSessionLocal() as db:
+        db.add(WalletConnection(user_id=user.id, chain=chain, address=f"0xroute{user.id.hex}", is_primary=True))
+        await db.commit()
+    return user, headers
 
 
 async def _cleanup(user_id):
@@ -482,7 +493,7 @@ async def test_subscription_exposes_allowed_and_source(async_client):
 
 
 async def test_credits_subscribe_success(async_client):
-    user, headers = await _auth_user()
+    user, headers = await _wallet_user()
     try:
         # Seed enough credits for a "go" subscription.
         await CreditService.add_credits_for_user(user.id, 50.0, CreditTransactionProvider.voucher)
@@ -504,7 +515,7 @@ async def test_credits_subscribe_success(async_client):
 
 
 async def test_credits_subscribe_insufficient(async_client):
-    user, headers = await _auth_user()
+    user, headers = await _wallet_user()
     try:
         # No credits seeded — should return 400.
         resp = await async_client.post(
@@ -512,5 +523,129 @@ async def test_credits_subscribe_insufficient(async_client):
         )
         assert resp.status_code == 400
         assert "credits" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_subscribe_credits_rejected_for_email_user(async_client):
+    """Email/OAuth users have no wallet, so they can't pay subscriptions with credits."""
+    user, headers = await _auth_user()
+    try:
+        await CreditService.add_credits_for_user(user.id, 50.0, CreditTransactionProvider.voucher)
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "credits", "tier": "go"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "wallet" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_subscribe_revolut_rejected_for_wallet_user(async_client, monkeypatch):
+    """Wallet users pay on-chain only — Revolut subscriptions are refused."""
+    user, headers = await _wallet_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    try:
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "revolut", "tier": "go"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "on-chain" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_upgrade_credits_rejected_for_email_user(async_client):
+    user, headers = await _auth_user()
+    try:
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "credits", "tier": "plus"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "wallet" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_upgrade_revolut_rejected_for_wallet_user(async_client, monkeypatch):
+    """Wallet user with no active fiat subscription can't open a fiat upgrade."""
+    user, headers = await _wallet_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    try:
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "revolut", "tier": "plus"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "on-chain" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_upgrade_revolut_allowed_for_wallet_user_with_active_revolut_sub(async_client, monkeypatch):
+    """Email user who subscribed via Revolut then connected a wallet can still upgrade that sub."""
+    user, headers = await _wallet_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+
+    seen: dict = {}
+
+    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+        seen["tier"] = tier
+        return CheckoutResult(
+            checkout_url="http://pay/sub",
+            provider_subscription_id=f"psub_wallet_upg_{user.id}",
+            provider_customer_id="cust_wallet_upg",
+            order_id=f"setup_wallet_upg_{user.id}",
+        )
+
+    async def fake_cancel_subscription(provider_subscription_id):
+        return None
+
+    monkeypatch.setattr(revolut, "create_subscription", fake_create_subscription)
+    monkeypatch.setattr(revolut, "cancel_subscription", fake_cancel_subscription)
+
+    try:
+        # Subscribed via Revolut as an email user, then connected a wallet.
+        async with AsyncSessionLocal() as db:
+            db.add(
+                PlanSubscription(
+                    user_id=user.id,
+                    tier="go",
+                    status="active",
+                    provider="revolut",
+                    provider_subscription_id=f"psub_wallet_old_{user.id}",
+                    currency="USD",
+                )
+            )
+            await db.commit()
+
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "revolut", "tier": "plus"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["tier"] == "plus"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_revolut_rejected_for_wallet_user(async_client, monkeypatch):
+    """Wallet users top up via the on-chain contracts, not card checkout."""
+    user, headers = await _wallet_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_wallet_{user.id}")
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "on-chain" in resp.json()["detail"].lower()
+        assert seen.get("calls", 0) == 0
     finally:
         await _cleanup(user.id)
