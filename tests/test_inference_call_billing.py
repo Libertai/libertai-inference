@@ -15,6 +15,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.user import User
 from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
+from src.services.entitlement import get_allowance_state
 from src.services.users import get_or_create_user_by_email, get_or_create_user_by_wallet
 
 
@@ -119,6 +120,55 @@ async def test_api_key_usage_beyond_free_window_charges_only_overflow():
 
     assert ok is True
     assert await _balance(user_id) == pytest.approx(7.5)
+
+
+async def test_concurrent_first_calls_both_register():
+    """Two concurrent registrations for a user with no entitlement windows yet must
+    both succeed: window creation is an upsert, so neither dies on the (user_id, kind)
+    unique constraint and loses its usage row."""
+    import asyncio
+
+    from sqlalchemy import func, select
+
+    from src.models.inference_call import InferenceCall
+
+    address = "0xA9100000000000000000000000000000000000041"
+    user_id = await _seed_user_with_credits(address, 10.0)
+    api_key = await ApiKeyService.create_api_key(user_id=user_id, name="first-race", user_address=address)
+
+    results = await asyncio.gather(
+        ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.1, model_name="m"),
+        ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.1, model_name="m"),
+    )
+    assert results == [True, True]
+
+    async with AsyncSessionLocal() as db:
+        count = (
+            await db.execute(
+                select(func.count()).select_from(InferenceCall).where(InferenceCall.api_key_id == api_key.id)
+            )
+        ).scalar()
+    assert count == 2  # both calls billed/logged, none rolled back
+
+
+async def test_prepaid_overflow_does_not_drain_window_allowance():
+    """The prepaid-paid portion of a call must not count against the windows.
+    Free tier: 5h=0.5, weekly=2.0. Call 1 (0.5) exactly fills the 5h window (tier-covered).
+    Call 2 (1.0) finds the 5h window full -> fully prepaid-paid -> weekly usage must stay
+    at 0.5, not 1.5. Falsifiable: pre-fix, window sums used credits_used and weekly read 1.5."""
+    address = "0xA9100000000000000000000000000000000000031"
+    user_id = await _seed_user_with_credits(address, 10.0)
+    api_key = await ApiKeyService.create_api_key(user_id=user_id, name="window-split", user_address=address)
+
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.5, model_name="m")
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=1.0, model_name="m")
+    assert await _balance(user_id) == pytest.approx(9.0)  # only the second call hit prepaid
+
+    async with AsyncSessionLocal() as db:
+        state = await get_allowance_state(db, user_id)
+    assert state.window_5h_used == pytest.approx(0.5)
+    # The prepaid-paid 1.0 must not appear in the weekly window.
+    assert state.weekly_used == pytest.approx(0.5)
 
 
 async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
