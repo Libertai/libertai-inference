@@ -120,7 +120,12 @@ class CreditService:
             raise
 
     @staticmethod
-    async def _use_credits_on_session(db: AsyncSession, user_id: uuid.UUID, amount: float) -> bool:
+    async def _use_credits_on_session(
+        db: AsyncSession, user_id: uuid.UUID, amount: float, allow_partial: bool = False
+    ) -> bool:
+        # Lock the rows: concurrent deductions (inference overflow vs renewal cron)
+        # otherwise read-modify-write the same amount_left and lose one update. The
+        # deterministic ordering doubles as a stable lock order (no deadlocks).
         result = await db.execute(
             select(CreditTransaction)
             .where(
@@ -132,36 +137,47 @@ class CreditService:
                 CreditTransaction.expired_at.asc().nullslast(),
                 CreditTransaction.created_at.asc(),
             )
+            .with_for_update()
         )
         transactions = result.scalars().all()
 
+        # Check coverage before mutating: an insufficient balance must not be
+        # partially drained unless the caller explicitly opted in.
+        available = sum(tx.amount_left for tx in transactions if tx.amount_left > 0)
+        fully_deductible = available >= amount
+        if not fully_deductible:
+            logger.warning(
+                f"Insufficient credits for user {user_id}: requested {amount}, missing {amount - available}"
+            )
+            if not allow_partial:
+                return False
+
         remaining_amount = amount
         for tx in transactions:
-            available = tx.amount_left
-            if available <= 0:
+            if tx.amount_left <= 0:
                 continue
 
-            use_from_tx = min(available, remaining_amount)
+            use_from_tx = min(tx.amount_left, remaining_amount)
             tx.amount_left -= use_from_tx
             remaining_amount -= use_from_tx
 
             if remaining_amount <= 0:
                 break
 
-        fully_deducted = remaining_amount <= 0
-        if not fully_deducted:
-            logger.warning(
-                f"Insufficient credits for user {user_id}: requested {amount}, missing {remaining_amount}"
-            )
-        return fully_deducted
+        return fully_deductible
 
     @staticmethod
-    async def use_credits(user_id: uuid.UUID, amount: float, db: AsyncSession | None = None) -> bool:
+    async def use_credits(
+        user_id: uuid.UUID, amount: float, db: AsyncSession | None = None, allow_partial: bool = False
+    ) -> bool:
         """Deduct credits from a user's active transactions (oldest-expiring first,
         then oldest top-up first among transactions that share an expiry / have none).
+        Rows are locked, so concurrent deductions serialize instead of losing updates.
 
-        Returns ``True`` if the full amount was deducted, ``False`` if the balance was
-        insufficient (the available credits are still drained to 0 in that case).
+        Returns ``True`` if the full amount was deducted. On insufficient balance it
+        returns ``False`` and deducts nothing — unless ``allow_partial`` is set, in
+        which case the available credits are drained to 0 (post-hoc billing where
+        capturing part of the charge beats capturing none).
 
         If ``db`` is provided the deduction runs on that session and is only flushed (the
         caller owns the commit), so it shares the caller's transaction. If ``db`` is None,
@@ -170,13 +186,13 @@ class CreditService:
         logger.debug(f"Using {amount} credits from user {user_id}")
 
         if db is not None:
-            fully_deducted = await CreditService._use_credits_on_session(db, user_id, amount)
+            fully_deducted = await CreditService._use_credits_on_session(db, user_id, amount, allow_partial)
             await db.flush()
             return fully_deducted
 
         try:
             async with AsyncSessionLocal() as own_db:
-                fully_deducted = await CreditService._use_credits_on_session(own_db, user_id, amount)
+                fully_deducted = await CreditService._use_credits_on_session(own_db, user_id, amount, allow_partial)
                 await own_db.commit()
                 return fully_deducted
         except Exception as e:
