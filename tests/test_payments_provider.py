@@ -40,6 +40,7 @@ def test_revolut_descriptor_capabilities():
     assert desc.kind == PaymentProviderKind.fiat
     assert PaymentCapability.topup in desc.capabilities
     assert PaymentCapability.subscription in desc.capabilities
+    assert desc.currencies == ["USD", "EUR"]
 
 
 def test_revolut_webhook_valid_signature_parses_event():
