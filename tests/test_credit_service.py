@@ -72,9 +72,33 @@ async def test_use_credits_reports_full_vs_insufficient():
     assert await CreditService.use_credits(user.id, 1.0) is True
     assert await user.get_credit_balance() == 2.0
 
-    # Overdraft -> False, and the remaining balance is drained to 0.
+    # Overdraft -> False and nothing deducted (all-or-nothing by default, so a
+    # failed charge never eats the remaining balance).
     assert await CreditService.use_credits(user.id, 5.0) is False
+    assert await user.get_credit_balance() == 2.0
+
+    # Post-hoc billing opts into partial capture: drain what's there, report False.
+    assert await CreditService.use_credits(user.id, 5.0, allow_partial=True) is False
     assert await user.get_credit_balance() == 0.0
+
+
+async def test_concurrent_use_credits_serialize_no_lost_update():
+    """Two concurrent deductions (own sessions, like inference overflow racing the
+    renewal cron) must serialize on row locks: both apply, neither is lost."""
+    import asyncio
+
+    address = "0xFee1000000000000000000000000000000000044"
+    assert await CreditService.add_credits(CreditTransactionProvider.thirdweb, address, 10.0)
+    user = await _user_for_address(address)
+
+    results = await asyncio.gather(
+        CreditService.use_credits(user.id, 3.0),
+        CreditService.use_credits(user.id, 3.0),
+    )
+
+    assert results == [True, True]
+    # Pre-fix, a lost update could leave the balance at 7.0 (one deduction overwritten).
+    assert await user.get_credit_balance() == 4.0
 
 
 async def test_use_credits_drains_oldest_top_up_first():
