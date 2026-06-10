@@ -10,6 +10,7 @@ from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.plan_subscription import PlanSubscription
@@ -22,6 +23,9 @@ from src.subscription_tiers import (
     is_downgrade,
     is_upgrade,
 )
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 CREDITS_PROVIDER = "credits"
 
@@ -103,7 +107,12 @@ class CreditSubscriptionService:
             cancel_at_period_end=False,
         )
         db.add(sub)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Concurrent subscribe slipped past the select above; the partial
+            # unique index (one live sub per user) is the source of truth.
+            raise ValueError("You already have an active subscription")
         await CreditSubscriptionService._log(db, sub, "activated")
         return sub
 
@@ -113,10 +122,18 @@ class CreditSubscriptionService:
         sub = await CreditSubscriptionService._active_sub(db, user.id)
         if sub is None:
             raise ValueError("No active credits subscription")
-        if not is_upgrade(sub.tier, new_tier):
-            raise ValueError("Not an upgrade")
 
         now = datetime.now()
+        # A lapsed period (the hourly cron hasn't renewed yet) would prorate to
+        # remaining=0 -> a free upgrade. Renew inline first so the proration runs
+        # against a fresh period; an expiry outcome (cancelled / unfunded) stands.
+        if sub.current_period_end is not None and sub.current_period_end <= now:
+            await CreditSubscriptionService._process_one_renewal(db, sub, now)
+            if sub.status != "active":
+                raise ValueError("Subscription expired at period end — subscribe again")
+
+        if not is_upgrade(sub.tier, new_tier):
+            raise ValueError("Not an upgrade")
         span = (sub.current_period_end - sub.current_period_start).total_seconds()
         remaining = max(0.0, (sub.current_period_end - now).total_seconds())
         frac = remaining / span if span > 0 else 1.0
@@ -142,6 +159,8 @@ class CreditSubscriptionService:
     @staticmethod
     async def request_downgrade(db: AsyncSession, user, new_tier: str) -> dict:
         """Schedule a downgrade to take effect at the end of the current period."""
+        if new_tier != DEFAULT_TIER and new_tier not in PAID_TIERS:
+            raise ValueError("Unknown tier")
         sub = await CreditSubscriptionService._active_sub(db, user.id)
         if sub is None:
             raise ValueError("No active credits subscription")
@@ -149,8 +168,9 @@ class CreditSubscriptionService:
             raise ValueError("Not a downgrade")
 
         sub.pending_tier = new_tier
-        if new_tier == DEFAULT_TIER:
-            sub.cancel_at_period_end = True
+        # Re-requesting a downgrade replaces any earlier one: only a downgrade to
+        # free cancels; a paid target clears a previously scheduled cancellation.
+        sub.cancel_at_period_end = new_tier == DEFAULT_TIER
         await db.flush()
         await CreditSubscriptionService._log(db, sub, "downgrade_requested", metadata={"new_tier": new_tier})
         return {"new_tier": new_tier, "effective_date": sub.current_period_end}
@@ -192,35 +212,49 @@ class CreditSubscriptionService:
 
         count = 0
         for sub in subs:
-            # Cancelled or downgraded-to-free: expire without charging.
-            if sub.cancel_at_period_end or sub.pending_tier == DEFAULT_TIER:
-                sub.status = "expired"
-                await CreditSubscriptionService._log(db, sub, "expired")
-                count += 1
-                continue
-
-            target = sub.pending_tier or sub.tier
-            price = CreditSubscriptionService.monthly_price(target)
-
-            if await CreditService.get_balance(sub.user_id, db=db) < price:
-                sub.status = "expired"
-                await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
-                count += 1
-                continue
-
-            ok = await CreditService.use_credits(sub.user_id, price, db=db)
-            if not ok:
-                sub.status = "expired"
-                await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
-                count += 1
-                continue
-
-            sub.tier = target
-            sub.pending_tier = None
-            sub.current_period_start = now
-            sub.current_period_end = now + relativedelta(months=1)
-            await CreditSubscriptionService._log(db, sub, "renewed")
-            count += 1
+            # One bad subscription must not block the whole batch.
+            try:
+                count += await CreditSubscriptionService._process_one_renewal(db, sub, now)
+            except Exception:
+                logger.error(f"Failed to process renewal for subscription {sub.id}", exc_info=True)
 
         await db.flush()
         return count
+
+    @staticmethod
+    async def _process_one_renewal(db: AsyncSession, sub: PlanSubscription, now: datetime) -> int:
+        # Cancelled or downgraded-to-free: expire without charging.
+        if sub.cancel_at_period_end or sub.pending_tier == DEFAULT_TIER:
+            sub.status = "expired"
+            await CreditSubscriptionService._log(db, sub, "expired")
+            return 1
+
+        target = sub.pending_tier or sub.tier
+        price = CreditSubscriptionService.monthly_price(target)
+
+        if await CreditService.get_balance(sub.user_id, db=db) < price:
+            sub.status = "expired"
+            await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
+            return 1
+
+        ok = await CreditService.use_credits(sub.user_id, price, db=db)
+        if not ok:
+            sub.status = "expired"
+            await CreditSubscriptionService._log(db, sub, "expired_insufficient_credits")
+            return 1
+
+        # Anchor the new period at the previous period's end (not the cron run time)
+        # so cycles don't drift later by up to the cron interval on every renewal.
+        # If the cron was down for more than a full cycle, re-anchor at now instead
+        # of back-billing an already-elapsed period.
+        period_start = sub.current_period_end
+        period_end = period_start + relativedelta(months=1)
+        if period_end <= now:
+            period_start, period_end = now, now + relativedelta(months=1)
+
+        sub.tier = target
+        sub.pending_tier = None
+        sub.current_period_start = period_start
+        sub.current_period_end = period_end
+        await CreditSubscriptionService._log(db, sub, "renewed")
+        return 1
