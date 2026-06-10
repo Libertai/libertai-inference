@@ -18,6 +18,7 @@ from src.interfaces.payments import (
     SubscribeRequest,
     SubscriptionResponse,
     TierResponse,
+    TopupPackResponse,
     TopupRequest,
 )
 from src.models.base import AsyncSessionLocal
@@ -33,6 +34,7 @@ from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
+from src.topup_packs import TOPUP_PACKS, get_pack
 from src.utils.cron import scheduler
 from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
@@ -121,19 +123,54 @@ async def region(request: Request) -> RegionResponse:
     return RegionResponse(currency=currency, vat_rate=0.20 if currency == "EUR" else 0.0)
 
 
+@router.get("/topup-packs", description="Fixed EUR top-up packs (gross EUR charge -> USD credits)")  # type: ignore
+async def topup_packs() -> list[TopupPackResponse]:
+    return [
+        TopupPackResponse(id=p.id, usd_credits=p.usd_credits, eur_charge=p.eur_charge)
+        for p in TOPUP_PACKS.values()
+    ]
+
+
 @router.post("/topup", description="Open a checkout to buy prepaid credits")  # type: ignore
-async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+async def topup(body: TopupRequest, request: Request, user: User = Depends(get_current_user)) -> CheckoutResponse:
     provider = _require_provider(body.provider)
     if provider.descriptor().kind != PaymentProviderKind.fiat:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Crypto top-ups settle on-chain; use the provider's contract address from /payments/providers",
         )
+    currency = resolve_currency(request)
+    if currency == "EUR":
+        # EU users buy fixed gross-EUR packs (VAT-inclusive) for a fixed USD credit.
+        if not body.pack_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="EU top-ups use fixed packs; provide pack_id",
+            )
+        try:
+            pack = get_pack(body.pack_id)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        usd_credits, charge_amount, charge_currency = pack.usd_credits, pack.eur_charge, "EUR"
+    else:
+        # Non-EU: arbitrary USD amount, credited 1:1.
+        if body.pack_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="pack_id is not used for USD top-ups; send amount only",
+            )
+        if body.amount is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="amount is required")
+        usd_credits, charge_amount, charge_currency = body.amount, body.amount, "USD"
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
             result = await manager.start_topup(
-                user, amount=body.amount, redirect_url=_checkout_redirect(body.redirect_base)
+                user,
+                redirect_url=_checkout_redirect(body.redirect_base),
+                usd_credits=usd_credits,
+                charge_amount=charge_amount,
+                charge_currency=charge_currency,
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

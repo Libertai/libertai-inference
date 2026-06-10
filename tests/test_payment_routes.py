@@ -17,6 +17,7 @@ from src.services.auth_tokens import create_access_token
 from src.services.credit import CreditService
 from src.services.payments.base import CheckoutResult
 from src.services.payments.registry import payment_registry
+from src.topup_packs import TOPUP_PACKS
 
 
 async def _auth_user() -> tuple[User, dict]:
@@ -164,6 +165,180 @@ async def test_topup_redirects_back_to_requesting_app(async_client, monkeypatch)
         assert seen["redirect_url"] == "https://console.libertai.io/payment/callback"
     finally:
         await _cleanup(user.id)
+
+
+def _stub_topup_provider(monkeypatch, seen: dict, order_prefix: str):
+    """Enable Revolut + capture create_topup kwargs (no real HTTP)."""
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+
+    async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
+        seen["calls"] = seen.get("calls", 0) + 1
+        seen["amount"] = amount
+        seen["currency"] = currency
+        # transaction_hash is unique in DB -> each fake order needs a distinct id.
+        return CheckoutResult(checkout_url="http://pay/checkout", order_id=f"{order_prefix}_{seen['calls']}")
+
+    monkeypatch.setattr(revolut, "create_topup", fake_create_topup)
+
+
+async def test_topup_eur_region_charges_pack_eur_credits_pack_usd(async_client, monkeypatch):
+    """EU callers buy a fixed pack: the provider is charged the gross EUR, the pending row records USD credits."""
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_eur_pack_{user.id}")
+    pack = TOPUP_PACKS["eur_10"]
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "pack_id": "eur_10"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["amount"] == pack.eur_charge
+        assert seen["currency"] == "EUR"
+
+        async with AsyncSessionLocal() as db:
+            tx = (
+                await db.execute(
+                    select(CreditTransaction).where(CreditTransaction.user_id == user.id)
+                )
+            ).scalar_one()
+        assert tx.status == CreditTransactionStatus.pending
+        assert float(tx.amount) == pack.usd_credits
+        assert float(tx.amount_left) == pack.usd_credits
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_eur_region_without_pack_id_rejected(async_client, monkeypatch):
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_eur_nopack_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "pack" in resp.json()["detail"].lower()
+        assert seen.get("calls", 0) == 0
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_eur_region_unknown_pack_rejected(async_client, monkeypatch):
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_eur_badpack_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "pack_id": "nope"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert seen.get("calls", 0) == 0
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_usd_region_charges_arbitrary_amount_one_to_one(async_client, monkeypatch):
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_usd_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["amount"] == 20.0
+        assert seen["currency"] == "USD"
+
+        async with AsyncSessionLocal() as db:
+            tx = (
+                await db.execute(
+                    select(CreditTransaction).where(CreditTransaction.user_id == user.id)
+                )
+            ).scalar_one()
+        assert float(tx.amount) == 20.0
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_usd_region_without_amount_rejected(async_client, monkeypatch):
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_usd_noamt_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "pack_id": "eur_10"}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert seen.get("calls", 0) == 0
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_usd_region_with_pack_id_rejected_even_with_amount(async_client, monkeypatch):
+    """USD mirrors EUR strictness: a stray pack_id is rejected, not silently ignored."""
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_usd_both_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup",
+            json={"provider": "revolut", "amount": 20, "pack_id": "eur_10"},
+            headers=headers,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "pack_id" in resp.json()["detail"]
+        assert seen.get("calls", 0) == 0
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_amount_capped_at_10k(async_client, monkeypatch):
+    """Sanity ceiling on arbitrary USD amounts: 10000 passes validation, 10001 is a 422."""
+    user, headers = await _auth_user()
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    seen: dict = {}
+    _stub_topup_provider(monkeypatch, seen, f"ord_usd_cap_{user.id}")
+
+    try:
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "amount": 10_001}, headers=headers
+        )
+        assert resp.status_code == 422, resp.text
+        assert seen.get("calls", 0) == 0
+
+        resp = await async_client.post(
+            "/payments/topup", json={"provider": "revolut", "amount": 10_000}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["amount"] == 10_000.0
+        assert seen["currency"] == "USD"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_packs_endpoint_lists_packs(async_client):
+    resp = await async_client.get("/payments/topup-packs")
+    assert resp.status_code == 200
+    packs = resp.json()
+    assert len(packs) == 4
+    assert {p["id"] for p in packs} == set(TOPUP_PACKS)
+    for p in packs:
+        assert p["usd_credits"] > 0
+        assert p["eur_charge"] > 0
 
 
 async def test_subscribe_uses_region_resolved_currency(async_client, monkeypatch):
