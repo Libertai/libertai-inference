@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 
 import pytest
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -298,3 +299,149 @@ async def test_downgrade_plus_to_go_then_renewal_charges_go_price(db):
     balance_after_renewal = await _balance(db, user.id)
     charge = balance_before_renewal - balance_after_renewal
     assert charge == pytest.approx(go_price, rel=0.01)
+
+
+async def test_downgrade_unknown_tier_rejected(db):
+    """An unknown tier must be rejected up front — a persisted bogus pending_tier
+    would crash every subsequent renewal run."""
+    user = await _make_user(db)
+    await _add_credits(db, user.id, 30.0)
+    await CreditSubscriptionService.subscribe(db, user, "plus")
+
+    with pytest.raises(ValueError, match="Unknown tier"):
+        await CreditSubscriptionService.request_downgrade(db, user, "bogus")
+
+
+async def test_downgrade_free_then_paid_clears_cancel_flag(db):
+    """Re-requesting a paid downgrade after a downgrade-to-free must clear the
+    cancellation: renewal should move to the paid tier, not expire the sub."""
+    user = await _make_user(db)
+    await _add_credits(db, user.id, 60.0)
+
+    now = datetime.now()
+    past = datetime(now.year - 1, now.month, now.day)
+
+    sub = await CreditSubscriptionService.subscribe(db, user, "plus")
+    await CreditSubscriptionService.request_downgrade(db, user, "free")
+    assert sub.cancel_at_period_end is True
+
+    await CreditSubscriptionService.request_downgrade(db, user, "go")
+    assert sub.cancel_at_period_end is False
+    assert sub.pending_tier == "go"
+
+    sub.current_period_start = datetime(past.year, past.month, 1)
+    sub.current_period_end = past
+    await db.flush()
+
+    count = await CreditSubscriptionService.process_renewals(db, now=now)
+
+    assert count == 1
+    assert sub.status == "active"
+    assert sub.tier == "go"
+    assert sub.pending_tier is None
+
+
+async def test_renewal_poisoned_sub_does_not_block_batch(db):
+    """A subscription with bad data (e.g. an unknown pending_tier persisted before
+    validation existed) must not abort the whole renewal batch."""
+    bad_user = await _make_user(db)
+    good_user = await _make_user(db)
+    await _add_credits(db, bad_user.id, 60.0)
+    await _add_credits(db, good_user.id, 60.0)
+
+    now = datetime.now()
+    past = datetime(now.year - 1, now.month, now.day)
+
+    bad_sub = await CreditSubscriptionService.subscribe(db, bad_user, "plus")
+    good_sub = await CreditSubscriptionService.subscribe(db, good_user, "go")
+    # Simulate legacy poisoned data (request_downgrade now rejects this).
+    bad_sub.pending_tier = "bogus"
+    for sub in (bad_sub, good_sub):
+        sub.current_period_start = datetime(past.year, past.month, 1)
+        sub.current_period_end = past
+    await db.flush()
+
+    count = await CreditSubscriptionService.process_renewals(db, now=now)
+
+    # Only the good sub was processed; the bad one is skipped, not fatal.
+    assert count == 1
+    assert good_sub.status == "active"
+    assert good_sub.current_period_end > now
+    assert bad_sub.status == "active"  # untouched, will be skipped again next run
+
+
+async def test_renewal_anchors_period_at_previous_end(db):
+    """A renewal shortly after period end starts the new period at the old end
+    (no drift toward the cron run time)."""
+    user = await _make_user(db)
+    await _add_credits(db, user.id, 60.0)
+
+    now = datetime.now()
+
+    sub = await CreditSubscriptionService.subscribe(db, user, "go")
+    old_end = now - relativedelta(days=10)
+    sub.current_period_start = old_end - relativedelta(months=1)
+    sub.current_period_end = old_end
+    await db.flush()
+
+    count = await CreditSubscriptionService.process_renewals(db, now=now)
+
+    assert count == 1
+    assert sub.status == "active"
+    assert sub.current_period_start == old_end
+    assert sub.current_period_end == old_end + relativedelta(months=1)
+
+
+async def test_upgrade_on_lapsed_period_renews_inline_then_charges_full_diff(db):
+    """Upgrading while the period has lapsed (cron hasn't renewed yet) must not be
+    free: the sub renews inline (old tier price), then the upgrade charges the
+    (nearly) full tier difference against the fresh period."""
+    user = await _make_user(db)
+    go_price = get_tier("go").price_cents / 100    # 8.0
+    plus_price = get_tier("plus").price_cents / 100  # 20.0
+    await _add_credits(db, user.id, 60.0)
+
+    now = datetime.now()
+
+    sub = await CreditSubscriptionService.subscribe(db, user, "go")
+    # Lapse the period by 30 minutes (within the hourly cron's blind spot).
+    old_end = now - relativedelta(minutes=30)
+    sub.current_period_start = old_end - relativedelta(months=1)
+    sub.current_period_end = old_end
+    await db.flush()
+
+    balance_before = await _balance(db, user.id)
+    await CreditSubscriptionService.upgrade(db, user, "plus")
+
+    assert sub.tier == "plus"
+    assert sub.status == "active"
+    # Inline renewal anchored the fresh period at the old end.
+    assert sub.current_period_start == old_end
+    assert sub.current_period_end == old_end + relativedelta(months=1)
+
+    # Charged: go renewal price + ~full prorated diff (period is ~30 min old).
+    charge = balance_before - await _balance(db, user.id)
+    assert charge == pytest.approx(go_price + (plus_price - go_price), rel=0.05)
+
+
+async def test_upgrade_on_lapsed_cancelled_sub_expires_instead(db):
+    """A cancelled sub whose period lapsed expires during the inline renewal —
+    the upgrade is rejected, nothing is charged."""
+    user = await _make_user(db)
+    await _add_credits(db, user.id, 60.0)
+
+    now = datetime.now()
+
+    sub = await CreditSubscriptionService.subscribe(db, user, "go")
+    await CreditSubscriptionService.cancel(db, user)
+    old_end = now - relativedelta(minutes=30)
+    sub.current_period_start = old_end - relativedelta(months=1)
+    sub.current_period_end = old_end
+    await db.flush()
+
+    balance_before = await _balance(db, user.id)
+    with pytest.raises(ValueError, match="expired"):
+        await CreditSubscriptionService.upgrade(db, user, "plus")
+
+    assert sub.status == "expired"
+    assert await _balance(db, user.id) == pytest.approx(balance_before, abs=0.01)
