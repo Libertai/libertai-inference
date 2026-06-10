@@ -15,7 +15,11 @@ class TopupPack:
     eur_charge: float  # gross EUR charged (VAT-inclusive)
 
 
-# TODO: placeholder 1:1 amounts — confirm the real EUR<->credits table before enabling EUR.
+# TODO: placeholder 1:1 amounts — confirm the real EUR<->credits table, then flip
+# TOPUP_PACKS_CONFIRMED to True to enable EUR pack purchases (mirrors the TODO guard
+# on EUR subscription plan ids in subscription_tiers.get_provider_plan).
+TOPUP_PACKS_CONFIRMED = False
+
 TOPUP_PACKS: dict[str, TopupPack] = {
     "eur_10": TopupPack("eur_10", usd_credits=10.0, eur_charge=10.0),
     "eur_25": TopupPack("eur_25", usd_credits=25.0, eur_charge=25.0),
@@ -25,6 +29,8 @@ TOPUP_PACKS: dict[str, TopupPack] = {
 
 
 def get_pack(pack_id: str) -> TopupPack:
+    if not TOPUP_PACKS_CONFIRMED:
+        raise ValueError("EUR top-up packs are not configured yet")
     pack = TOPUP_PACKS.get(pack_id)
     if pack is None:
         raise ValueError(f"Unknown top-up pack: {pack_id!r}")
