@@ -14,6 +14,7 @@ from src.interfaces.payments import (
     DowngradeRequest,
     DowngradeResponse,
     PaymentProviderResponse,
+    RegionResponse,
     SubscribeRequest,
     SubscriptionResponse,
     TierResponse,
@@ -26,6 +27,7 @@ from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
 from src.services.auth import get_current_user
 from src.services.entitlement import get_allowance_state
+from src.services.geo import resolve_currency
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
@@ -111,6 +113,12 @@ async def list_tiers() -> list[TierResponse]:
         )
         for cfg in SUBSCRIPTION_TIERS.values()
     ]
+
+
+@router.get("/region", description="Caller's payment region (currency + display VAT rate), resolved from client IP")  # type: ignore
+async def region(request: Request) -> RegionResponse:
+    currency = resolve_currency(request)
+    return RegionResponse(currency=currency, vat_rate=0.20 if currency == "EUR" else 0.0)
 
 
 @router.post("/topup", description="Open a checkout to buy prepaid credits")  # type: ignore
