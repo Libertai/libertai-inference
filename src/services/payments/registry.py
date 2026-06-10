@@ -36,14 +36,17 @@ class PaymentRegistry:
         return [p for p in self._providers.values() if p.supports(capability)]
 
     def available_for_chains(self, chains: list[str]) -> list[ProviderDescriptor]:
-        """Descriptors a user may use: all enabled fiat providers, plus the crypto
-        providers matching the user's connected wallet chains."""
+        """Descriptors a user may use. Payment rails are split by account type:
+        wallet users (``chains`` non-empty) pay on-chain only, so they get the
+        crypto providers matching their connected chains; email/OAuth users
+        (``chains`` empty) get the enabled fiat providers only."""
         result: list[ProviderDescriptor] = []
         for descriptor in self.descriptors():
             if not descriptor.enabled:
                 continue
             if descriptor.kind == PaymentProviderKind.fiat:
-                result.append(descriptor)
+                if not chains:
+                    result.append(descriptor)
             elif descriptor.chain in chains:
                 result.append(descriptor)
         return result
