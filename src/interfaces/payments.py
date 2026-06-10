@@ -22,6 +22,11 @@ class TierResponse(BaseModel):
     is_paid: bool
 
 
+class RegionResponse(BaseModel):
+    currency: str  # "USD" | "EUR"
+    vat_rate: float  # display-only; Revolut applies the actual VAT
+
+
 class TopupRequest(BaseModel):
     provider: str = "revolut"
     amount: float = Field(gt=0)

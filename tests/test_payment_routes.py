@@ -44,6 +44,20 @@ async def test_tiers_endpoint(async_client):
     assert {"free", "go", "plus", "power"} == names
 
 
+async def test_region_eu_ip_returns_eur_with_vat(async_client, monkeypatch):
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+    resp = await async_client.get("/payments/region")
+    assert resp.status_code == 200
+    assert resp.json() == {"currency": "EUR", "vat_rate": 0.20}
+
+
+async def test_region_non_eu_ip_returns_usd_no_vat(async_client, monkeypatch):
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    resp = await async_client.get("/payments/region")
+    assert resp.status_code == 200
+    assert resp.json() == {"currency": "USD", "vat_rate": 0.0}
+
+
 async def test_subscription_requires_auth(async_client):
     assert (await async_client.get("/payments/subscription")).status_code == 401
 
