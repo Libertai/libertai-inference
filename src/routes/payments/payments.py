@@ -8,7 +8,6 @@ implementation from ``payment_registry`` and everything else flows through the
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 
-from src.config import config
 from src.interfaces.payments import (
     CancelResponse,
     CheckoutResponse,
@@ -33,6 +32,7 @@ from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
 from src.utils.cron import scheduler
+from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -56,9 +56,9 @@ async def renew_credit_subscriptions() -> int:
     return count
 
 
-def _checkout_redirect() -> str:
-    base = config.FRONTEND_URL.rstrip("/") if config.FRONTEND_URL else ""
-    return f"{base}/billing"
+def _checkout_redirect(redirect_base: str | None) -> str:
+    """Post-checkout return URL on the app the user paid from (chat vs console)."""
+    return f"{resolve_frontend_base(redirect_base)}/payment/callback"
 
 
 def _require_provider(provider_id: str):
@@ -124,7 +124,9 @@ async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> C
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
-            result = await manager.start_topup(user, amount=body.amount, redirect_url=_checkout_redirect())
+            result = await manager.start_topup(
+                user, amount=body.amount, redirect_url=_checkout_redirect(body.redirect_base)
+            )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await db.commit()
@@ -145,7 +147,9 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
-            result = await manager.start_checkout(user, tier=body.tier, redirect_url=_checkout_redirect())
+            result = await manager.start_checkout(
+                user, tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base)
+            )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await db.commit()
@@ -166,7 +170,9 @@ async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
-            result = await manager.upgrade(user, new_tier=body.tier, redirect_url=_checkout_redirect())
+            result = await manager.upgrade(
+                user, new_tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base)
+            )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await db.commit()

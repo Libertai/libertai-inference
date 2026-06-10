@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
 from src.models.magic_link import MagicLink
+from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -116,18 +117,6 @@ def _send_smtp(email: str, html: str) -> None:
         server.sendmail(config.SMTP_FROM, [email], msg.as_string())
 
 
-def _resolve_redirect_base(redirect_base: str | None) -> str:
-    """Pick the base URL for the sign-in link. Honour the caller's origin only if it's an
-    allowed frontend (prevents the email from pointing at an attacker-controlled URL);
-    otherwise fall back to the default FRONTEND_URL."""
-    if redirect_base:
-        candidate = redirect_base.rstrip("/")
-        if candidate in {url.rstrip("/") for url in config.ALLOWED_FRONTEND_URLS}:
-            return candidate
-        logger.warning(f"Ignoring disallowed magic-link redirect_base: {redirect_base}")
-    return config.FRONTEND_URL.rstrip("/")
-
-
 async def send_magic_link_email(email: str, token: str, code: str, redirect_base: str | None = None) -> None:
     """Send the magic-link email via SMTP. With no SMTP host configured (dev), log it instead.
 
@@ -135,7 +124,12 @@ async def send_magic_link_email(email: str, token: str, code: str, redirect_base
     points back there when it's an allowed frontend, else falls back to FRONTEND_URL."""
     import asyncio
 
-    link = f"{_resolve_redirect_base(redirect_base)}/auth/verify?token={token}"
+    try:
+        link = f"{resolve_frontend_base(redirect_base)}/auth/verify?token={token}"
+    except ValueError:
+        # Runs as a BackgroundTask: an uncaught error would be swallowed silently. Log it instead.
+        logger.error(f"FRONTEND_URL is not configured; cannot send magic-link email to {email}")
+        return
     if not config.SMTP_HOST:
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return

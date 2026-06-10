@@ -25,11 +25,15 @@ class TierResponse(BaseModel):
 class TopupRequest(BaseModel):
     provider: str = "revolut"
     amount: float = Field(gt=0)
+    # Origin of the app the user paid from (chat vs console); checkout returns there if allowlisted.
+    redirect_base: str | None = None
 
 
 class SubscribeRequest(BaseModel):
     provider: str = "revolut"
     tier: str
+    # Origin of the app the user paid from (chat vs console); checkout returns there if allowlisted.
+    redirect_base: str | None = None
 
 
 class DowngradeRequest(BaseModel):
