@@ -34,7 +34,6 @@ from src.services.payments.base import (
     UnsupportedCapability,
 )
 from src.subscription_tiers import (
-    DEFAULT_CURRENCY,
     DEFAULT_TIER,
     PAID_TIERS,
     is_downgrade,
@@ -90,16 +89,35 @@ class PaymentManager:
         )
 
     # ------------------------------------------------------------------ top-ups
-    async def start_topup(self, user: User, amount: float, redirect_url: str) -> CheckoutResult:
-        """Open a hosted checkout for a one-off prepaid credit purchase."""
+    async def start_topup(
+        self,
+        user: User,
+        redirect_url: str,
+        *,
+        usd_credits: float,
+        charge_amount: float,
+        charge_currency: str,
+    ) -> CheckoutResult:
+        """Open a hosted checkout for a one-off prepaid credit purchase.
+
+        The charge and the credit are decoupled: non-EU users pay arbitrary USD
+        1:1 (``usd_credits == charge_amount``), while EU users buy a fixed pack —
+        ``charge_amount`` is the gross EUR price (VAT-inclusive, VAT handled at
+        the Revolut merchant level) and ``usd_credits`` is the fixed USD value
+        credited. The pending row always records ``usd_credits`` because the
+        prepaid balance is USD-denominated and webhook settlement completes the
+        recorded amount as-is.
+        """
         if not self.provider.supports(PaymentCapability.topup):
             raise UnsupportedCapability(f"{self.provider.id} does not support top-ups")
-        if amount <= 0:
-            raise ValueError("Top-up amount must be positive")
+        if usd_credits <= 0:
+            raise ValueError("Top-up credit amount must be positive")
+        if charge_amount <= 0:
+            raise ValueError("Top-up charge amount must be positive")
 
         result = await self.provider.create_topup(
-            amount=amount,
-            currency=DEFAULT_CURRENCY,
+            amount=charge_amount,
+            currency=charge_currency,
             redirect_url=redirect_url,
             user_email=user.email,
             metadata={"ext_ref": f"{TOPUP_EXT_REF_PREFIX}{user.id}"},
@@ -112,8 +130,8 @@ class PaymentManager:
             self.db.add(
                 CreditTransaction(
                     user_id=user.id,
-                    amount=amount,
-                    amount_left=amount,
+                    amount=usd_credits,
+                    amount_left=usd_credits,
                     provider=CreditTransactionProvider.revolut,
                     transaction_hash=_topup_tx_hash(self.provider.id, result.order_id),
                     status=CreditTransactionStatus.pending,

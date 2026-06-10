@@ -32,6 +32,7 @@ class FakeProvider(PaymentProvider):
         self.sub_seq = 0
         self.cancelled: list[str] = []
         self.sub_currencies: list[str] = []
+        self.topups: list[tuple[float, str]] = []
 
     def descriptor(self) -> ProviderDescriptor:
         return ProviderDescriptor(
@@ -44,6 +45,7 @@ class FakeProvider(PaymentProvider):
 
     async def create_topup(self, *, amount, currency, redirect_url, user_email=None, metadata=None):
         self.order_seq += 1
+        self.topups.append((amount, currency))
         return CheckoutResult(checkout_url="http://pay/topup", order_id=f"ord_{self.order_seq}")
 
     async def create_subscription(self, *, user_email, tier, currency, redirect_url, provider_customer_id=None):
@@ -96,7 +98,9 @@ async def test_topup_completes_once_and_dedups(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
 
-    result = await mgr.start_topup(user, amount=10.0, redirect_url="http://x")
+    result = await mgr.start_topup(
+        user, redirect_url="http://x", usd_credits=10.0, charge_amount=10.0, charge_currency="USD"
+    )
     assert result.checkout_url
     # Pending -> not yet spendable.
     assert await _balance(db, user.id) == 0.0
@@ -117,7 +121,7 @@ async def test_topup_completes_once_and_dedups(db):
 async def test_topup_failure_voids_pending(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_topup(user, amount=5.0, redirect_url="http://x")
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=5.0, charge_amount=5.0, charge_currency="USD")
 
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
@@ -132,6 +136,61 @@ async def test_topup_failure_voids_pending(db):
     ).scalar_one()
     assert tx.status == CreditTransactionStatus.error
     assert await _balance(db, user.id) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_topup_eur_pack_charges_eur_but_records_usd_credits(db):
+    """EU packs: the provider is charged the gross EUR figure, the pending row records USD credits."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=10.0, charge_amount=12.0, charge_currency="EUR")
+    assert provider.topups == [(12.0, "EUR")]
+
+    tx = (
+        await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.transaction_hash == _topup_tx_hash("fake", "ord_1")
+            )
+        )
+    ).scalar_one()
+    assert tx.amount == 10.0
+    assert tx.amount_left == 10.0
+    assert tx.status == CreditTransactionStatus.pending
+
+
+@pytest.mark.asyncio
+async def test_topup_usd_charges_and_records_same_amount(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=15.0, charge_amount=15.0, charge_currency="USD")
+    assert provider.topups == [(15.0, "USD")]
+
+    tx = (
+        await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.transaction_hash == _topup_tx_hash("fake", "ord_1")
+            )
+        )
+    ).scalar_one()
+    assert tx.amount == 15.0
+    assert tx.amount_left == 15.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [
+    {"usd_credits": 0.0, "charge_amount": 12.0, "charge_currency": "EUR"},
+    {"usd_credits": 10.0, "charge_amount": 0.0, "charge_currency": "EUR"},
+    {"usd_credits": -1.0, "charge_amount": 12.0, "charge_currency": "EUR"},
+])
+async def test_topup_rejects_non_positive_amounts(db, kwargs):
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    with pytest.raises(ValueError):
+        await mgr.start_topup(user, redirect_url="http://x", **kwargs)
 
 
 @pytest.mark.asyncio
