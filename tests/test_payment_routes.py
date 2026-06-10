@@ -7,6 +7,7 @@ import time
 
 from sqlalchemy import delete, func, select
 
+from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -101,6 +102,52 @@ async def test_topup_then_webhook_credits_user(async_client, monkeypatch):
                 )
             ).scalar()
         assert float(balance) == 12.5
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_topup_redirects_back_to_requesting_app(async_client, monkeypatch):
+    """An allowlisted redirect_base (chat vs console) decides where checkout returns the user."""
+    user, headers = await _auth_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    monkeypatch.setattr(config, "ALLOWED_FRONTEND_URLS", ["https://chat.libertai.io", "https://console.libertai.io"])
+    monkeypatch.setattr(config, "FRONTEND_URL", "https://console.libertai.io")
+
+    seen: dict = {"calls": 0}
+
+    async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
+        seen["calls"] += 1
+        seen["redirect_url"] = redirect_url
+        # transaction_hash is unique in DB -> each fake order needs a distinct id.
+        return CheckoutResult(checkout_url="http://pay/checkout", order_id=f"ord_redirect_{user.id}_{seen['calls']}")
+
+    monkeypatch.setattr(revolut, "create_topup", fake_create_topup)
+
+    try:
+        # Allowed origin -> checkout returns to that app's callback page.
+        resp = await async_client.post(
+            "/payments/topup",
+            json={"provider": "revolut", "amount": 5, "redirect_base": "https://chat.libertai.io"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["redirect_url"] == "https://chat.libertai.io/payment/callback"
+
+        # Disallowed origin -> fall back to the default frontend.
+        resp = await async_client.post(
+            "/payments/topup",
+            json={"provider": "revolut", "amount": 5, "redirect_base": "https://evil.example.com"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["redirect_url"] == "https://console.libertai.io/payment/callback"
+
+        # No redirect_base -> same fallback.
+        resp = await async_client.post("/payments/topup", json={"provider": "revolut", "amount": 5}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert seen["redirect_url"] == "https://console.libertai.io/payment/callback"
     finally:
         await _cleanup(user.id)
 

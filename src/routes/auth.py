@@ -48,6 +48,7 @@ from src.services.users import (
     update_user_profile,
 )
 from src.utils.encryption import decrypt, encrypt
+from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -239,18 +240,6 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
 # --- OAuth (Google / GitHub) ---
 
 
-def _resolve_frontend_base(redirect_base: str | None) -> str:
-    """Pick the frontend to return the user to after OAuth. Honour the caller's origin only if it's
-    an allowed frontend (chat vs console); otherwise fall back to the default FRONTEND_URL. Mirrors the
-    magic-link redirect_base handling so OAuth isn't pinned to a single app."""
-    if redirect_base:
-        candidate = redirect_base.rstrip("/")
-        if candidate in {url.rstrip("/") for url in config.ALLOWED_FRONTEND_URLS}:
-            return candidate
-        logger.warning(f"Ignoring disallowed OAuth redirect_base: {redirect_base}")
-    return config.FRONTEND_URL.rstrip("/")
-
-
 @router.get("/oauth/{provider}")
 async def oauth_start(provider: str, redirect_base: str | None = None) -> RedirectResponse:
     """Redirect to the provider's consent screen."""
@@ -264,7 +253,7 @@ async def oauth_start(provider: str, redirect_base: str | None = None) -> Redire
     # app they started from (chat vs console) instead of the single default FRONTEND_URL.
     response.set_cookie(
         "oauth_redirect",
-        _resolve_frontend_base(redirect_base),
+        resolve_frontend_base(redirect_base),
         httponly=True,
         max_age=600,
         samesite="lax",
@@ -306,7 +295,7 @@ async def oauth_callback(
         await db.commit()
 
     # Re-validate the carried base (defence in depth — cookies are client-supplied) before redirecting.
-    frontend_base = _resolve_frontend_base(oauth_redirect)
+    frontend_base = resolve_frontend_base(oauth_redirect)
     response = RedirectResponse(f"{frontend_base}/auth/callback?code={one_time_code}")
     response.delete_cookie("oauth_state")
     response.delete_cookie("oauth_redirect")
