@@ -1,9 +1,10 @@
 """PaymentManager state machine: top-ups + subscriptions, with a fake provider."""
 
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from src.interfaces.credits import CreditTransactionStatus
 from src.models.credit_transaction import CreditTransaction
@@ -269,3 +270,82 @@ async def test_upgrade_threads_currency(db):
     new_sub = await mgr._active_subscription(user.id, lock=False)
     assert new_sub.tier == "plus"
     assert new_sub.currency == "EUR"
+
+
+async def _make_upgrading_sub(db, user, aged_hours: float) -> PlanSubscription:
+    """A sub parked as "upgrading", with updated_at pushed ``aged_hours`` into the past."""
+    sub = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        status="upgrading",
+        provider="fake",
+        provider_subscription_id=f"psub_parked_{user.id}",
+        currency="USD",
+    )
+    db.add(sub)
+    await db.flush()
+    await db.execute(
+        update(PlanSubscription)
+        .where(PlanSubscription.id == sub.id)
+        .values(updated_at=datetime.now() - timedelta(hours=aged_hours))
+    )
+    return sub
+
+
+@pytest.mark.asyncio
+async def test_check_expirations_reverts_stale_upgrading_sub(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    sub = await _make_upgrading_sub(db, user, aged_hours=2)
+
+    await mgr.check_expirations()
+
+    assert sub.status == "active"  # entitlement restored
+    assert provider.cancelled == []  # nothing touched on the provider
+    reverted = (
+        await db.execute(
+            select(func.count())
+            .select_from(PlanSubscriptionEvent)
+            .where(
+                PlanSubscriptionEvent.subscription_id == sub.id,
+                PlanSubscriptionEvent.event_type == "upgrade_abandoned_reverted",
+            )
+        )
+    ).scalar()
+    assert reverted == 1
+
+
+@pytest.mark.asyncio
+async def test_check_expirations_keeps_recent_upgrading_sub(db):
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    sub = await _make_upgrading_sub(db, user, aged_hours=0.5)
+
+    await mgr.check_expirations()
+
+    assert sub.status == "upgrading"  # under the 1h threshold — not yet abandoned
+
+
+@pytest.mark.asyncio
+async def test_check_expirations_skips_revert_while_new_checkout_pending(db):
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    sub = await _make_upgrading_sub(db, user, aged_hours=2)
+    # The new checkout's row still exists: reverting to "active" would violate the
+    # one-active-sub index, so the parked sub must stay "upgrading".
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="plus",
+            status="pending",
+            provider="fake",
+            provider_subscription_id=f"psub_new_{user.id}",
+            currency="USD",
+        )
+    )
+    await db.flush()
+
+    await mgr.check_expirations()
+
+    assert sub.status == "upgrading"
