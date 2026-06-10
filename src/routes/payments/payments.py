@@ -34,6 +34,7 @@ from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
+import src.topup_packs as topup_packs_module
 from src.topup_packs import TOPUP_PACKS, get_pack
 from src.utils.cron import scheduler
 from src.utils.frontend import resolve_frontend_base
@@ -125,6 +126,9 @@ async def region(request: Request) -> RegionResponse:
 
 @router.get("/topup-packs", description="Fixed EUR top-up packs (gross EUR charge -> USD credits)")  # type: ignore
 async def topup_packs() -> list[TopupPackResponse]:
+    # Don't advertise packs the purchase guard would reject (placeholder table).
+    if not topup_packs_module.TOPUP_PACKS_CONFIRMED:
+        return []
     return [
         TopupPackResponse(id=p.id, usd_credits=p.usd_credits, eur_charge=p.eur_charge)
         for p in TOPUP_PACKS.values()
