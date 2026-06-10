@@ -170,7 +170,7 @@ class _Config:
         self.REVOLUT_SECRET_KEY = os.getenv("REVOLUT_SECRET_KEY", "")
         self.REVOLUT_WEBHOOK_SECRET = os.getenv("REVOLUT_WEBHOOK_SECRET", "")
         self.REVOLUT_API_URL = os.getenv("REVOLUT_API_URL", "https://merchant.revolut.com")
-        self.REVOLUT_API_VERSION = os.getenv("REVOLUT_API_VERSION", "2024-09-01")
+        self.REVOLUT_API_VERSION = os.getenv("REVOLUT_API_VERSION", "2026-04-20")
 
 
 config = _Config()

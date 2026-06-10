@@ -71,7 +71,7 @@ class RevolutProvider(PaymentProvider):
             kind=PaymentProviderKind.fiat,
             label="Card / bank (Revolut)",
             capabilities=[PaymentCapability.topup, PaymentCapability.subscription],
-            currencies=["EUR"],
+            currencies=["USD", "EUR"],
             enabled=bool(self.secret_key and self.webhook_secret),
         )
 
@@ -142,7 +142,7 @@ class RevolutProvider(PaymentProvider):
     ) -> CheckoutResult:
         customer_id = provider_customer_id or await self._create_customer(user_email)
 
-        plan = get_provider_plan(tier, PROVIDER_ID)
+        plan = get_provider_plan(tier, PROVIDER_ID, currency)
         sub_resp = await self.client.post(
             "/api/subscriptions",
             json={
