@@ -32,9 +32,13 @@ def test_get_provider_plan_per_currency():
     assert set(usd) == {"plan_id", "variation_id"}
     assert usd["plan_id"] and usd["variation_id"]
 
-    eur = get_provider_plan("go", "revolut", "EUR")
-    assert set(eur) == {"plan_id", "variation_id"}
-    assert eur != usd
+
+def test_get_provider_plan_placeholder_ids_raise():
+    # EUR ids are TODO placeholders by design until the real Revolut plans land.
+    # When real EUR ids arrive, restore the positive assertion (eur returned, != usd).
+    for tier in ("go", "plus", "power"):
+        with pytest.raises(ValueError, match="not configured"):
+            get_provider_plan(tier, "revolut", "EUR")
 
 
 def test_get_provider_plan_unknown_currency_raises():
