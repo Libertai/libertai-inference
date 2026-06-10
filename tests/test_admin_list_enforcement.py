@@ -46,7 +46,8 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
             else:  # expired
                 started, expires, used_at = now - timedelta(hours=6), now - timedelta(hours=1), now - timedelta(hours=5)
             db.add(EntitlementWindow(user_id=user.id, kind=WINDOW_5H, started_at=started, expires_at=expires))
-            call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m")
+            # Seeded usage simulates tier-covered calls (counts against the window).
+            call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m", tier_credits_used=usage)
             call.used_at = used_at
             db.add(call)
         if prepaid:

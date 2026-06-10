@@ -725,17 +725,6 @@ class ApiKeyService:
                 # Anchor the usage row + windows to the same instant so this call counts
                 # in the window it opens (avoids python/DB clock skew).
                 now = datetime.now()
-                usage = InferenceCall(
-                    api_key_id=api_key.id,
-                    credits_used=credits_used,
-                    model_name=model_name,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    image_count=image_count,
-                )
-                usage.used_at = now
-                db.add(usage)
 
                 # Chargeable keys (everything except liberclaw / x402, and the shared
                 # anonymous chat service key) with an owner accrue against fixed windows
@@ -746,29 +735,46 @@ class ApiKeyService:
                     if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and not is_shared_free_key
                     else None
                 )
+
+                # Split this call between the tier windows and prepaid *before* recording it:
+                # only the portion that fits the remaining allowance is tier-covered (a call
+                # straddling the cap is charged just for its overflow, not in full). Coverage
+                # is bounded by the tighter remaining window, since a call is tier-covered
+                # only while both have room. The split is persisted on the row so window
+                # usage sums never count the prepaid-paid portion against the allowance.
+                tier_covered = 0.0
                 if chargeable_user_id is not None:
                     # Open/reset this user's fixed windows so usage accrues against them.
                     await open_windows(db, chargeable_user_id, now)
+                    state = await get_allowance_state(db, chargeable_user_id, now)
+                    remaining_5h = max(0.0, state.window_5h_limit - state.window_5h_used)
+                    remaining_weekly = max(0.0, state.weekly_limit - state.weekly_used)
+                    tier_covered = min(credits_used, remaining_5h, remaining_weekly)
 
+                usage = InferenceCall(
+                    api_key_id=api_key.id,
+                    credits_used=credits_used,
+                    model_name=model_name,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
+                    image_count=image_count,
+                    tier_credits_used=tier_covered,
+                )
+                usage.used_at = now
+                db.add(usage)
                 await db.commit()
 
-                # Deduct credits from user's balance (skip for liberclaw, x402 and the shared free chat key).
+                # Deduct the overflow from the user's prepaid balance (skip for liberclaw,
+                # x402 and the shared free chat key).
                 if chargeable_user_id is not None:
-                    # Split this call between the tier windows and prepaid: only the portion that
-                    # overflows the fixed-window allowance draws down the balance (a call straddling
-                    # the cap is charged just for its overflow, not in full). The window usage in
-                    # `state` already includes this call (its row was committed above), so subtract
-                    # it to recover the allowance free *before* this call. Coverage is bounded by the
-                    # tighter remaining window, since a call is tier-covered only while both have room.
-                    state = await get_allowance_state(db, chargeable_user_id, now)
-                    remaining_5h = max(0.0, state.window_5h_limit - (state.window_5h_used - credits_used))
-                    remaining_weekly = max(0.0, state.weekly_limit - (state.weekly_used - credits_used))
-                    tier_covered = min(credits_used, remaining_5h, remaining_weekly)
                     overflow = credits_used - tier_covered
                     if overflow > 0:
-                        success = await CreditService.use_credits(chargeable_user_id, overflow)
+                        # Post-hoc billing: the call already happened, so capture what the
+                        # balance can cover rather than nothing if it falls short.
+                        success = await CreditService.use_credits(chargeable_user_id, overflow, allow_partial=True)
                         if not success:
-                            logger.warning(f"Failed to deduct {overflow} credits for API key {key}")
+                            logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
 
                 return True
 
