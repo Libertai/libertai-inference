@@ -142,7 +142,9 @@ async def topup(body: TopupRequest, user: User = Depends(get_current_user)) -> C
 
 
 @router.post("/subscribe", description="Open a checkout to subscribe to a paid tier")  # type: ignore
-async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+async def subscribe(
+    body: SubscribeRequest, request: Request, user: User = Depends(get_current_user)
+) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
             try:
@@ -152,11 +154,12 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
             await db.commit()
         return CheckoutResponse(checkout_url=None)
     provider = _require_provider(body.provider)
+    currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
             result = await manager.start_checkout(
-                user, tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base)
+                user, tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base), currency=currency
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -165,7 +168,9 @@ async def subscribe(body: SubscribeRequest, user: User = Depends(get_current_use
 
 
 @router.post("/upgrade", description="Upgrade to a higher paid tier")  # type: ignore
-async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)) -> CheckoutResponse:
+async def upgrade(
+    body: SubscribeRequest, request: Request, user: User = Depends(get_current_user)
+) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
             try:
@@ -175,11 +180,12 @@ async def upgrade(body: SubscribeRequest, user: User = Depends(get_current_user)
             await db.commit()
         return CheckoutResponse(checkout_url=None)
     provider = _require_provider(body.provider)
+    currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(provider, db)
         try:
             result = await manager.upgrade(
-                user, new_tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base)
+                user, new_tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base), currency=currency
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

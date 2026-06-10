@@ -30,6 +30,7 @@ class FakeProvider(PaymentProvider):
         self.order_seq = 0
         self.sub_seq = 0
         self.cancelled: list[str] = []
+        self.sub_currencies: list[str] = []
 
     def descriptor(self) -> ProviderDescriptor:
         return ProviderDescriptor(
@@ -46,6 +47,7 @@ class FakeProvider(PaymentProvider):
 
     async def create_subscription(self, *, user_email, tier, currency, redirect_url, provider_customer_id=None):
         self.sub_seq += 1
+        self.sub_currencies.append(currency)
         return CheckoutResult(
             checkout_url="http://pay/sub",
             provider_subscription_id=f"psub_{self.sub_seq}",
@@ -136,7 +138,7 @@ async def test_subscribe_activates_tier(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
 
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "pending"
     assert await mgr.current_tier(user.id) == "free"  # not active yet
@@ -156,7 +158,7 @@ async def test_subscribe_activates_tier(db):
 async def test_subscription_event_dedup(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
 
     event = PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                          provider_event_id="ORDER_COMPLETED:setup_1",
@@ -181,7 +183,7 @@ async def test_upgrade_parks_then_cancels_old(db):
     mgr = PaymentManager(provider, db)
 
     # Active go sub.
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                      provider_event_id="ORDER_COMPLETED:setup_1",
@@ -190,7 +192,7 @@ async def test_upgrade_parks_then_cancels_old(db):
     assert await mgr.current_tier(user.id) == "go"
 
     # Upgrade to plus -> parks old as "upgrading", new pending sub created.
-    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x")
+    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
     parked = (
         await db.execute(
             select(PlanSubscription).where(
@@ -217,7 +219,7 @@ async def test_cancel_sets_period_end_flag(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x")
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
                      provider_event_id="ORDER_COMPLETED:setup_1",
@@ -230,3 +232,40 @@ async def test_cancel_sets_period_end_flag(db):
     assert sub.cancel_at_period_end is True
     assert sub.status == "active"  # still active until period end
     assert "psub_1" in provider.cancelled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_start_checkout_threads_currency_to_provider_and_locks_row(db, currency):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency=currency)
+    assert provider.sub_currencies == [currency]
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.currency == currency
+
+
+@pytest.mark.asyncio
+async def test_upgrade_threads_currency(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="EUR")
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
+    )
+
+    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="EUR")
+    assert provider.sub_currencies == ["EUR", "EUR"]
+    new_sub = await mgr._active_subscription(user.id, lock=False)
+    assert new_sub.tier == "plus"
+    assert new_sub.currency == "EUR"

@@ -166,6 +166,88 @@ async def test_topup_redirects_back_to_requesting_app(async_client, monkeypatch)
         await _cleanup(user.id)
 
 
+async def test_subscribe_uses_region_resolved_currency(async_client, monkeypatch):
+    """/subscribe resolves the caller's currency from their IP and passes it to the provider."""
+    user, headers = await _auth_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+
+    seen: dict = {}
+
+    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+        seen["currency"] = currency
+        return CheckoutResult(
+            checkout_url="http://pay/sub",
+            provider_subscription_id=f"psub_route_{user.id}",
+            provider_customer_id="cust_route",
+            order_id=f"setup_route_{user.id}",
+        )
+
+    monkeypatch.setattr(revolut, "create_subscription", fake_create_subscription)
+
+    try:
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "revolut", "tier": "go"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["currency"] == "EUR"
+        async with AsyncSessionLocal() as db:
+            sub = (await db.execute(select(PlanSubscription).where(PlanSubscription.user_id == user.id))).scalar_one()
+        assert sub.currency == "EUR"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_upgrade_uses_region_resolved_currency(async_client, monkeypatch):
+    user, headers = await _auth_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
+
+    seen: dict = {}
+
+    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+        seen["currency"] = currency
+        return CheckoutResult(
+            checkout_url="http://pay/sub",
+            provider_subscription_id=f"psub_upg_{user.id}",
+            provider_customer_id="cust_upg",
+            order_id=f"setup_upg_{user.id}",
+        )
+
+    async def fake_cancel_subscription(provider_subscription_id):
+        return None
+
+    monkeypatch.setattr(revolut, "create_subscription", fake_create_subscription)
+    monkeypatch.setattr(revolut, "cancel_subscription", fake_cancel_subscription)
+
+    try:
+        # Seed an active "go" sub so /upgrade has something to upgrade from.
+        async with AsyncSessionLocal() as db:
+            db.add(
+                PlanSubscription(
+                    user_id=user.id,
+                    tier="go",
+                    status="active",
+                    provider="revolut",
+                    provider_subscription_id=f"psub_old_{user.id}",
+                    currency="USD",
+                )
+            )
+            await db.commit()
+
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "revolut", "tier": "plus"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert seen["currency"] == "EUR"
+    finally:
+        await _cleanup(user.id)
+
+
 async def test_webhook_bad_signature_rejected(async_client, monkeypatch):
     revolut = payment_registry.get("revolut")
     monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")

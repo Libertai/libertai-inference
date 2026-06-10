@@ -123,6 +123,10 @@ def get_provider_plan(tier: str, provider: str, currency: str) -> dict[str, str]
     plan = get_tier(tier).provider_plan_ids.get(provider, {}).get(currency)
     if not plan:
         raise ValueError(f"Tier {tier!r} is not sold through provider {provider!r} in currency {currency!r}")
+    if any(value.startswith("TODO") for value in plan.values()):
+        raise ValueError(
+            f"Plan ids for tier {tier!r} on provider {provider!r} in currency {currency!r} are not configured"
+        )
     return plan
 
 
