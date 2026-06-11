@@ -7,7 +7,6 @@ ImageInferenceCallData (image_count required) matched.
 import pytest
 from pydantic import TypeAdapter
 
-from src.config import config
 from src.interfaces.aleph import AudioCapability, AudioPricing, ModelInfo
 from src.interfaces.api_keys import (
     AudioInferenceCallData,
@@ -24,14 +23,14 @@ from src.services.users import get_or_create_user_by_wallet
 
 # Exactly what libertai-models' report_usage_event_task sends for a TTS call
 # (AudioUsageFullData.model_dump()): no output_tokens, no cached_tokens.
-def _instance_audio_payload(key: str) -> dict:
+def _instance_audio_payload(key: str, chars: int = 500_000) -> dict:
     return {
         "key": key,
         "model_name": "kokoro-82m",
         "endpoint": "v1/audio/speech",
         "payment_payload": None,
         "payment_requirements": None,
-        "input_tokens": 500_000,
+        "input_tokens": chars,
         "type": "audio",
     }
 
@@ -76,8 +75,10 @@ def kokoro_model(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_audio_usage_endpoint_bills_characters(async_client, kokoro_model, monkeypatch):
-    monkeypatch.setattr(config, "SUBSCRIPTIONS_ENABLED", False)
+async def test_audio_usage_endpoint_bills_characters(async_client, kokoro_model):
+    """Audio usage bills characters like any chargeable call: the free-tier window covers
+    the first 0.5 credits (5h cap), the overflow draws from prepaid. 5M chars * $0.70/1M
+    = $3.50 -> 0.5 tier-covered, 3.0 charged -> balance 10.0 - 3.0 = 7.0."""
     address = "0xA0D10000000000000000000000000000000000001"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
@@ -87,10 +88,12 @@ async def test_audio_usage_endpoint_bills_characters(async_client, kokoro_model,
 
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="tts", user_address=address)
 
-    response = await async_client.post("/api-keys/admin/usage", json=_instance_audio_payload(api_key.full_key))
+    response = await async_client.post(
+        "/api-keys/admin/usage", json=_instance_audio_payload(api_key.full_key, chars=5_000_000)
+    )
 
     assert response.status_code == 200, response.text
     async with AsyncSessionLocal() as db:
         user = await db.get(User, user_id)
         balance = await user.get_credit_balance()
-    assert balance == pytest.approx(10.0 - 0.35)  # 500k chars * $0.70/1M
+    assert balance == pytest.approx(7.0)  # $3.50 cost - 0.5 free-window = 3.0 from prepaid
