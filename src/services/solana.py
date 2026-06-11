@@ -117,7 +117,7 @@ class SolanaService:
                     existing_tx = (
                         await db.execute(
                             select(CreditTransaction).where(
-                                CreditTransaction.transaction_hash == signature_str,
+                                CreditTransaction.external_reference == signature_str,
                                 CreditTransaction.provider.in_(
                                     [
                                         CreditTransactionProvider.ltai_solana.value,
@@ -190,7 +190,7 @@ class SolanaService:
                 provider=provider,
                 address=payment_event["user"],
                 amount=amount,
-                transaction_hash=signature,
+                external_reference=signature,
                 block_number=slot,
                 status=payment_event["status"],
             )

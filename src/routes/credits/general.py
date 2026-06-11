@@ -46,7 +46,7 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
                 transactions_response.append(
                     ExpiredCreditTransaction(
                         id=str(tx.id),
-                        transaction_hash=tx.transaction_hash,
+                        external_reference=tx.external_reference,
                         address=tx.address,
                         expired_at=tx.expired_at,
                     )
@@ -91,7 +91,7 @@ async def get_transaction_history(user: User = Depends(get_current_user)) -> Cre
                 transaction_responses.append(
                     CreditTransactionResponse(
                         id=str(tx.id),
-                        transaction_hash=tx.transaction_hash,
+                        external_reference=tx.external_reference,
                         amount=tx.amount,
                         amount_left=tx.amount_left,
                         provider=CreditTransactionProvider(tx.provider),

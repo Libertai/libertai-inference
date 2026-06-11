@@ -29,9 +29,9 @@ class CreditTransaction(Base):
         return f"{self.__class__.__name__}({', '.join(attrs)})"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)  # Primary key UUID
-    transaction_hash: Mapped[str | None] = mapped_column(
+    external_reference: Mapped[str | None] = mapped_column(
         String, nullable=True, unique=True
-    )  # Optional transaction hash
+    )  # Idempotency/dedup key: onchain tx hash, "revolut:<order_id>", "upgrade_remainder:<sub_id>", ...
     user_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     # Legacy wallet address kept (no FK) for one release as a rollback hatch; identity is user_id.
     address: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -59,14 +59,14 @@ class CreditTransaction(Base):
         amount_left: float,
         provider: CreditTransactionProvider,
         address: str | None = None,
-        transaction_hash: str | None = None,
+        external_reference: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
         is_active: bool = True,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ):
         self.user_id = user_id
-        self.transaction_hash = transaction_hash
+        self.external_reference = external_reference
         self.address = address
         self.amount = amount
         self.amount_left = amount_left
