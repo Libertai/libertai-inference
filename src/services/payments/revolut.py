@@ -131,6 +131,18 @@ class RevolutProvider(PaymentProvider):
         resp.raise_for_status()
         return resp.json()["id"]
 
+    async def _post_subscription(self, variation_id: str, customer_id: str, redirect_url: str) -> dict:
+        resp = await self.client.post(
+            "/api/subscriptions",
+            json={
+                "plan_variation_id": variation_id,
+                "customer_id": customer_id,
+                "setup_order_redirect_url": redirect_url,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def create_subscription(
         self,
         *,
@@ -143,16 +155,19 @@ class RevolutProvider(PaymentProvider):
         customer_id = provider_customer_id or await self._create_customer(user_email)
 
         plan = get_provider_plan(tier, PROVIDER_ID, currency)
-        sub_resp = await self.client.post(
-            "/api/subscriptions",
-            json={
-                "plan_variation_id": plan["variation_id"],
-                "customer_id": customer_id,
-                "setup_order_redirect_url": redirect_url,
-            },
-        )
-        sub_resp.raise_for_status()
-        sub_data = sub_resp.json()
+        try:
+            sub_data = await self._post_subscription(plan["variation_id"], customer_id, redirect_url)
+        except httpx.HTTPStatusError:
+            if provider_customer_id is None:
+                raise
+            # A REUSED customer id can be stale: deleted on Revolut's side, or minted in a
+            # different environment (sandbox vs production) before an env switch. Retry once
+            # with a freshly created customer instead of failing the checkout.
+            logger.warning(
+                f"Subscription create failed with reused customer {provider_customer_id}; retrying with a fresh customer"
+            )
+            customer_id = await self._create_customer(user_email)
+            sub_data = await self._post_subscription(plan["variation_id"], customer_id, redirect_url)
 
         setup_order_id = sub_data["setup_order_id"]
         order_resp = await self.client.get(f"/api/orders/{setup_order_id}")
