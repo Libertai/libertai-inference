@@ -15,7 +15,14 @@ number; Revolut applies 20% VAT on the EUR variations).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from functools import lru_cache
+
+from src.config import config
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 DEFAULT_TIER = "free"
 DEFAULT_CURRENCY = "USD"
@@ -122,9 +129,30 @@ def get_tier(tier: str) -> TierConfig:
     return cfg
 
 
+@lru_cache(maxsize=1)
+def _revolut_plan_overrides() -> dict:
+    """Env override for the Revolut plan ids (``REVOLUT_PLAN_IDS``, JSON).
+
+    Lets an environment point at a different Revolut merchant environment than the
+    in-code production ids — e.g. beta runs against the SANDBOX, whose plans have
+    their own ids. Shape: {"go": {"USD": {"plan_id": ..., "variation_id": ...}, ...}, ...}.
+    Tiers/currencies absent from the override fall back to the in-code ids.
+    """
+    raw = config.REVOLUT_PLAN_IDS
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error("REVOLUT_PLAN_IDS is not valid JSON; ignoring the override")
+        return {}
+
+
 def get_provider_plan(tier: str, provider: str, currency: str) -> dict[str, str]:
     """Return the {plan_id, variation_id} for a tier on a given provider in a given currency."""
     plan = get_tier(tier).provider_plan_ids.get(provider, {}).get(currency)
+    if provider == "revolut":
+        plan = _revolut_plan_overrides().get(tier, {}).get(currency) or plan
     if not plan:
         raise ValueError(f"Tier {tier!r} is not sold through provider {provider!r} in currency {currency!r}")
     if any(value.startswith("TODO") for value in plan.values()):
