@@ -34,6 +34,7 @@ from src.services.payments.base import (
     UnsupportedCapability,
 )
 from src.subscription_tiers import (
+    DEFAULT_CURRENCY,
     DEFAULT_TIER,
     PAID_TIERS,
     is_downgrade,
@@ -264,10 +265,22 @@ class PaymentManager:
         sub = await self._active_subscription(user.id)
         if not sub:
             raise ValueError("No active subscription")
-        sub.pending_tier = new_tier
-        sub.cancel_at_period_end = True
         if new_tier == DEFAULT_TIER:
+            # Downgrade to free == cancel: the sub lapses at period end.
+            sub.pending_tier = new_tier
+            sub.cancel_at_period_end = True
             await self._cancel_on_provider(sub)
+        else:
+            # Paid -> paid: schedule the plan change on the provider FIRST (next cycle bills
+            # the lower variation); only record pending_tier once the provider accepted it,
+            # so a failure can't leave us billing the old tier while promising the new one.
+            if sub.provider != "manual" and sub.provider_subscription_id:
+                await self.provider.change_subscription_plan(
+                    sub.provider_subscription_id, tier=new_tier, currency=sub.currency or DEFAULT_CURRENCY
+                )
+            sub.pending_tier = new_tier
+            # The sub keeps renewing (on the new plan) — supersede any earlier cancel request.
+            sub.cancel_at_period_end = False
         await self._log_event(sub, "downgrade_requested", metadata={"new_tier": new_tier})
         await self.db.flush()
         return {
@@ -327,6 +340,12 @@ class PaymentManager:
 
         if event.type == PaymentEventType.order_completed:
             sub.status = "active"
+            if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
+                # A scheduled paid->paid downgrade took effect: this payment is the first
+                # cycle billed on the lower plan variation.
+                await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
+                sub.tier = sub.pending_tier
+                sub.pending_tier = None
             await self._refresh_cycle_dates(sub)
             await self._log_event(sub, "activated", event.provider_event_id, event.metadata)
             await self._cancel_upgrading_subs(user.id, exclude_sub_id=sub.id)

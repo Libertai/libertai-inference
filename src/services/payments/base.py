@@ -129,6 +129,11 @@ class PaymentProvider(ABC):
     async def cancel_subscription(self, provider_subscription_id: str) -> None:
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
+    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+        """Schedule a plan change (e.g. a downgrade) to take effect at the end of the
+        current billing cycle. The next cycle bills the target tier's plan."""
+        raise UnsupportedCapability(f"{self.id} does not support subscriptions")
+
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 

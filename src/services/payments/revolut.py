@@ -185,6 +185,15 @@ class RevolutProvider(PaymentProvider):
         resp = await self.client.post(f"/api/subscriptions/{provider_subscription_id}/cancel")
         resp.raise_for_status()
 
+    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+        """Schedule a plan change at cycle end — the next cycle bills the new variation (204)."""
+        plan = get_provider_plan(tier, PROVIDER_ID, currency)
+        resp = await self.client.post(
+            f"/api/subscriptions/{provider_subscription_id}/change-plan",
+            json={"plan_variation_id": plan["variation_id"], "scheduled": "at_cycle_end"},
+        )
+        resp.raise_for_status()
+
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
         resp = await self.client.get(f"/api/subscriptions/{provider_subscription_id}")
         resp.raise_for_status()
