@@ -5,6 +5,7 @@ implementation from ``payment_registry`` and everything else flows through the
 ``PaymentManager`` / ``PaymentProvider`` abstraction.
 """
 
+import httpx
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 
@@ -191,6 +192,14 @@ async def topup(body: TopupRequest, request: Request, user: User = Depends(get_c
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except httpx.HTTPError as e:
+            # Provider API failure (bad credentials, wrong environment, outage) — surface a
+            # clean, user-displayable error instead of an opaque 500.
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
         await db.commit()
     return CheckoutResponse(checkout_url=result.checkout_url)
 
@@ -221,6 +230,14 @@ async def subscribe(
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except httpx.HTTPError as e:
+            # Provider API failure (bad credentials, wrong environment, outage) — surface a
+            # clean, user-displayable error instead of an opaque 500.
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
         await db.commit()
     return CheckoutResponse(checkout_url=result.checkout_url)
 
@@ -262,6 +279,14 @@ async def upgrade(
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except httpx.HTTPError as e:
+            # Provider API failure (bad credentials, wrong environment, outage) — surface a
+            # clean, user-displayable error instead of an opaque 500.
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
         await db.commit()
     return CheckoutResponse(checkout_url=result.checkout_url)
 
@@ -290,6 +315,14 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
             result = await manager.request_downgrade(user, new_tier=body.tier)
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except httpx.HTTPError as e:
+            # Provider API failure (bad credentials, wrong environment, outage) — surface a
+            # clean, user-displayable error instead of an opaque 500.
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
         await db.commit()
     return DowngradeResponse(new_tier=result["new_tier"], effective_date=result["effective_date"])
 
