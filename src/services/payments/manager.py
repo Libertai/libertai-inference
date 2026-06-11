@@ -305,7 +305,9 @@ class PaymentManager:
 
         sub = await self._resolve_subscription(event)
         if not sub:
-            logger.warning(f"No subscription found for payment event: {event}")
+            # Expected noise: the Revolut merchant account is shared with liberclaw, so this
+            # backend receives webhook events for orders/subscriptions it doesn't own.
+            logger.info(f"Ignoring payment event with no matching subscription: {event}")
             return
 
         # Dedup subscription events.
