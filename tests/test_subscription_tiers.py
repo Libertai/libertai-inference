@@ -57,6 +57,42 @@ def test_get_provider_plan_placeholder_ids_raise(monkeypatch):
         get_provider_plan("go", "revolut", "EUR")
 
 
+def _set_plan_override(monkeypatch, raw: str):
+    import src.subscription_tiers as tiers
+    from src.config import config
+
+    monkeypatch.setattr(config, "REVOLUT_PLAN_IDS", raw)
+    tiers._revolut_plan_overrides.cache_clear()
+
+
+def test_env_override_replaces_revolut_plan_ids(monkeypatch):
+    """REVOLUT_PLAN_IDS (e.g. sandbox ids on beta) wins over the in-code production ids."""
+    import src.subscription_tiers as tiers
+
+    _set_plan_override(
+        monkeypatch,
+        '{"go": {"USD": {"plan_id": "sbx_plan", "variation_id": "sbx_var"}}}',
+    )
+    try:
+        assert get_provider_plan("go", "revolut", "USD") == {"plan_id": "sbx_plan", "variation_id": "sbx_var"}
+        # Tiers/currencies absent from the override fall back to the in-code ids.
+        assert get_provider_plan("plus", "revolut", "EUR")["plan_id"]
+        assert get_provider_plan("go", "revolut", "EUR")["plan_id"] != "sbx_plan"
+    finally:
+        tiers._revolut_plan_overrides.cache_clear()
+
+
+def test_env_override_bad_json_falls_back(monkeypatch):
+    import src.subscription_tiers as tiers
+
+    _set_plan_override(monkeypatch, "{not json")
+    try:
+        plan = get_provider_plan("go", "revolut", "USD")
+        assert plan["plan_id"]  # in-code ids still served
+    finally:
+        tiers._revolut_plan_overrides.cache_clear()
+
+
 def test_get_provider_plan_unknown_currency_raises():
     with pytest.raises(ValueError, match="GBP"):
         get_provider_plan("go", "revolut", "GBP")

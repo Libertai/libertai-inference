@@ -83,6 +83,9 @@ class _Config:
     REVOLUT_WEBHOOK_SECRET: str
     REVOLUT_API_URL: str
     REVOLUT_API_VERSION: str
+    # Optional JSON override of the per-tier Revolut plan ids (sandbox envs have their
+    # own plan ids): {"go": {"USD": {"plan_id": ..., "variation_id": ...}, ...}, ...}
+    REVOLUT_PLAN_IDS: str
 
     def __init__(self):
         load_dotenv()
@@ -171,6 +174,7 @@ class _Config:
         self.REVOLUT_WEBHOOK_SECRET = os.getenv("REVOLUT_WEBHOOK_SECRET", "")
         self.REVOLUT_API_URL = os.getenv("REVOLUT_API_URL", "https://merchant.revolut.com")
         self.REVOLUT_API_VERSION = os.getenv("REVOLUT_API_VERSION", "2026-04-20")
+        self.REVOLUT_PLAN_IDS = os.getenv("REVOLUT_PLAN_IDS", "")
 
 
 config = _Config()
