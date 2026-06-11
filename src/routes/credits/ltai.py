@@ -64,8 +64,8 @@ async def process_base_ltai_transactions() -> list[str]:
 
             for event in events:
                 try:
-                    transaction_hash = await handle_payment_event(event)
-                    processed_transactions.append(transaction_hash)
+                    external_reference = await handle_payment_event(event)
+                    processed_transactions.append(external_reference)
                 except Exception as e:
                     logger.error(f"Error processing payment: {e}", exc_info=True)
 
@@ -91,7 +91,7 @@ async def process_solana_ltai_transactions() -> list[str]:
 async def handle_payment_event(event) -> str:
     logger.debug(f"Processing payment event: {event}")
 
-    transaction_hash = f"0x{event['transactionHash'].hex()}"
+    external_reference = f"0x{event['transactionHash'].hex()}"
     sender = event["args"]["sender"]
     ltai_amount = event["args"]["amount"] / 10**18
     block_number = event["blockNumber"]
@@ -102,7 +102,7 @@ async def handle_payment_event(event) -> str:
         CreditTransactionProvider.ltai_base,
         format_address(LibertaiChain.base, sender),
         amount,
-        transaction_hash,
+        external_reference,
         block_number,
     )
-    return transaction_hash
+    return external_reference

@@ -19,7 +19,7 @@ class CreditService:
         provider: CreditTransactionProvider,
         address: str,
         amount: float,
-        transaction_hash: str | None = None,
+        external_reference: str | None = None,
         block_number: int | None = None,
         expired_at: datetime | None = None,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
@@ -32,8 +32,8 @@ class CreditService:
         )
 
         log_msg = f"Adding {amount} credits to address {address} with status {status.value}"
-        if transaction_hash:
-            log_msg += f" from tx {transaction_hash}"
+        if external_reference:
+            log_msg += f" from tx {external_reference}"
         if block_number:
             log_msg += f" in block {block_number}"
         logger.debug(log_msg)
@@ -44,20 +44,20 @@ class CreditService:
                 user = await get_or_create_user_by_wallet(db, address)
 
                 # Check if transaction already exists (if a hash was provided)
-                if transaction_hash:
+                if external_reference:
                     result = await db.execute(
-                        select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
+                        select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
                     )
                     existing_transaction = result.scalars().first()
                     if existing_transaction:
-                        logger.warning(f"Transaction {transaction_hash} already processed, skipping")
+                        logger.warning(f"Transaction {external_reference} already processed, skipping")
                         return False
 
                 # Record transaction
                 transaction = CreditTransaction(
                     user_id=user.id,
                     address=address,
-                    transaction_hash=transaction_hash,
+                    external_reference=external_reference,
                     amount=amount,
                     amount_left=amount,
                     provider=provider,
@@ -78,28 +78,28 @@ class CreditService:
         user_id: uuid.UUID,
         amount: float,
         provider: CreditTransactionProvider,
-        transaction_hash: str | None = None,
+        external_reference: str | None = None,
         expired_at: datetime | None = None,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
     ) -> bool:
         """Add credits to a user by id (fiat top-ups, trials) — no wallet involved.
 
-        If ``transaction_hash`` is given it is used for idempotency: a replayed
+        If ``external_reference`` is given it is used for idempotency: a replayed
         webhook with the same hash is skipped (returns ``False``).
         """
         logger.debug(f"Adding {amount} credits to user {user_id} with status {status.value}")
         try:
             async with AsyncSessionLocal() as db:
-                if transaction_hash:
+                if external_reference:
                     existing = (
                         await db.execute(
                             select(CreditTransaction).where(
-                                CreditTransaction.transaction_hash == transaction_hash
+                                CreditTransaction.external_reference == external_reference
                             )
                         )
                     ).scalars().first()
                     if existing:
-                        logger.warning(f"Transaction {transaction_hash} already processed, skipping")
+                        logger.warning(f"Transaction {external_reference} already processed, skipping")
                         return False
 
                 transaction = CreditTransaction(
@@ -107,7 +107,7 @@ class CreditService:
                     amount=amount,
                     amount_left=amount,
                     provider=provider,
-                    transaction_hash=transaction_hash,
+                    external_reference=external_reference,
                     expired_at=expired_at,
                     is_active=True,
                     status=status,
@@ -271,23 +271,23 @@ class CreditService:
             return False
 
     @staticmethod
-    async def update_transaction_status(transaction_hash: str, status: CreditTransactionStatus) -> bool:
+    async def update_transaction_status(external_reference: str, status: CreditTransactionStatus) -> bool:
         try:
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
-                    select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
+                    select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
                 )
                 transaction = result.scalars().first()
 
                 if not transaction:
-                    logger.warning(f"Transaction with hash {transaction_hash} not found")
+                    logger.warning(f"Transaction with hash {external_reference} not found")
                     return False
 
                 transaction.status = status
                 await db.commit()
-                logger.info(f"Updated transaction {transaction_hash} status to {status.value}")
+                logger.info(f"Updated transaction {external_reference} status to {status.value}")
                 return True
 
         except Exception as e:
-            logger.error(f"Error updating transaction status for {transaction_hash}: {str(e)}", exc_info=True)
+            logger.error(f"Error updating transaction status for {external_reference}: {str(e)}", exc_info=True)
             return False

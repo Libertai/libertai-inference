@@ -146,7 +146,7 @@ async def test_topup_redirects_back_to_requesting_app(async_client, monkeypatch)
     async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
         seen["calls"] += 1
         seen["redirect_url"] = redirect_url
-        # transaction_hash is unique in DB -> each fake order needs a distinct id.
+        # external_reference is unique in DB -> each fake order needs a distinct id.
         return CheckoutResult(checkout_url="http://pay/checkout", order_id=f"ord_redirect_{user.id}_{seen['calls']}")
 
     monkeypatch.setattr(revolut, "create_topup", fake_create_topup)
@@ -188,7 +188,7 @@ def _stub_topup_provider(monkeypatch, seen: dict, order_prefix: str):
         seen["calls"] = seen.get("calls", 0) + 1
         seen["amount"] = amount
         seen["currency"] = currency
-        # transaction_hash is unique in DB -> each fake order needs a distinct id.
+        # external_reference is unique in DB -> each fake order needs a distinct id.
         return CheckoutResult(checkout_url="http://pay/checkout", order_id=f"{order_prefix}_{seen['calls']}")
 
     monkeypatch.setattr(revolut, "create_topup", fake_create_topup)

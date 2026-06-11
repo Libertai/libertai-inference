@@ -33,7 +33,7 @@ class CreditTransactionStatus(str, enum.Enum):
 
 class CreditTransactionResponse(BaseModel):
     id: str  # UUID as string
-    transaction_hash: str | None
+    external_reference: str | None
     amount: float
     amount_left: float
     provider: CreditTransactionProvider
@@ -50,7 +50,7 @@ class CreditTransactionsResponse(BaseModel):
 
 class ExpiredCreditTransaction(BaseModel):
     id: str  # UUID as string
-    transaction_hash: str | None
+    external_reference: str | None
     address: str | None
     expired_at: datetime | None
 
