@@ -549,9 +549,18 @@ class PaymentManager:
         for sub in stale.scalars().all():
             if await self._active_subscription(sub.user_id, lock=False):
                 continue
-            sub.status = "active"
-            await self._log_event(sub, "upgrade_abandoned_reverted")
-            count += 1
+            # A webhook can activate a new pending sub between the check above and this
+            # write, tripping the one-active-sub partial unique index. A savepoint keeps
+            # one collision from rolling back the whole cron batch — the row simply stays
+            # "upgrading" and is resolved by the completed checkout (or the next run).
+            sub_id = sub.id  # read before a potential rollback expires the instance
+            try:
+                async with self.db.begin_nested():
+                    sub.status = "active"
+                    await self._log_event(sub, "upgrade_abandoned_reverted")
+                count += 1
+            except IntegrityError:
+                logger.info(f"Skipping upgrade revert for sub {sub_id}: user gained an active sub concurrently")
 
         if count:
             await self.db.flush()

@@ -627,3 +627,26 @@ async def test_deferred_provider_cancel_runs_before_renewal(db):
     assert "psub_1" in provider.cancelled
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"  # entitlement holds until the expiry pass (24h grace)
+
+
+@pytest.mark.asyncio
+async def test_check_expirations_revert_survives_index_collision(db, monkeypatch):
+    """The skip-guard is racy by nature (a webhook can activate a sub between the check
+    and the write). Simulate the race by blinding the guard: the unique-index violation
+    must be contained in a savepoint, leaving the row parked and the session usable."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)  # active sub occupies the unique index
+    parked = await _make_upgrading_sub(db, user, aged_hours=2)
+    parked_id = parked.id  # the savepoint rollback expires the instance — read it now
+
+    async def race_blind(*args, **kwargs):
+        return None  # the guard "sees" no active sub — exactly the race window
+
+    monkeypatch.setattr(mgr, "_active_subscription", race_blind)
+    await mgr.check_expirations()  # must not raise
+
+    refreshed = await db.get(PlanSubscription, parked_id)
+    assert refreshed.status == "upgrading"  # collision skipped, row left for the next pass
+    # The outer transaction survived the savepoint rollback: writes still work.
+    refreshed.tier = "go"
+    await db.flush()
