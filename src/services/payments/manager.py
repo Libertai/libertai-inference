@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,7 @@ from src.subscription_tiers import (
     DEFAULT_CURRENCY,
     DEFAULT_TIER,
     PAID_TIERS,
+    get_tier,
     is_downgrade,
     is_upgrade,
 )
@@ -308,6 +309,59 @@ class PaymentManager:
             await self._cancel_on_provider(old_sub)
             old_sub.status = "cancelled"
             await self._log_event(old_sub, "cancelled_for_upgrade")
+            await self._credit_unused_remainder(old_sub)
+
+    async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
+        """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
+
+        Upgrades start a NEW full-price subscription immediately and cancel the old one,
+        and Revolut has no prorated plan changes — so we prorate on our side: the unused
+        fraction of the old cycle times its monthly price lands on the prepaid balance.
+        Idempotent via the per-subscription transaction hash.
+        """
+        start, end = old_sub.current_period_start, old_sub.current_period_end
+        if not start or not end:
+            return  # never-activated sub: nothing was paid for
+        # Columns are naive UTC; normalize whatever we got (a just-refreshed aware value
+        # or a naive DB read) before doing arithmetic.
+        start = start.replace(tzinfo=None) if start.tzinfo else start
+        end = end.replace(tzinfo=None) if end.tzinfo else end
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        period = (end - start).total_seconds()
+        remaining = (end - now).total_seconds()
+        if period <= 0 or remaining <= 0:
+            return
+        monthly_price = get_tier(old_sub.tier).price_cents / 100
+        amount = round(monthly_price * min(remaining / period, 1.0), 2)
+        if amount <= 0:
+            return
+        try:
+            provider = CreditTransactionProvider(old_sub.provider)
+        except ValueError:
+            provider = CreditTransactionProvider.voucher
+        # Same-session insert (like start_topup): atomic with the webhook transaction,
+        # idempotent via the per-subscription hash.
+        tx_hash = f"upgrade_remainder:{old_sub.id}"
+        existing = (
+            await self.db.execute(
+                select(CreditTransaction.id).where(CreditTransaction.transaction_hash == tx_hash)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            return
+        self.db.add(
+            CreditTransaction(
+                user_id=old_sub.user_id,
+                amount=amount,
+                amount_left=amount,
+                provider=provider,
+                transaction_hash=tx_hash,
+                status=CreditTransactionStatus.completed,
+                is_active=True,
+            )
+        )
+        await self.db.flush()
+        await self._log_event(old_sub, "upgrade_remainder_credited", metadata={"amount": amount})
 
     # ------------------------------------------------------------------ webhook dispatch
     async def handle_event(self, event: PaymentEvent) -> None:
