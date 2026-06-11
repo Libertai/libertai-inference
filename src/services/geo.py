@@ -38,6 +38,7 @@ EU_COUNTRIES = {
 }
 
 _reader: geoip2.database.Reader | None = None
+_warned_no_db = False  # log the missing-DB situation once, not per request
 
 
 def _get_reader() -> geoip2.database.Reader:
@@ -62,6 +63,15 @@ def resolve_currency(request: Request) -> str:
         return "USD"
     try:
         country = _get_reader().country(ip).country.iso_code
+    except FileNotFoundError:
+        global _warned_no_db
+        if not _warned_no_db:
+            _warned_no_db = True
+            logger.warning(
+                f"GeoLite2 DB not found at {config.GEOIP_DB_PATH}; all users default to USD "
+                "(further occurrences won't be logged)"
+            )
+        return "USD"
     except Exception:
         logger.warning("GeoIP lookup failed; defaulting to USD", exc_info=True)
         return "USD"
