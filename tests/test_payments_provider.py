@@ -75,6 +75,90 @@ def test_revolut_webhook_missing_headers_fails():
         _provider().parse_webhook({}, body)
 
 
+class _FakeResponse:
+    def __init__(self, status_code: int, body: dict):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> dict:
+        return self._body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx
+
+            raise httpx.HTTPStatusError("boom", request=None, response=None)  # type: ignore[arg-type]
+
+
+class _FakeClient:
+    """Stub httpx client: a stale customer id 500s on subscription create; a fresh one works."""
+
+    is_closed = False
+
+    def __init__(self):
+        self.created_customers = 0
+
+    async def post(self, path: str, json: dict | None = None) -> _FakeResponse:
+        if path == "/api/1.0/customers":
+            self.created_customers += 1
+            return _FakeResponse(200, {"id": "cust_fresh"})
+        if path == "/api/subscriptions":
+            if json["customer_id"] == "cust_stale":
+                return _FakeResponse(500, {})
+            return _FakeResponse(200, {"id": "sub_1", "setup_order_id": "ord_1"})
+        raise AssertionError(f"unexpected POST {path}")
+
+    async def get(self, path: str) -> _FakeResponse:
+        assert path == "/api/orders/ord_1"
+        return _FakeResponse(200, {"checkout_url": "https://pay/x"})
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_retries_with_fresh_customer_when_reused_id_is_stale():
+    """A reused customer id can be stale (deleted, or minted in another Revolut environment
+    before a sandbox/production switch) — the checkout must heal by creating a fresh customer."""
+    provider = _provider()
+    provider._client = _FakeClient()
+
+    result = await provider.create_subscription(
+        user_email="a@b.c",
+        tier="go",
+        currency="USD",
+        redirect_url="https://app/payment/callback",
+        provider_customer_id="cust_stale",
+    )
+    assert result.provider_customer_id == "cust_fresh"
+    assert result.checkout_url == "https://pay/x"
+    assert provider._client.created_customers == 1
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_does_not_retry_with_freshly_created_customer():
+    """If the failure happens with a customer we JUST created, retrying won't help — propagate."""
+    import httpx
+
+    provider = _provider()
+    client = _FakeClient()
+
+    async def post(path: str, json: dict | None = None) -> _FakeResponse:
+        if path == "/api/1.0/customers":
+            client.created_customers += 1
+            return _FakeResponse(200, {"id": "cust_stale"})  # fresh customer still 500s below
+        return _FakeResponse(500, {})
+
+    client.post = post
+    provider._client = client
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.create_subscription(
+            user_email="a@b.c",
+            tier="go",
+            currency="USD",
+            redirect_url="https://app/payment/callback",
+        )
+    assert client.created_customers == 1  # no retry loop
+
+
 def test_crypto_providers_topup_only_and_no_subscription():
     thirdweb = ThirdwebPaymentProvider(contract_address="0xabc")
     assert thirdweb.descriptor().chain == "base"
