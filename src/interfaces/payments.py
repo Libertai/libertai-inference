@@ -88,6 +88,11 @@ class CancelResponse(BaseModel):
     effective_date: datetime | None = None
 
 
+class ResumeResponse(BaseModel):
+    message: str
+    tier: str
+
+
 class DowngradeResponse(BaseModel):
     new_tier: str
     effective_date: datetime | None = None

@@ -183,12 +183,28 @@ class CreditSubscriptionService:
             raise ValueError("No active credits subscription")
 
         sub.cancel_at_period_end = True
+        sub.pending_tier = DEFAULT_TIER  # cancel == downgrade to free (drives the plans UI)
         await db.flush()
         await CreditSubscriptionService._log(db, sub, "cancel_requested")
         return {
             "message": "Subscription will be cancelled at the end of the billing period",
             "effective_date": sub.current_period_end,
         }
+
+    @staticmethod
+    async def resume(db: AsyncSession, user) -> dict:
+        """Undo a scheduled cancellation or downgrade before the period ends (local-only:
+        credits subscriptions have no provider side)."""
+        sub = await CreditSubscriptionService._active_sub(db, user.id)
+        if sub is None:
+            raise ValueError("No active credits subscription")
+        if not sub.cancel_at_period_end and not sub.pending_tier:
+            raise ValueError("Nothing to resume")
+        sub.cancel_at_period_end = False
+        sub.pending_tier = None
+        await db.flush()
+        await CreditSubscriptionService._log(db, sub, "resumed")
+        return {"message": "Your subscription will continue", "tier": sub.tier}
 
     @staticmethod
     async def process_renewals(db: AsyncSession, now: datetime | None = None) -> int:

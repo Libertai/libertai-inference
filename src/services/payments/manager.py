@@ -245,17 +245,44 @@ class PaymentManager:
         return await self.start_checkout(user, new_tier, redirect_url, currency)
 
     async def cancel(self, user: User) -> dict:
+        """Schedule cancellation at period end. Cancellation is TERMINAL on Revolut, so the
+        provider-side cancel is DEFERRED to just before renewal (see check_expirations) —
+        until then the user can resume() for free. Cancel == downgrade to free."""
         sub = await self._active_subscription(user.id)
         if not sub:
             raise ValueError("No active subscription")
         sub.cancel_at_period_end = True
-        await self._cancel_on_provider(sub)
+        sub.pending_tier = DEFAULT_TIER
         await self._log_event(sub, "cancel_requested")
         await self.db.flush()
         return {
             "message": "Subscription will be cancelled at end of billing period",
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
         }
+
+    async def resume(self, user: User) -> dict:
+        """Undo a scheduled cancellation or paid downgrade before it takes effect."""
+        sub = await self._active_subscription(user.id)
+        if not sub:
+            raise ValueError("No active subscription")
+        if not sub.cancel_at_period_end and not sub.pending_tier:
+            raise ValueError("Nothing to resume")
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        end = sub.current_period_end
+        if end is not None and (end.replace(tzinfo=None) if end.tzinfo else end) < now:
+            raise ValueError("The billing period already ended")
+        if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
+            # Undo a scheduled paid downgrade: schedule a change back to the current plan
+            # (overwrites the provider's pending change).
+            if sub.provider != "manual" and sub.provider_subscription_id:
+                await self.provider.change_subscription_plan(
+                    sub.provider_subscription_id, tier=sub.tier, currency=sub.currency or DEFAULT_CURRENCY
+                )
+        sub.pending_tier = None
+        sub.cancel_at_period_end = False
+        await self._log_event(sub, "resumed")
+        await self.db.flush()
+        return {"message": "Your subscription will continue", "tier": sub.tier}
 
     async def request_downgrade(self, user: User, new_tier: str) -> dict:
         if new_tier not in PAID_TIERS and new_tier != DEFAULT_TIER:
@@ -267,10 +294,10 @@ class PaymentManager:
         if not sub:
             raise ValueError("No active subscription")
         if new_tier == DEFAULT_TIER:
-            # Downgrade to free == cancel: the sub lapses at period end.
+            # Downgrade to free == cancel: the sub lapses at period end. Provider-side
+            # cancel is deferred (terminal on Revolut) so this stays resumable.
             sub.pending_tier = new_tier
             sub.cancel_at_period_end = True
-            await self._cancel_on_provider(sub)
         else:
             # Paid -> paid: schedule the plan change on the provider FIRST (next cycle bills
             # the lower variation); only record pending_tier once the provider accepted it,
@@ -469,6 +496,23 @@ class PaymentManager:
         other period computation (credit_subscription, entitlement) uses naive local
         time — mixing in an aware UTC cutoff here skewed the comparison on non-UTC hosts.
         """
+        # Pass 0: deferred provider-side cancellation. cancel()/downgrade-to-free only flag
+        # locally (Revolut cancellation is terminal, which would make resume impossible) —
+        # the actual provider cancel happens here, shortly before the renewal would bill.
+        # Repeat calls on an already-cancelled provider sub are swallowed by _cancel_on_provider.
+        pre_cutoff = datetime.now() + timedelta(hours=2)
+        pending_cancel = await self.db.execute(
+            select(PlanSubscription)
+            .where(
+                PlanSubscription.status.in_(["active", "overdue"]),
+                PlanSubscription.cancel_at_period_end == True,  # noqa: E712
+                PlanSubscription.current_period_end <= pre_cutoff,
+            )
+            .with_for_update()
+        )
+        for sub in pending_cancel.scalars().all():
+            await self._cancel_on_provider(sub)
+
         cutoff = datetime.now() - timedelta(hours=24)
         result = await self.db.execute(
             select(PlanSubscription)
