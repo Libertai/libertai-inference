@@ -53,7 +53,7 @@ async def test_tiers_endpoint(async_client):
     resp = await async_client.get("/payments/tiers")
     assert resp.status_code == 200
     names = {t["name"] for t in resp.json()}
-    assert {"free", "go", "plus", "power"} == names
+    assert {"free", "go", "plus", "max"} == names
 
 
 async def test_region_eu_ip_returns_eur_with_vat(async_client, monkeypatch):

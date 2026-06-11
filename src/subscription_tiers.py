@@ -9,8 +9,8 @@ A tier defines two things:
      through Revolut today and another fiat provider tomorrow without touching
      the manager.
 
-All prices/windows/plan IDs here are placeholders until the Revolut product +
-final pricing are confirmed (see the plan's Unresolved Questions).
+Pricing: Go $8 / Plus $20 / Max $100 per month (EUR plans are net the same
+number; Revolut applies 20% VAT on the EUR variations).
 """
 
 from __future__ import annotations
@@ -57,14 +57,16 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         window_5h_credits=2.5,
         weekly_credits=5.0,
         provider_plan_ids={
+            # One Revolut plan per tier; currency is a plan VARIATION (EUR variation has 20% VAT).
             "revolut": {
-                # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
                 "USD": {
-                    "plan_id": "a9a0b97f-753f-4e13-ac60-f86733809dce",
-                    "variation_id": "88e34b68-abea-497a-9743-01874274dcdf",
+                    "plan_id": "dbdd77ea-f4c8-4b8d-9dca-c62341a68eae",
+                    "variation_id": "18a5745f-a164-4377-be89-41151e0f1adc",
                 },
-                # TODO: replace with real EUR plan ids (created in Revolut dashboard, net price + 20% VAT)
-                "EUR": {"plan_id": "TODO_EUR_PLAN_GO", "variation_id": "TODO_EUR_VAR_GO"},
+                "EUR": {
+                    "plan_id": "dbdd77ea-f4c8-4b8d-9dca-c62341a68eae",
+                    "variation_id": "6665637b-43e5-4c30-9af3-0274aa5f49f5",
+                },
             }
         },
     ),
@@ -76,31 +78,33 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         weekly_credits=12.0,
         provider_plan_ids={
             "revolut": {
-                # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
                 "USD": {
-                    "plan_id": "c4c23aef-c39d-419d-99b6-f84034102615",
-                    "variation_id": "2bdb31f1-78d5-48ad-88eb-c9c41fac57ef",
+                    "plan_id": "e5d0da8d-1c48-4221-a72c-cf3a6a31aeab",
+                    "variation_id": "af85b71a-1d40-43aa-9fe0-4c3844df7ad3",
                 },
-                # TODO: replace with real EUR plan ids (created in Revolut dashboard, net price + 20% VAT)
-                "EUR": {"plan_id": "TODO_EUR_PLAN_PLUS", "variation_id": "TODO_EUR_VAR_PLUS"},
+                "EUR": {
+                    "plan_id": "e5d0da8d-1c48-4221-a72c-cf3a6a31aeab",
+                    "variation_id": "bd805f0c-7562-43f2-8782-dbf2d239f5cd",
+                },
             }
         },
     ),
-    "power": TierConfig(
-        name="power",
+    "max": TierConfig(
+        name="max",
         price_cents=10000,
         currency=DEFAULT_CURRENCY,
         window_5h_credits=25.0,
         weekly_credits=60.0,
         provider_plan_ids={
             "revolut": {
-                # NOTE: placeholder Revolut plan/variation UUIDs — replace before enabling Revolut.
                 "USD": {
-                    "plan_id": "d66f42c8-5b08-4dc0-9bd1-8f17f3f70b7b",
-                    "variation_id": "71a36c44-4277-495d-9258-6eba1c325559",
+                    "plan_id": "7bfe3520-dd3c-4a02-aeb1-e35e525db28d",
+                    "variation_id": "4b317f35-7c0c-41c3-90bb-2b12e9646207",
                 },
-                # TODO: replace with real EUR plan ids (created in Revolut dashboard, net price + 20% VAT)
-                "EUR": {"plan_id": "TODO_EUR_PLAN_POWER", "variation_id": "TODO_EUR_VAR_POWER"},
+                "EUR": {
+                    "plan_id": "7bfe3520-dd3c-4a02-aeb1-e35e525db28d",
+                    "variation_id": "0a21d429-a6af-4f0c-92eb-278c7ca0c8ce",
+                },
             }
         },
     ),
