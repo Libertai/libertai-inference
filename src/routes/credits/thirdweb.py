@@ -111,7 +111,7 @@ async def thirdweb_webhook(
 
 
 async def _credit_thirdweb_purchase(
-    purchase: ThirdwebPurchaseData, amount_usd: float, transaction_hash: str, status: CreditTransactionStatus
+    purchase: ThirdwebPurchaseData, amount_usd: float, external_reference: str, status: CreditTransactionStatus
 ) -> None:
     """Credit a Thirdweb purchase to the signed-in user's account (the wallet that paid may not be
     the user's own — email/OAuth users pay via a just-connected wallet)."""
@@ -119,7 +119,7 @@ async def _credit_thirdweb_purchase(
         user_id=uuid.UUID(purchase.userId),
         amount=amount_usd,
         provider=CreditTransactionProvider.thirdweb,
-        transaction_hash=transaction_hash,
+        external_reference=external_reference,
         status=status,
     )
 
@@ -138,7 +138,7 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
             logger.warning("No Base chain transaction found in onchain transaction")
             return
 
-        transaction_hash = base_transaction.transactionHash
+        external_reference = base_transaction.transactionHash
 
         amount_usd = int(data.destinationAmount) / (10**data.destinationToken.decimals)
 
@@ -151,7 +151,7 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
+                select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
             )
             existing_transaction = result.scalars().first()
 
@@ -160,10 +160,10 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
         )
 
         if existing_transaction is not None:
-            await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
+            await CreditService.update_transaction_status(external_reference, CreditTransactionStatus.completed)
             return
 
-        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, transaction_hash, tx_status)
+        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
 
     except Exception as e:
         logger.error(f"Error processing Thirdweb onchain webhook: {str(e)}", exc_info=True)
@@ -179,7 +179,7 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
         return
 
     try:
-        transaction_hash = data.id
+        external_reference = data.id
 
         amount_usd = int(data.amount) / (10**data.token.decimals)
 
@@ -192,7 +192,7 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(CreditTransaction).where(CreditTransaction.transaction_hash == transaction_hash)
+                select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
             )
             existing_transaction = result.scalars().first()
 
@@ -202,10 +202,10 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
 
         if existing_transaction is not None:
             if data.status == "COMPLETED":
-                await CreditService.update_transaction_status(transaction_hash, CreditTransactionStatus.completed)
+                await CreditService.update_transaction_status(external_reference, CreditTransactionStatus.completed)
             return
 
-        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, transaction_hash, tx_status)
+        await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
 
     except Exception as e:
         logger.error(f"Error processing Thirdweb onramp webhook: {str(e)}", exc_info=True)

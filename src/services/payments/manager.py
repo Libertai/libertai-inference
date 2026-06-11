@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 TOPUP_EXT_REF_PREFIX = "topup:"
 
 
-def _topup_tx_hash(provider_id: str, order_id: str) -> str:
+def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
 
 
@@ -135,7 +135,7 @@ class PaymentManager:
                     amount=usd_credits,
                     amount_left=usd_credits,
                     provider=CreditTransactionProvider.revolut,
-                    transaction_hash=_topup_tx_hash(self.provider.id, result.order_id),
+                    external_reference=_topup_external_ref(self.provider.id, result.order_id),
                     status=CreditTransactionStatus.pending,
                     is_active=True,
                 )
@@ -150,7 +150,7 @@ class PaymentManager:
         tx = (
             await self.db.execute(
                 select(CreditTransaction)
-                .where(CreditTransaction.transaction_hash == _topup_tx_hash(event.provider, event.order_id))
+                .where(CreditTransaction.external_reference == _topup_external_ref(event.provider, event.order_id))
                 .with_for_update()
             )
         ).scalar_one_or_none()
@@ -160,9 +160,9 @@ class PaymentManager:
         if event.type == PaymentEventType.order_completed:
             if tx.status != CreditTransactionStatus.completed:
                 tx.status = CreditTransactionStatus.completed
-                logger.info(f"Top-up {tx.transaction_hash} completed ({tx.amount} credits)")
+                logger.info(f"Top-up {tx.external_reference} completed ({tx.amount} credits)")
             else:
-                logger.info(f"Top-up {tx.transaction_hash} already completed, skipping")
+                logger.info(f"Top-up {tx.external_reference} already completed, skipping")
         elif event.type == PaymentEventType.order_failed:
             tx.status = CreditTransactionStatus.error
             tx.is_active = False
@@ -371,7 +371,7 @@ class PaymentManager:
         tx_hash = f"upgrade_remainder:{old_sub.id}"
         existing = (
             await self.db.execute(
-                select(CreditTransaction.id).where(CreditTransaction.transaction_hash == tx_hash)
+                select(CreditTransaction.id).where(CreditTransaction.external_reference == tx_hash)
             )
         ).scalar_one_or_none()
         if existing:
@@ -382,7 +382,7 @@ class PaymentManager:
                 amount=amount,
                 amount_left=amount,
                 provider=provider,
-                transaction_hash=tx_hash,
+                external_reference=tx_hash,
                 status=CreditTransactionStatus.completed,
                 is_active=True,
             )

@@ -21,7 +21,7 @@ from src.services.payments.base import (
     ProviderDescriptor,
     SubscriptionInfo,
 )
-from src.services.payments.manager import PaymentManager, _topup_tx_hash
+from src.services.payments.manager import PaymentManager, _topup_external_ref
 
 
 class FakeProvider(PaymentProvider):
@@ -138,7 +138,7 @@ async def test_topup_failure_voids_pending(db):
     tx = (
         await db.execute(
             select(CreditTransaction).where(
-                CreditTransaction.transaction_hash == _topup_tx_hash("fake", "ord_1")
+                CreditTransaction.external_reference == _topup_external_ref("fake", "ord_1")
             )
         )
     ).scalar_one()
@@ -159,7 +159,7 @@ async def test_topup_eur_pack_charges_eur_but_records_usd_credits(db):
     tx = (
         await db.execute(
             select(CreditTransaction).where(
-                CreditTransaction.transaction_hash == _topup_tx_hash("fake", "ord_1")
+                CreditTransaction.external_reference == _topup_external_ref("fake", "ord_1")
             )
         )
     ).scalar_one()
@@ -180,7 +180,7 @@ async def test_topup_usd_charges_and_records_same_amount(db):
     tx = (
         await db.execute(
             select(CreditTransaction).where(
-                CreditTransaction.transaction_hash == _topup_tx_hash("fake", "ord_1")
+                CreditTransaction.external_reference == _topup_external_ref("fake", "ord_1")
             )
         )
     ).scalar_one()
