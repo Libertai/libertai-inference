@@ -66,11 +66,15 @@ class FakeProvider(PaymentProvider):
         self.plan_changes.append((provider_subscription_id, tier, currency))
 
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
+        # Dynamic 30-day cycle: 10 days in, 20 days left (keeps remainder math stable over time).
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
         return SubscriptionInfo(
             provider_subscription_id=provider_subscription_id,
             state="active",
-            current_cycle_start="2026-06-01T00:00:00+00:00",
-            current_cycle_end="2026-07-01T00:00:00+00:00",
+            current_cycle_start=(now - timedelta(days=10)).isoformat(),
+            current_cycle_end=(now + timedelta(days=20)).isoformat(),
         )
 
     async def get_order(self, order_id: str) -> dict:
@@ -512,3 +516,55 @@ async def test_paid_downgrade_provider_failure_leaves_sub_untouched(db):
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.pending_tier is None
     assert sub.cancel_at_period_end is False
+
+
+@pytest.mark.asyncio
+async def test_upgrade_credits_unused_remainder_of_old_cycle(db):
+    """Upgrading mid-cycle refunds the unused fraction of the old plan as prepaid credits
+    (FakeProvider cycle: 10 of 30 days used -> ~2/3 of go's $8 comes back)."""
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    user = await _make_user(db)
+
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1")
+    )
+    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_2",
+                     provider_subscription_id="psub_2", order_id="setup_2")
+    )
+
+    balance = await _balance(db, user.id)
+    assert balance == pytest.approx(8.0 * (20 / 30), abs=0.05)
+
+    # Replays / direct re-runs must not double-credit (per-subscription tx hash).
+    old_sub = (
+        await db.execute(
+            select(PlanSubscription).where(
+                PlanSubscription.user_id == user.id, PlanSubscription.status == "cancelled"
+            )
+        )
+    ).scalar_one()
+    await mgr._credit_unused_remainder(old_sub)
+    assert await _balance(db, user.id) == pytest.approx(balance)
+
+
+@pytest.mark.asyncio
+async def test_upgrade_remainder_skipped_without_cycle_dates(db):
+    """A parked sub that never activated (no period dates) gets no refund."""
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    user = await _make_user(db)
+
+    sub = PlanSubscription(user_id=user.id, tier="go", status="upgrading", provider="fake",
+                           provider_subscription_id="psub_x", currency="USD")
+    db.add(sub)
+    await db.flush()
+
+    await mgr._credit_unused_remainder(sub)
+    assert await _balance(db, user.id) == pytest.approx(0.0)
