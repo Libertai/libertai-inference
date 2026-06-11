@@ -31,6 +31,7 @@ class FakeProvider(PaymentProvider):
         self.order_seq = 0
         self.sub_seq = 0
         self.cancelled: list[str] = []
+        self.plan_changes: list[tuple[str, str]] = []
         self.sub_currencies: list[str] = []
         self.topups: list[tuple[float, str]] = []
 
@@ -60,6 +61,9 @@ class FakeProvider(PaymentProvider):
 
     async def cancel_subscription(self, provider_subscription_id: str) -> None:
         self.cancelled.append(provider_subscription_id)
+
+    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+        self.plan_changes.append((provider_subscription_id, tier, currency))
 
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
         return SubscriptionInfo(
@@ -408,3 +412,103 @@ async def test_check_expirations_skips_revert_while_new_checkout_pending(db):
     await mgr.check_expirations()
 
     assert sub.status == "upgrading"
+
+
+def _paid_event(seq: int) -> PaymentEvent:
+    return PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                        provider_event_id=f"ORDER_COMPLETED:cycle_{seq}",
+                        provider_subscription_id="psub_1", order_id=f"cycle_{seq}")
+
+
+async def _active_plus_sub(db, provider) -> tuple:
+    """User with an active 'plus' subscription on the fake provider."""
+    user = await _make_user(db)
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1")
+    )
+    return user, mgr
+
+
+@pytest.mark.asyncio
+async def test_paid_downgrade_schedules_plan_change_not_cancel(db):
+    """Plus -> Go on a fiat provider: the provider gets a scheduled plan change to the GO
+    variation; the sub keeps renewing (no cancel flag, nothing cancelled on the provider)."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+
+    res = await mgr.request_downgrade(user, new_tier="go")
+    assert res["new_tier"] == "go"
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.pending_tier == "go"
+    assert sub.cancel_at_period_end is False
+    assert provider.cancelled == []
+    # The provider was told to switch psub_1 to go in the sub's locked currency.
+    assert provider.plan_changes == [("psub_1", "go", "USD")]
+
+
+@pytest.mark.asyncio
+async def test_paid_downgrade_supersedes_earlier_cancel(db):
+    """Cancelling then downgrading paid->paid means 'keep me subscribed, on the lower tier'."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+
+    await mgr.cancel(user)
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.cancel_at_period_end is True
+
+    await mgr.request_downgrade(user, new_tier="go")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.cancel_at_period_end is False
+    assert sub.pending_tier == "go"
+
+
+@pytest.mark.asyncio
+async def test_downgrade_to_free_still_cancels(db):
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+
+    await mgr.request_downgrade(user, new_tier="free")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.cancel_at_period_end is True
+    assert sub.pending_tier == "free"
+    assert "psub_1" in provider.cancelled
+    assert provider.plan_changes == []
+
+
+@pytest.mark.asyncio
+async def test_next_cycle_payment_applies_pending_downgrade(db):
+    """The first billing of the new cycle (on the lower plan) flips the local tier."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.request_downgrade(user, new_tier="go")
+
+    await mgr.handle_event(_paid_event(2))
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.tier == "go"
+    assert sub.pending_tier is None
+    assert sub.status == "active"
+    assert await mgr.current_tier(user.id) == "go"
+
+
+@pytest.mark.asyncio
+async def test_paid_downgrade_provider_failure_leaves_sub_untouched(db):
+    """If the provider rejects the plan change, no pending downgrade is recorded."""
+
+    class FailingProvider(FakeProvider):
+        async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+            raise RuntimeError("provider down")
+
+    provider = FailingProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+
+    with pytest.raises(RuntimeError):
+        await mgr.request_downgrade(user, new_tier="go")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.pending_tier is None
+    assert sub.cancel_at_period_end is False
