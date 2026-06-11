@@ -16,6 +16,7 @@ from src.interfaces.payments import (
     DowngradeResponse,
     PaymentProviderResponse,
     RegionResponse,
+    ResumeResponse,
     SubscribeRequest,
     SubscriptionResponse,
     TierResponse,
@@ -351,6 +352,41 @@ async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
         result = await manager.cancel(user)
         await db.commit()
     return CancelResponse(message=result["message"], effective_date=result["effective_date"])
+
+
+@router.post("/resume", description="Undo a scheduled cancellation or downgrade before it takes effect")  # type: ignore
+async def resume(user: User = Depends(get_current_user)) -> ResumeResponse:
+    async with AsyncSessionLocal() as db:
+        sub = (
+            await db.execute(
+                select(PlanSubscription).where(
+                    PlanSubscription.user_id == user.id,
+                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                )
+            )
+        ).scalar_one_or_none()
+        if not sub:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription")
+        if sub.provider == "credits":
+            try:
+                res = await CreditSubscriptionService.resume(db, user)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            await db.commit()
+            return ResumeResponse(message=res["message"], tier=res["tier"])
+        manager = PaymentManager(_require_provider(sub.provider), db)
+        try:
+            result = await manager.resume(user)
+        except (ValueError, UnsupportedCapability) as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except httpx.HTTPError as e:
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
+        await db.commit()
+    return ResumeResponse(message=result["message"], tier=result["tier"])
 
 
 @router.get("/subscription", description="Current subscription state for the authenticated user")  # type: ignore
