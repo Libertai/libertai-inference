@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -30,6 +31,7 @@ class InferenceKeyType(str, Enum):
 class InferenceCallType(str, Enum):
     text = "text"
     image = "image"
+    audio = "audio"
 
 
 class ApiKeyCreate(BaseModel):
@@ -68,8 +70,24 @@ class ImageInferenceCallData(BaseModel):
     payment_requirements: str | None = None
 
 
+class AudioInferenceCallData(BaseModel):
+    """TTS usage as reported by libertai-models: input_tokens carries the character count
+    of the synthesized text; there is no output side. The required Literal type keeps the
+    union unambiguous, and the zero defaults let audio flow through the text billing
+    branches (calculate_price routes to audio pricing by model)."""
+
+    key: str
+    model_name: str
+    input_tokens: int  # character count
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    type: Literal[InferenceCallType.audio]
+    payment_payload: str | None = None
+    payment_requirements: str | None = None
+
+
 # Union type for the API endpoint
-InferenceCallData = TextInferenceCallData | ImageInferenceCallData
+InferenceCallData = TextInferenceCallData | ImageInferenceCallData | AudioInferenceCallData
 
 
 class ApiKey(BaseModel):
