@@ -298,8 +298,10 @@ async def test_cancel_sets_period_end_flag(db):
     assert "end of billing period" in res["message"]
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.cancel_at_period_end is True
+    assert sub.pending_tier == "free"  # cancel == downgrade to free (drives the plans UI)
     assert sub.status == "active"  # still active until period end
-    assert "psub_1" in provider.cancelled
+    # Provider-side cancel is DEFERRED (terminal on Revolut) so the user can resume.
+    assert provider.cancelled == []
 
 
 @pytest.mark.asyncio
@@ -480,7 +482,7 @@ async def test_downgrade_to_free_still_cancels(db):
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.cancel_at_period_end is True
     assert sub.pending_tier == "free"
-    assert "psub_1" in provider.cancelled
+    assert provider.cancelled == []  # deferred to the pre-renewal cron pass
     assert provider.plan_changes == []
 
 
@@ -568,3 +570,60 @@ async def test_upgrade_remainder_skipped_without_cycle_dates(db):
 
     await mgr._credit_unused_remainder(sub)
     assert await _balance(db, user.id) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_resume_clears_scheduled_cancellation(db):
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(user)
+
+    res = await mgr.resume(user)
+    assert res["tier"] == "plus"
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.cancel_at_period_end is False
+    assert sub.pending_tier is None
+    assert provider.cancelled == []  # never touched the provider
+
+
+@pytest.mark.asyncio
+async def test_resume_undoes_paid_downgrade_via_plan_change_back(db):
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.request_downgrade(user, new_tier="go")
+
+    await mgr.resume(user)
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.pending_tier is None
+    # Second plan change schedules a switch BACK to the current (plus) plan.
+    assert provider.plan_changes == [("psub_1", "go", "USD"), ("psub_1", "plus", "USD")]
+
+
+@pytest.mark.asyncio
+async def test_resume_with_nothing_scheduled_rejected(db):
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    with pytest.raises(ValueError, match="Nothing to resume"):
+        await mgr.resume(user)
+
+
+@pytest.mark.asyncio
+async def test_deferred_provider_cancel_runs_before_renewal(db):
+    """check_expirations cancels on the provider once the period end is near (<=2h),
+    while the local sub stays active until the expiry pass."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(user)
+    assert provider.cancelled == []
+
+    # Pull the period end into the pre-cancel window (naive, matching the columns).
+    sub = await mgr._active_subscription(user.id, lock=False)
+    sub.current_period_end = datetime.now() + timedelta(hours=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+    assert "psub_1" in provider.cancelled
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"  # entitlement holds until the expiry pass (24h grace)
