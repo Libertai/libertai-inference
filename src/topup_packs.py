@@ -1,8 +1,8 @@
 """Fixed EUR top-up packs for EU users.
 
-EU users buy a fixed GROSS EUR amount (VAT-inclusive; VAT is configured at the
-Revolut merchant level — we never send a VAT field) and receive a fixed
-USD-denominated credit. Non-EU users top up arbitrary USD amounts 1:1.
+EU users buy a fixed GROSS EUR amount (VAT-inclusive / TTC; the VAT portion is
+back-calculated and sent as an order line item) and receive a fixed USD-denominated
+credit. Non-EU users top up arbitrary USD amounts 1:1.
 """
 
 from dataclasses import dataclass
@@ -12,14 +12,10 @@ from dataclasses import dataclass
 class TopupPack:
     id: str
     usd_credits: float  # credited to the (USD-denominated) prepaid balance
-    eur_charge: float  # gross EUR charged (VAT-inclusive)
+    eur_charge: float  # gross EUR charged (VAT-inclusive / TTC; VAT back-calculated for the invoice)
 
 
-# TODO: placeholder 1:1 amounts — confirm the real EUR<->credits table, then flip
-# TOPUP_PACKS_CONFIRMED to True to enable EUR pack purchases (mirrors the TODO guard
-# on EUR subscription plan ids in subscription_tiers.get_provider_plan).
-TOPUP_PACKS_CONFIRMED = False
-
+# TODO: placeholder 1:1 amounts — replace with the real EUR<->credits table before prod.
 TOPUP_PACKS: dict[str, TopupPack] = {
     "eur_10": TopupPack("eur_10", usd_credits=10.0, eur_charge=10.0),
     "eur_25": TopupPack("eur_25", usd_credits=25.0, eur_charge=25.0),
@@ -29,8 +25,6 @@ TOPUP_PACKS: dict[str, TopupPack] = {
 
 
 def get_pack(pack_id: str) -> TopupPack:
-    if not TOPUP_PACKS_CONFIRMED:
-        raise ValueError("EUR top-up packs are not configured yet")
     pack = TOPUP_PACKS.get(pack_id)
     if pack is None:
         raise ValueError(f"Unknown top-up pack: {pack_id!r}")

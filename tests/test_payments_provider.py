@@ -159,6 +159,59 @@ async def test_create_subscription_does_not_retry_with_freshly_created_customer(
     assert client.created_customers == 1  # no retry loop
 
 
+class _CaptureClient:
+    """Stub client that records the POST body and returns a ready order."""
+
+    is_closed = False
+
+    def __init__(self):
+        self.body: dict | None = None
+
+    async def post(self, path: str, json: dict | None = None) -> _FakeResponse:
+        assert path == "/api/orders"
+        self.body = json
+        return _FakeResponse(200, {"id": "ord_x", "checkout_url": "https://pay/x"})
+
+
+@pytest.mark.asyncio
+async def test_create_topup_eur_breaks_out_inclusive_vat():
+    """EUR top-up: the order amount stays the gross (VAT-inclusive) charge, and VAT is broken out
+    within it as a line item (back-calculated), never added on top. €10.00 incl. 20% -> VAT €1.67."""
+    provider = _provider()
+    provider._client = _CaptureClient()
+
+    result = await provider.create_topup(
+        amount=10.0,
+        currency="EUR",
+        redirect_url="https://app/cb",
+        vat_rate=0.20,
+        item_name="LibertAI usage credits ($10)",
+    )
+
+    assert result.order_id == "ord_x"
+    body = provider._client.body
+    assert body["amount"] == 1000  # gross stays the authoritative charge (not 1200)
+    item = body["line_items"][0]
+    assert item["total_amount"] == 1000
+    assert item["taxes"] == [{"name": "VAT 20%", "amount": 167}]  # 1000 - round(1000/1.2)=833
+
+
+@pytest.mark.asyncio
+async def test_create_topup_usd_has_a_line_item_but_no_tax():
+    """USD top-up: a line item is still sent (Revolut risk-scrutinises orders without one) but it
+    carries no VAT."""
+    provider = _provider()
+    provider._client = _CaptureClient()
+
+    await provider.create_topup(amount=25.0, currency="USD", redirect_url="https://app/cb")
+
+    body = provider._client.body
+    assert body["amount"] == 2500
+    item = body["line_items"][0]
+    assert item["total_amount"] == 2500
+    assert "taxes" not in item
+
+
 def test_crypto_providers_topup_only_and_no_subscription():
     thirdweb = ThirdwebPaymentProvider(contract_address="0xabc")
     assert thirdweb.descriptor().chain == "base"

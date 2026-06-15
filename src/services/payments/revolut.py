@@ -103,13 +103,30 @@ class RevolutProvider(PaymentProvider):
         redirect_url: str,
         user_email: str | None = None,
         metadata: dict | None = None,
+        vat_rate: float = 0.0,
+        item_name: str = "Prepaid credits",
     ) -> CheckoutResult:
         ext_ref = (metadata or {}).get("ext_ref")
+        gross_minor = int(round(amount * 100))  # authoritative charge; gross / VAT-inclusive
         body: dict = {
-            "amount": int(round(amount * 100)),  # minor units
+            "amount": gross_minor,
             "currency": currency,
             "redirect_url": redirect_url,
         }
+        # Always describe the purchase as a line item — Revolut applies extra risk scrutiny to
+        # orders without one. The order `amount` stays the gross total; when vat_rate > 0 the VAT
+        # is broken out *within* that total (back-calculated), never added on top.
+        line_item: dict = {
+            "name": item_name,
+            "type": "service",
+            "quantity": {"value": 1},
+            "unit_price_amount": gross_minor,
+            "total_amount": gross_minor,
+        }
+        if vat_rate > 0:
+            net_minor = round(gross_minor / (1 + vat_rate))
+            line_item["taxes"] = [{"name": f"VAT {round(vat_rate * 100)}%", "amount": gross_minor - net_minor}]
+        body["line_items"] = [line_item]
         if ext_ref:
             body["merchant_order_ext_ref"] = ext_ref
         if user_email:
