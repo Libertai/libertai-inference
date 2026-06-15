@@ -37,6 +37,17 @@ EU_COUNTRIES = {
     "SE",
 }
 
+# EU VAT rate applied to EUR sales. Pricing is gross/TTC: VAT is INCLUDED in the amount we
+# charge (back-calculated for the invoice), never added on top. Single source of truth shared
+# by /payments/region and the order line-item VAT breakdown.
+EU_VAT_RATE = 0.20
+
+
+def vat_rate_for_currency(currency: str) -> float:
+    """VAT rate to apply for a charge currency. EUR -> EU VAT, else none."""
+    return EU_VAT_RATE if currency == "EUR" else 0.0
+
+
 _reader: geoip2.database.Reader | None = None
 _warned_no_db = False  # log the missing-DB situation once, not per request
 
