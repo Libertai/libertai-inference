@@ -15,12 +15,31 @@ services:
       - .env
     command: [ "poetry", "run", "alembic", "upgrade", "head" ]
 
+  # Keeps the MaxMind GeoLite2-Country DB fresh in a shared volume for IP->currency
+  # detection. Account id + license key come from a free MaxMind account (Dokploy env).
+  # If the creds are missing/wrong this container errors but inference is unaffected:
+  # geo.py falls back to USD until the file appears, then self-heals.
+  geoipupdate:
+    image: ghcr.io/maxmind/geoipupdate:latest
+    restart: unless-stopped
+    environment:
+      - GEOIPUPDATE_ACCOUNT_ID=${GEOIPUPDATE_ACCOUNT_ID}
+      - GEOIPUPDATE_LICENSE_KEY=${GEOIPUPDATE_LICENSE_KEY}
+      - GEOIPUPDATE_EDITION_IDS=GeoLite2-Country
+      - GEOIPUPDATE_FREQUENCY=72 # hours between refreshes
+    volumes:
+      - geoip_data:/usr/share/GeoIP
+
   inference:
     build:
       dockerfile: ./Dockerfile
     restart: always
     env_file:
       - .env
+    # geoipupdate writes GeoLite2-Country.mmdb to the volume root -> /data/GeoLite2-Country.mmdb,
+    # matching GEOIP_DB_PATH's default. Read-only: only the sidecar writes it.
+    volumes:
+      - geoip_data:/data:ro
     networks:
       - dokploy-network
       - default
@@ -31,3 +50,4 @@ networks:
 
 volumes:
   libertai_inference_pg_data:
+  geoip_data:
