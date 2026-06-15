@@ -93,7 +93,9 @@ async def test_topup_then_webhook_credits_user(async_client, monkeypatch):
     monkeypatch.setattr(revolut, "secret_key", "sk_test")
     monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
 
-    async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
+    async def fake_create_topup(
+        *, amount, currency, redirect_url, user_email=None, metadata=None, vat_rate=0.0, item_name="Prepaid credits"
+    ):
         return CheckoutResult(checkout_url="http://pay/checkout", order_id="ord_route_1")
 
     monkeypatch.setattr(revolut, "create_topup", fake_create_topup)
@@ -143,7 +145,9 @@ async def test_topup_redirects_back_to_requesting_app(async_client, monkeypatch)
 
     seen: dict = {"calls": 0}
 
-    async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
+    async def fake_create_topup(
+        *, amount, currency, redirect_url, user_email=None, metadata=None, vat_rate=0.0, item_name="Prepaid credits"
+    ):
         seen["calls"] += 1
         seen["redirect_url"] = redirect_url
         # external_reference is unique in DB -> each fake order needs a distinct id.
@@ -184,10 +188,13 @@ def _stub_topup_provider(monkeypatch, seen: dict, order_prefix: str):
     monkeypatch.setattr(revolut, "secret_key", "sk_test")
     monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
 
-    async def fake_create_topup(*, amount, currency, redirect_url, user_email=None, metadata=None):
+    async def fake_create_topup(
+        *, amount, currency, redirect_url, user_email=None, metadata=None, vat_rate=0.0, item_name="Prepaid credits"
+    ):
         seen["calls"] = seen.get("calls", 0) + 1
         seen["amount"] = amount
         seen["currency"] = currency
+        seen["vat_rate"] = vat_rate
         # external_reference is unique in DB -> each fake order needs a distinct id.
         return CheckoutResult(checkout_url="http://pay/checkout", order_id=f"{order_prefix}_{seen['calls']}")
 
@@ -198,7 +205,6 @@ async def test_topup_eur_region_charges_pack_eur_credits_pack_usd(async_client, 
     """EU callers buy a fixed pack: the provider is charged the gross EUR, the pending row records USD credits."""
     user, headers = await _auth_user()
     monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
-    monkeypatch.setattr("src.topup_packs.TOPUP_PACKS_CONFIRMED", True)
     seen: dict = {}
     _stub_topup_provider(monkeypatch, seen, f"ord_eur_pack_{user.id}")
     pack = TOPUP_PACKS["eur_10"]
@@ -244,7 +250,6 @@ async def test_topup_eur_region_without_pack_id_rejected(async_client, monkeypat
 async def test_topup_eur_region_unknown_pack_rejected(async_client, monkeypatch):
     user, headers = await _auth_user()
     monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
-    monkeypatch.setattr("src.topup_packs.TOPUP_PACKS_CONFIRMED", True)
     seen: dict = {}
     _stub_topup_provider(monkeypatch, seen, f"ord_eur_badpack_{user.id}")
 
@@ -258,20 +263,20 @@ async def test_topup_eur_region_unknown_pack_rejected(async_client, monkeypatch)
         await _cleanup(user.id)
 
 
-async def test_topup_eur_pack_blocked_until_table_confirmed(async_client, monkeypatch):
-    """Placeholder pack amounts must never open a real checkout (guard ships OFF)."""
+async def test_topup_eur_pack_passes_vat_rate(async_client, monkeypatch):
+    """EU pack checkout passes the 20% VAT rate to the provider (broken out on the invoice);
+    USD top-ups pass 0."""
     user, headers = await _auth_user()
     monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
     seen: dict = {}
-    _stub_topup_provider(monkeypatch, seen, f"ord_eur_unconfirmed_{user.id}")
+    _stub_topup_provider(monkeypatch, seen, f"ord_eur_vat_{user.id}")
 
     try:
         resp = await async_client.post(
             "/payments/topup", json={"provider": "revolut", "pack_id": "eur_10"}, headers=headers
         )
-        assert resp.status_code == 400, resp.text
-        assert "not configured" in resp.json()["detail"]
-        assert seen.get("calls", 0) == 0
+        assert resp.status_code == 200, resp.text
+        assert seen["vat_rate"] == 0.20
     finally:
         await _cleanup(user.id)
 
@@ -361,8 +366,7 @@ async def test_topup_amount_capped_at_10k(async_client, monkeypatch):
         await _cleanup(user.id)
 
 
-async def test_topup_packs_endpoint_lists_packs(async_client, monkeypatch):
-    monkeypatch.setattr("src.topup_packs.TOPUP_PACKS_CONFIRMED", True)
+async def test_topup_packs_endpoint_lists_packs(async_client):
     resp = await async_client.get("/payments/topup-packs")
     assert resp.status_code == 200
     packs = resp.json()
@@ -371,13 +375,6 @@ async def test_topup_packs_endpoint_lists_packs(async_client, monkeypatch):
     for p in packs:
         assert p["usd_credits"] > 0
         assert p["eur_charge"] > 0
-
-
-async def test_topup_packs_endpoint_empty_until_table_confirmed(async_client):
-    """The UI must not advertise packs the purchase guard would reject."""
-    resp = await async_client.get("/payments/topup-packs")
-    assert resp.status_code == 200
-    assert resp.json() == []
 
 
 async def test_subscribe_uses_region_resolved_currency(async_client, monkeypatch):

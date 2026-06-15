@@ -25,6 +25,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.geo import vat_rate_for_currency
 from src.services.payments.base import (
     CheckoutResult,
     PaymentCapability,
@@ -104,11 +105,11 @@ class PaymentManager:
 
         The charge and the credit are decoupled: non-EU users pay arbitrary USD
         1:1 (``usd_credits == charge_amount``), while EU users buy a fixed pack —
-        ``charge_amount`` is the gross EUR price (VAT-inclusive, VAT handled at
-        the Revolut merchant level) and ``usd_credits`` is the fixed USD value
-        credited. The pending row always records ``usd_credits`` because the
-        prepaid balance is USD-denominated and webhook settlement completes the
-        recorded amount as-is.
+        ``charge_amount`` is the gross EUR price (VAT-inclusive; the VAT portion is
+        back-calculated and sent as an order line item) and ``usd_credits`` is the
+        fixed USD value credited. The pending row always records ``usd_credits``
+        because the prepaid balance is USD-denominated and webhook settlement
+        completes the recorded amount as-is.
         """
         if not self.provider.supports(PaymentCapability.topup):
             raise UnsupportedCapability(f"{self.provider.id} does not support top-ups")
@@ -123,6 +124,8 @@ class PaymentManager:
             redirect_url=redirect_url,
             user_email=user.email,
             metadata={"ext_ref": f"{TOPUP_EXT_REF_PREFIX}{user.id}"},
+            vat_rate=vat_rate_for_currency(charge_currency),
+            item_name=f"LibertAI usage credits (${usd_credits:g})",
         )
 
         # Record the credits as pending now; they become spendable when the

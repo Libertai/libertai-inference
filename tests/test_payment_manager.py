@@ -44,7 +44,9 @@ class FakeProvider(PaymentProvider):
             currencies=["USD"],
         )
 
-    async def create_topup(self, *, amount, currency, redirect_url, user_email=None, metadata=None):
+    async def create_topup(
+        self, *, amount, currency, redirect_url, user_email=None, metadata=None, vat_rate=0.0, item_name="Prepaid credits"
+    ):
         self.order_seq += 1
         self.topups.append((amount, currency))
         return CheckoutResult(checkout_url="http://pay/topup", order_id=f"ord_{self.order_seq}")
