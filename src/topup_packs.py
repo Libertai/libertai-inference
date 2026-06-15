@@ -17,12 +17,12 @@ class TopupPack:
     eur_charge: float  # gross EUR charged (VAT-inclusive / TTC; VAT back-calculated for the invoice)
 
 
-# TODO: placeholder 1:1 EUR amounts — replace with the real EUR<->credits table before prod.
+# EUR charge = USD credits x 0.85 (gross/TTC; we absorb VAT, which is back-calculated for the invoice).
 TOPUP_PACKS: dict[str, TopupPack] = {
-    "eur_10": TopupPack("eur_10", usd_credits=10.0, eur_charge=10.0),
-    "eur_50": TopupPack("eur_50", usd_credits=50.0, eur_charge=50.0),
-    "eur_100": TopupPack("eur_100", usd_credits=100.0, eur_charge=100.0),
-    "eur_250": TopupPack("eur_250", usd_credits=250.0, eur_charge=250.0),
+    "eur_10": TopupPack("eur_10", usd_credits=10.0, eur_charge=8.50),
+    "eur_50": TopupPack("eur_50", usd_credits=50.0, eur_charge=42.50),
+    "eur_100": TopupPack("eur_100", usd_credits=100.0, eur_charge=85.00),
+    "eur_250": TopupPack("eur_250", usd_credits=250.0, eur_charge=212.50),
 }
 
 
