@@ -158,6 +158,21 @@ async def delete_api_key(key_id: uuid.UUID, user: User = Depends(get_current_use
 
 @router.post("/admin/usage")  # type: ignore
 async def register_inference_call(usage_log: InferenceCallData) -> None:
+    """Usage report by bearer API key — meter one inference call against the key that made it.
+
+    NOT an admin endpoint despite the ``/admin`` path prefix (legacy naming, kept only to
+    avoid breaking the gateway that calls it). It intentionally takes NO admin token: the
+    caller authenticates by *possessing* the user API key it reports usage for, which it
+    sends as ``usage_log.key``. That key is the bearer credential.
+
+    Security invariants this relies on (covered by tests/test_usage_report_auth.py):
+      - An unknown key registers nothing and gets 404 — you cannot create or meter a key
+        you don't already hold.
+      - Only the supplied key is ever metered; there is no key/user parameter that would let
+        a caller charge usage to a different key.
+
+    An API key is unguessable (high-entropy secret), so possession is the authorization.
+    """
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == usage_log.key))
