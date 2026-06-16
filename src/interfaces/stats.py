@@ -143,3 +143,53 @@ class GlobalUsersStats(BaseModel):
 
     total_unique_users: int
     daily_active_users: list[DailyActiveUsers]
+
+
+class SegmentMessageUsage(BaseModel):
+    """Chat messages on a single day for one subscription segment."""
+
+    date: str
+    segment: str  # "anonymous" | "free" | "go" | "plus" | "max"
+    message_count: int
+
+
+class GlobalSegmentMessagesStats(BaseModel):
+    """Chat messages per subscription segment over a date range.
+
+    Sourced from ``chat_requests`` (the full chat history, predating metering), so legacy and
+    current messages share one continuous series. Segment is the sender's CURRENT tier — anon
+    (shared key), free (no paid sub), or the paid tier (go/plus/max). Historical tier at send
+    time isn't recorded, so a user's past messages are attributed to their tier today.
+    """
+
+    total_messages: int
+    messages: list[SegmentMessageUsage]
+
+
+class CreditsConsumptionDay(BaseModel):
+    """Credits consumed on a single day, split by what covered them."""
+
+    date: str
+    tier_credits: float  # covered by the subscription entitlement window
+    prepaid_credits: float  # overflow drawn from the prepaid balance
+
+
+class GlobalCreditsConsumptionStats(BaseModel):
+    """Credit consumption over a date range (api/cli/chat keys), tier-covered vs prepaid."""
+
+    total_credits: float
+    total_tier_credits: float
+    total_prepaid_credits: float
+    daily: list[CreditsConsumptionDay]
+
+
+class TierSubscribers(BaseModel):
+    tier: str
+    active_subscribers: int
+
+
+class GlobalSubscriptionsStats(BaseModel):
+    """Current snapshot of active paid subscribers per tier."""
+
+    subscribers_by_tier: list[TierSubscribers]
+    total_paid_subscribers: int
