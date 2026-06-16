@@ -63,6 +63,7 @@ _ensure_test_database_exists()
 from src.models.base import Base  # noqa: E402
 
 # Import every model module so Base.metadata knows all tables (mirrors alembic/env.py).
+import src.models.anon_chat_usage  # noqa: E402,F401
 import src.models.api_key  # noqa: E402,F401
 import src.models.auth_code  # noqa: E402,F401
 import src.models.chat_request  # noqa: E402,F401

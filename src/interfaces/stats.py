@@ -189,7 +189,14 @@ class TierSubscribers(BaseModel):
 
 
 class GlobalSubscriptionsStats(BaseModel):
-    """Current snapshot of active paid subscribers per tier."""
+    """Current snapshot of the user base by segment.
+
+    Subscriptions cover all usage (chat/API/CLI), so this is a user-segmentation view, not a
+    chat metric: paid subscribers per tier, registered free users (no active paid sub), and
+    anonymous users (distinct IPs that have used logged-out chat).
+    """
 
     subscribers_by_tier: list[TierSubscribers]
     total_paid_subscribers: int
+    free_users: int
+    anonymous_users: int

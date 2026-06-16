@@ -32,11 +32,13 @@ from src.interfaces.stats import (
     GlobalSubscriptionsStats,
     TierSubscribers,
 )
+from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
+from src.models.user import User
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -810,14 +812,15 @@ class StatsService:
 
     @staticmethod
     async def get_global_subscriptions_stats() -> GlobalSubscriptionsStats:
-        """Current snapshot of active paid subscribers per tier."""
+        """Current snapshot of the user base by segment: paid subscribers per tier, registered
+        free users (no active paid sub), and anonymous users (distinct logged-out chat IPs)."""
         try:
             async with AsyncSessionLocal() as db:
                 rows = (
                     await db.execute(
                         select(
                             PlanSubscription.tier.label("tier"),
-                            func.count(PlanSubscription.id).label("count"),
+                            func.count(distinct(PlanSubscription.user_id)).label("count"),
                         )
                         .where(PlanSubscription.status == "active")
                         .group_by(PlanSubscription.tier)
@@ -825,9 +828,20 @@ class StatsService:
                     )
                 ).all()
                 by_tier = [TierSubscribers(tier=r.tier, active_subscribers=int(r.count or 0)) for r in rows]
+                total_paid = sum(t.active_subscribers for t in by_tier)
+
+                total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+                # Registered users without an active paid subscription.
+                free_users = max(0, int(total_users) - total_paid)
+
+                # One row per IP that has ever used logged-out chat.
+                anonymous_users = (await db.execute(select(func.count(AnonChatUsage.id)))).scalar() or 0
+
                 return GlobalSubscriptionsStats(
                     subscribers_by_tier=by_tier,
-                    total_paid_subscribers=sum(t.active_subscribers for t in by_tier),
+                    total_paid_subscribers=total_paid,
+                    free_users=free_users,
+                    anonymous_users=int(anonymous_users),
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions stats: {str(e)}", exc_info=True)

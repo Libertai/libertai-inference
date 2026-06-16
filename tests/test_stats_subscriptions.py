@@ -112,12 +112,17 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
             await db.commit()
 
 
-async def test_subscriptions_snapshot_counts_active_paid(async_client):
+async def test_subscriptions_snapshot_counts_segments(async_client):
+    from src.models.anon_chat_usage import AnonChatUsage
+
     user_ids: list[uuid.UUID] = []
+    anon_ip = f"198.51.100.{uuid.uuid4().int % 250}"
     async with AsyncSessionLocal() as db:
-        user = await _mk_user(db)
-        user_ids.append(user)
-        db.add(PlanSubscription(user_id=user, tier="max", provider="revolut", status="active"))
+        paid = await _mk_user(db)
+        db.add(PlanSubscription(user_id=paid, tier="max", provider="revolut", status="active"))
+        free = await _mk_user(db)  # registered, no paid sub
+        user_ids += [paid, free]
+        db.add(AnonChatUsage(ip=anon_ip, window_started_at=_TS, count=3))
         await db.commit()
 
     try:
@@ -125,11 +130,14 @@ async def test_subscriptions_snapshot_counts_active_paid(async_client):
         assert resp.status_code == 200, resp.text
         body = resp.json()
         by_tier = {t["tier"]: t["active_subscribers"] for t in body["subscribers_by_tier"]}
-        # Other tests may leave active subs around; assert our seeded one is counted.
+        # Shared global tables, so assert our seeded rows are reflected (>=), not exact totals.
         assert by_tier.get("max", 0) >= 1
         assert body["total_paid_subscribers"] >= 1
+        assert body["free_users"] >= 1
+        assert body["anonymous_users"] >= 1
     finally:
         async with AsyncSessionLocal() as db:
+            await db.execute(delete(AnonChatUsage).where(AnonChatUsage.ip == anon_ip))
             await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()
