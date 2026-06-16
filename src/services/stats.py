@@ -2,8 +2,9 @@ from calendar import month_abbr
 from datetime import datetime, timedelta, date
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, cast, Date, Integer, select, distinct
+from sqlalchemy import func, cast, Date, Integer, select, distinct, case, literal, and_
 
+from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import (
     DashboardStats,
@@ -24,11 +25,18 @@ from src.interfaces.stats import (
     GlobalSummaryStats,
     DailyActiveUsers,
     GlobalUsersStats,
+    GlobalSegmentMessagesStats,
+    SegmentMessageUsage,
+    GlobalCreditsConsumptionStats,
+    CreditsConsumptionDay,
+    GlobalSubscriptionsStats,
+    TierSubscribers,
 )
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
+from src.models.plan_subscription import PlanSubscription
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -690,4 +698,137 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving global summary stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_messages_by_segment(start_date: date, end_date: date) -> GlobalSegmentMessagesStats:
+        """Chat messages per subscription segment over time, from chat_requests (full history).
+
+        Segment per message: the shared anonymous key -> "anonymous"; a user with an active paid
+        subscription -> that tier (go/plus/max); otherwise "free". Tier history per message isn't
+        stored, so messages are attributed to the sender's CURRENT tier.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                segment = case(
+                    (ApiKey.key == config.LIBERTAI_CHAT_API_KEY, literal("anonymous")),
+                    (PlanSubscription.tier.isnot(None), PlanSubscription.tier),
+                    else_=literal("free"),
+                ).label("segment")
+
+                rows = (
+                    await db.execute(
+                        select(
+                            cast(ChatRequest.created_at, Date).label("date"),
+                            segment,
+                            func.count(ChatRequest.id).label("count"),
+                        )
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        # At most one active subscription per user (unique constraint), so this
+                        # left join adds at most one paid-tier row per message.
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
+                        .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
+                        .group_by(cast(ChatRequest.created_at, Date), segment)
+                        .order_by(cast(ChatRequest.created_at, Date))
+                    )
+                ).all()
+
+                total = 0
+                messages = []
+                for r in rows:
+                    count = int(r.count or 0)
+                    total += count
+                    messages.append(
+                        SegmentMessageUsage(date=r.date.strftime("%Y-%m-%d"), segment=r.segment, message_count=count)
+                    )
+                return GlobalSegmentMessagesStats(total_messages=total, messages=messages)
+        except Exception as e:
+            logger.error(f"Error retrieving messages-by-segment stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_credits_consumption(start_date: date, end_date: date) -> GlobalCreditsConsumptionStats:
+        """Credits consumed per day across api/cli/chat keys, split into the tier-covered portion
+        (entitlement window) and the prepaid overflow (credits_used - tier_credits_used)."""
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                chargeable = (ApiKeyType.api, ApiKeyType.chat, ApiKeyType.cli)
+                rows = (
+                    await db.execute(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            func.coalesce(func.sum(InferenceCall.tier_credits_used), 0.0).label("tier"),
+                            func.coalesce(
+                                func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0
+                            ).label("prepaid"),
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        .where(
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                            ApiKey.type.in_(chargeable),
+                        )
+                        .group_by(cast(InferenceCall.used_at, Date))
+                        .order_by(cast(InferenceCall.used_at, Date))
+                    )
+                ).all()
+
+                total_tier = 0.0
+                total_prepaid = 0.0
+                daily = []
+                for r in rows:
+                    tier = round(float(r.tier or 0.0), 6)
+                    prepaid = round(float(r.prepaid or 0.0), 6)
+                    total_tier += tier
+                    total_prepaid += prepaid
+                    daily.append(
+                        CreditsConsumptionDay(date=r.date.strftime("%Y-%m-%d"), tier_credits=tier, prepaid_credits=prepaid)
+                    )
+                return GlobalCreditsConsumptionStats(
+                    total_credits=round(total_tier + total_prepaid, 6),
+                    total_tier_credits=round(total_tier, 6),
+                    total_prepaid_credits=round(total_prepaid, 6),
+                    daily=daily,
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving credits-consumption stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_subscriptions_stats() -> GlobalSubscriptionsStats:
+        """Current snapshot of active paid subscribers per tier."""
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = (
+                    await db.execute(
+                        select(
+                            PlanSubscription.tier.label("tier"),
+                            func.count(PlanSubscription.id).label("count"),
+                        )
+                        .where(PlanSubscription.status == "active")
+                        .group_by(PlanSubscription.tier)
+                        .order_by(PlanSubscription.tier)
+                    )
+                ).all()
+                by_tier = [TierSubscribers(tier=r.tier, active_subscribers=int(r.count or 0)) for r in rows]
+                return GlobalSubscriptionsStats(
+                    subscribers_by_tier=by_tier,
+                    total_paid_subscribers=sum(t.active_subscribers for t in by_tier),
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving subscriptions stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

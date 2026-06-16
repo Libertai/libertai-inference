@@ -13,6 +13,9 @@ from src.interfaces.stats import (
     GlobalChatTokensStats,
     GlobalSummaryStats,
     GlobalUsersStats,
+    GlobalSegmentMessagesStats,
+    GlobalCreditsConsumptionStats,
+    GlobalSubscriptionsStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -162,4 +165,37 @@ async def get_global_summary(
         return await StatsService.get_global_summary_stats(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in global summary stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/messages-by-segment", response_model=GlobalSegmentMessagesStats)  # type: ignore
+async def get_messages_by_segment(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalSegmentMessagesStats:
+    try:
+        return await StatsService.get_global_messages_by_segment(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in messages-by-segment stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/credits-consumption", response_model=GlobalCreditsConsumptionStats)  # type: ignore
+async def get_credits_consumption(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalCreditsConsumptionStats:
+    try:
+        return await StatsService.get_global_credits_consumption(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in credits-consumption stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/subscriptions", response_model=GlobalSubscriptionsStats)  # type: ignore
+async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
+    try:
+        return await StatsService.get_global_subscriptions_stats()
+    except Exception as e:
+        logger.error(f"Error in subscriptions stats route: {str(e)}", exc_info=True)
         raise
