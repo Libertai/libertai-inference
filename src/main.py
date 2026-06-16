@@ -6,6 +6,7 @@ from src.routes.api_keys import router as api_keys_router
 from src.routes.auth import router as auth_router
 from src.routes.chat import router as chat_router
 from src.routes.credits import router as credits_router
+from src.routes.devices import router as devices_router
 from src.routes.liberclaw import router as liberclaw_router
 from src.routes.payments import router as payments_router
 from src.routes.stats import router as stats_router
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(credits_router)
 app.include_router(api_keys_router)
+app.include_router(devices_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
 app.include_router(liberclaw_router)

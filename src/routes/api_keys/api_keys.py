@@ -344,8 +344,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
 @router.get("/admin/list", dependencies=[Depends(verify_admin_token)])  # type: ignore
 async def get_admin_all_api_keys() -> ApiKeyAdminListResponse:
     try:
-        api_keys = await ApiKeyService.get_admin_all_api_keys()
-        return ApiKeyAdminListResponse(keys=api_keys)
+        api_keys, key_types = await ApiKeyService.get_admin_all_api_keys_with_types()
+        return ApiKeyAdminListResponse(keys=api_keys, key_types=key_types)
     except Exception as e:
         logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")

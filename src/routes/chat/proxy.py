@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from src.config import config
 from src.routes.chat import router
+from src.services.chat_rate_limit import enforce_free_chat_rate_limit
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -38,6 +39,7 @@ async def proxy_chat_request(
     Handles both streaming and non-streaming responses.
     """
     logger.debug(f"Received chat request for model {chat_request_data.model}")
+    await enforce_free_chat_rate_limit(request)
 
     # Get the original request body & headers
     headers = dict(request.headers)

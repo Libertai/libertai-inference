@@ -152,6 +152,21 @@ async def test_pool_keys_are_included_in_whitelist_unconditionally():
             await db.commit()
 
 
+async def test_admin_list_route_includes_key_types(async_client, monkeypatch):
+    from src.config import config
+
+    monkeypatch.setattr(config, "ADMIN_SECRET", "test-admin")
+    user_id, key = await _setup()
+    try:
+        response = await async_client.get("/api-keys/admin/list", headers={"x-admin-token": "test-admin"})
+        assert response.status_code == 200
+        data = response.json()
+        assert key in data["keys"]
+        assert data["key_types"][key] == ApiKeyType.api.value
+    finally:
+        await _cleanup(user_id)
+
+
 async def _balance(user_id) -> float:
     from sqlalchemy import func, select
 

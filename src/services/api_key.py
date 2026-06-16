@@ -538,12 +538,17 @@ class ApiKeyService:
 
     @staticmethod
     async def get_admin_all_api_keys() -> list[str]:
+        keys, _ = await ApiKeyService.get_admin_all_api_keys_with_types()
+        return keys
+
+    @staticmethod
+    async def get_admin_all_api_keys_with_types() -> tuple[list[str], dict[str, ApiKeyType]]:
         """
         Get all API keys across all addresses that have at least 0.02 credits available.
         This method is intended for admin use only.
 
         Returns:
-            List of API key strings (unmasked) that meet the requirements
+            List of API key strings (unmasked) and their key types.
         """
 
         try:
@@ -626,6 +631,7 @@ class ApiKeyService:
                 # Filter keys with sufficient credits available
                 expiry_now = datetime.now()
                 result = []
+                key_types: dict[str, ApiKeyType] = {}
                 for key in api_keys:
                     # Expired keys (CLI keys past their TTL) drop off the whitelist -> 401 at the gateway.
                     if key.expires_at is not None and key.expires_at < expiry_now:
@@ -677,8 +683,9 @@ class ApiKeyService:
 
                     # valid liberclaw/api/cli/chat keys pass through
                     result.append(key.key)
+                    key_types[key.key] = key.type
 
-                return result
+                return result, key_types
 
         except Exception as e:
             logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)

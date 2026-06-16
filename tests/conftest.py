@@ -67,6 +67,7 @@ import src.models.api_key  # noqa: E402,F401
 import src.models.auth_code  # noqa: E402,F401
 import src.models.chat_request  # noqa: E402,F401
 import src.models.credit_transaction  # noqa: E402,F401
+import src.models.device_token  # noqa: E402,F401
 import src.models.inference_call  # noqa: E402,F401
 import src.models.liberclaw_user  # noqa: E402,F401
 import src.models.magic_link  # noqa: E402,F401

@@ -10,6 +10,7 @@ from src.models.base import Base, AsyncSessionLocal
 if TYPE_CHECKING:
     from src.models.api_key import ApiKey
     from src.models.credit_transaction import CreditTransaction
+    from src.models.device_token import DeviceToken
     from src.models.oauth_connection import OAuthConnection
     from src.models.plan_subscription import PlanSubscription
     from src.models.session import Session
@@ -42,6 +43,9 @@ class User(Base):
     )
     sessions: Mapped[list["Session"]] = relationship(
         "Session", back_populates="user", cascade="all, delete-orphan"
+    )
+    device_tokens: Mapped[list["DeviceToken"]] = relationship(
+        "DeviceToken", back_populates="user", cascade="all, delete-orphan"
     )
     plan_subscriptions: Mapped[list["PlanSubscription"]] = relationship(
         "PlanSubscription", back_populates="user", cascade="all, delete-orphan"

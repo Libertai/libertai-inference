@@ -10,6 +10,7 @@ from src.models.inference_call import InferenceCall
 # Then import models with relationships but no circular dependencies
 from src.models.user import User
 from src.models.api_key import ApiKey
+from src.models.device_token import DeviceToken
 
 # Identity / auth models
 from src.models.wallet_connection import WalletConnection
@@ -31,6 +32,7 @@ __all__ = [
     "Base",
     "User",
     "ApiKey",
+    "DeviceToken",
     "CreditTransaction",
     "CreditTransactionStatus",
     "CreditTransactionProvider",

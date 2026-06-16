@@ -113,6 +113,7 @@ class ApiKeyListResponse(BaseModel):
 
 class ApiKeyAdminListResponse(BaseModel):
     keys: list[str]
+    key_types: dict[str, ApiKeyType] | None = None
 
 
 class ChatApiKeyResponse(BaseModel):

@@ -12,6 +12,7 @@ from src.models.auth_code import AuthCode  # noqa
 from src.models.base import Base  # Import the Base from your models
 from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
+from src.models.device_token import DeviceToken  # noqa
 from src.models.inference_call import InferenceCall  # noqa
 from src.models.liberclaw_user import LiberclawUser  # noqa
 from src.models.magic_link import MagicLink  # noqa
