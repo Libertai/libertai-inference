@@ -1,16 +1,29 @@
 import httpx
 from fastapi import HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.config import config
+from src.interfaces.chat import AnonUsageResponse
+from src.models.base import AsyncSessionLocal
 from src.routes.chat import router
+from src.services import anon_rate_limit
+from src.services.geo import client_ip
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 timeout = httpx.Timeout(timeout=600.0)  # 10 minutes
 client = httpx.AsyncClient(timeout=timeout)
+
+
+def _anon_usage_response(state: anon_rate_limit.AnonUsageState) -> AnonUsageResponse:
+    return AnonUsageResponse(
+        used=state.used,
+        limit=state.limit,
+        allowed=state.allowed,
+        resets_at=state.resets_at.isoformat() if state.resets_at else None,
+    )
 
 
 class ChatRequest(BaseModel):
@@ -37,6 +50,18 @@ async def proxy_chat_request(
     Handles both streaming and non-streaming responses.
     """
     logger.debug(f"Received chat request for model {chat_request_data.model}")
+
+    # Only anonymous (logged-out) traffic hits this proxy — authenticated users go straight to the
+    # gateway with their per-user key. Rate-limit anonymous messages per IP to nudge sign-in.
+    ip = client_ip(request)
+    if ip:
+        async with AsyncSessionLocal() as db:
+            state = await anon_rate_limit.consume(db, ip)
+        if not state.allowed:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "anon_limit", **_anon_usage_response(state).model_dump()},
+            )
 
     # Get the original request body & headers
     headers = dict(request.headers)
@@ -120,3 +145,15 @@ async def proxy_chat_request(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}",
         )
+
+
+@router.get("/anon-usage")  # type: ignore
+async def get_anon_usage(request: Request) -> AnonUsageResponse:
+    """Anonymous per-IP free-message usage, so the logged-out chat UI can show remaining messages,
+    a near-limit warning, and the sign-in wall before the next message is rejected."""
+    ip = client_ip(request)
+    if not ip:
+        return AnonUsageResponse(used=0, limit=anon_rate_limit.ANON_MESSAGE_LIMIT, allowed=True, resets_at=None)
+    async with AsyncSessionLocal() as db:
+        state = await anon_rate_limit.get_state(db, ip)
+    return _anon_usage_response(state)
