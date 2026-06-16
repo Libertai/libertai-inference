@@ -111,7 +111,11 @@ class PaymentProvider(ABC):
         redirect_url: str,
         user_email: str | None = None,
         metadata: dict | None = None,
+        vat_rate: float = 0.0,
+        item_name: str = "Prepaid credits",
     ) -> CheckoutResult:
+        # vat_rate/item_name are honoured by fiat providers (Revolut) for VAT-inclusive invoicing;
+        # crypto providers don't implement top-ups at all.
         raise UnsupportedCapability(f"{self.id} does not support top-ups")
 
     # ---- subscriptions (recurring) ----

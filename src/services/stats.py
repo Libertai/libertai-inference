@@ -726,7 +726,7 @@ class StatsService:
                         select(
                             cast(ChatRequest.created_at, Date).label("date"),
                             segment,
-                            func.count(ChatRequest.id).label("count"),
+                            func.count(ChatRequest.id).label("cnt"),
                         )
                         .select_from(ChatRequest)
                         .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
@@ -748,7 +748,7 @@ class StatsService:
                 total = 0
                 messages = []
                 for r in rows:
-                    count = int(r.count or 0)
+                    count = int(r.cnt or 0)
                     total += count
                     messages.append(
                         SegmentMessageUsage(date=r.date.strftime("%Y-%m-%d"), segment=r.segment, message_count=count)
@@ -820,14 +820,14 @@ class StatsService:
                     await db.execute(
                         select(
                             PlanSubscription.tier.label("tier"),
-                            func.count(distinct(PlanSubscription.user_id)).label("count"),
+                            func.count(distinct(PlanSubscription.user_id)).label("cnt"),
                         )
                         .where(PlanSubscription.status == "active")
                         .group_by(PlanSubscription.tier)
                         .order_by(PlanSubscription.tier)
                     )
                 ).all()
-                by_tier = [TierSubscribers(tier=r.tier, active_subscribers=int(r.count or 0)) for r in rows]
+                by_tier = [TierSubscribers(tier=r.tier, active_subscribers=int(r.cnt or 0)) for r in rows]
                 total_paid = sum(t.active_subscribers for t in by_tier)
 
                 total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
