@@ -62,7 +62,7 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         price_cents=800,
         currency=DEFAULT_CURRENCY,
         window_5h_credits=2.5,
-        weekly_credits=5.0,
+        weekly_credits=15.0,
         provider_plan_ids={
             # One Revolut plan per tier; currency is a plan VARIATION (EUR variation has 20% VAT).
             "revolut": {
@@ -81,8 +81,8 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         name="plus",
         price_cents=2000,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=5.0,
-        weekly_credits=12.0,
+        window_5h_credits=7.0,
+        weekly_credits=40.0,
         provider_plan_ids={
             "revolut": {
                 "USD": {
@@ -100,8 +100,8 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         name="max",
         price_cents=10000,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=25.0,
-        weekly_credits=60.0,
+        window_5h_credits=50.0,
+        weekly_credits=300.0,
         provider_plan_ids={
             "revolut": {
                 "USD": {

@@ -116,7 +116,7 @@ async def test_paid_tier_gets_larger_window(db):
 
     state = await get_allowance_state(db, user.id, now=NOW + timedelta(hours=1))
     assert state.tier == "plus"
-    assert state.window_5h_limit == 5.0
+    assert state.window_5h_limit == 7.0
     assert state.source == "tier"
 
 

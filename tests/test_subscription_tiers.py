@@ -22,9 +22,9 @@ def test_tiers_are_free_go_plus_max_usd():
 def test_tier_prices_and_windows():
     free, go, plus, max_ = get_tier("free"), get_tier("go"), get_tier("plus"), get_tier("max")
     assert (free.price_cents, free.window_5h_credits, free.weekly_credits) == (0, 0.5, 2.0)
-    assert (go.price_cents, go.window_5h_credits, go.weekly_credits) == (800, 2.5, 5.0)
-    assert (plus.price_cents, plus.window_5h_credits, plus.weekly_credits) == (2000, 5.0, 12.0)
-    assert (max_.price_cents, max_.window_5h_credits, max_.weekly_credits) == (10000, 25.0, 60.0)
+    assert (go.price_cents, go.window_5h_credits, go.weekly_credits) == (800, 2.5, 15.0)
+    assert (plus.price_cents, plus.window_5h_credits, plus.weekly_credits) == (2000, 7.0, 40.0)
+    assert (max_.price_cents, max_.window_5h_credits, max_.weekly_credits) == (10000, 50.0, 300.0)
 
 
 def test_get_provider_plan_per_currency():
