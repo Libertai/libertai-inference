@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -270,7 +270,7 @@ class PaymentManager:
             raise ValueError("No active subscription")
         if not sub.cancel_at_period_end and not sub.pending_tier:
             raise ValueError("Nothing to resume")
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now()
         end = sub.current_period_end
         if end is not None and (end.replace(tzinfo=None) if end.tzinfo else end) < now:
             raise ValueError("The billing period already ended")
@@ -356,7 +356,7 @@ class PaymentManager:
         # or a naive DB read) before doing arithmetic.
         start = start.replace(tzinfo=None) if start.tzinfo else start
         end = end.replace(tzinfo=None) if end.tzinfo else end
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now()
         period = (end - start).total_seconds()
         remaining = (end - now).total_seconds()
         if period <= 0 or remaining <= 0:
