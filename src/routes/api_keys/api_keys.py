@@ -216,7 +216,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                     credits_used = await aleph_service.calculate_price(
                         model_id=usage_log.model_name,
                         input_tokens=usage_log.input_tokens,
-                        output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
                     )
                     success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
@@ -246,7 +247,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                     actual_cost = await aleph_service.calculate_price(
                         model_id=usage_log.model_name,
                         input_tokens=usage_log.input_tokens,
-                        output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
                     )
                     await ApiKeyService.register_inference_call(
                         key=usage_log.key,
@@ -282,7 +284,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                     credits_used = await aleph_service.calculate_price(
                         model_id=usage_log.model_name,
                         input_tokens=usage_log.input_tokens,
-                        output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                        output_tokens=usage_log.output_tokens,
+                        cached_tokens=usage_log.cached_tokens,
                     )
                     logger.debug(f"Calculated {credits_used} credits for text model {usage_log.model_name}")
 

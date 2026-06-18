@@ -12,6 +12,9 @@ class TextCapability(BaseModel):
 class TextPricing(BaseModel):
     price_per_million_input_tokens: float
     price_per_million_output_tokens: float
+    # Dedicated rate for input tokens served from the prefix cache. When unset, cached
+    # input tokens fall back to the full input rate (no discount).
+    price_per_million_cached_input_tokens: float | None = None
 
 
 class EmbeddingCapability(BaseModel):

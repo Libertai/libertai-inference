@@ -64,7 +64,7 @@ class AlephService:
         return None
 
     async def calculate_price(
-        self, model_id: str, input_tokens: int = 0, output_tokens: int = 0, image_count: int = 0
+        self, model_id: str, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0, image_count: int = 0
     ) -> float:
         """
         Calculate the price for a given model
@@ -73,6 +73,8 @@ class AlephService:
             model_id: The ID of the model to use
             input_tokens: Number of input tokens (for text models)
             output_tokens: Number of output tokens (for text models)
+            cached_tokens: Number of input tokens served from the prefix cache (subset of
+                input_tokens), billed at the model's cached rate when defined
             image_count: Number of images (for image models)
 
         Returns:
@@ -94,7 +96,17 @@ class AlephService:
             pricing = model.pricing["text"]
             if not isinstance(pricing, TextPricing):
                 raise ValueError(f"Invalid text pricing format for model: {model_id}")
-            input_price = input_tokens / 1_000_000 * pricing.price_per_million_input_tokens
+            # Prefix-cache hits are a subset of the input tokens; bill them at the dedicated
+            # cached rate when defined, otherwise at the full input rate (no discount).
+            # Clamp to guard against malformed reports where cached > input.
+            cached = max(0, min(cached_tokens, input_tokens))
+            cached_rate = (
+                pricing.price_per_million_cached_input_tokens
+                if pricing.price_per_million_cached_input_tokens is not None
+                else pricing.price_per_million_input_tokens
+            )
+            input_price = (input_tokens - cached) / 1_000_000 * pricing.price_per_million_input_tokens
+            input_price += cached / 1_000_000 * cached_rate
             output_price = output_tokens / 1_000_000 * pricing.price_per_million_output_tokens
             total_price = input_price + output_price
 
