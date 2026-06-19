@@ -624,6 +624,38 @@ class ApiKeyService:
                     ).all()
                     monthly_usage = {row[0]: float(row[1]) for row in usage_rows}
 
+                # Pre-fetch liberclaw rolling-window usage, grouped per distinct window, to avoid
+                # an N+1 SUM over inference_calls for every liberclaw key.
+                liberclaw_keys = [
+                    k
+                    for k in api_keys
+                    if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
+                ]
+                liberclaw_usage: dict[uuid.UUID, float] = {}
+                if liberclaw_keys:
+                    now = datetime.now()
+                    key_ids_by_window: dict[int, list[uuid.UUID]] = {}
+                    for k in liberclaw_keys:
+                        tier_config = LIBERCLAW_TIERS.get(k.liberclaw_user.tier, LIBERCLAW_TIERS["free"])
+                        key_ids_by_window.setdefault(tier_config["rolling_window_days"], []).append(k.id)
+                    for window_days, key_ids in key_ids_by_window.items():
+                        cutoff = now - timedelta(days=window_days)
+                        rows = (
+                            await db.execute(
+                                select(
+                                    InferenceCall.api_key_id,
+                                    sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
+                                )
+                                .where(
+                                    InferenceCall.api_key_id.in_(key_ids),
+                                    InferenceCall.used_at >= cutoff,
+                                )
+                                .group_by(InferenceCall.api_key_id)
+                            )
+                        ).all()
+                        for row in rows:
+                            liberclaw_usage[row[0]] = float(row[1])
+
                 # Filter keys with sufficient credits available
                 expiry_now = datetime.now()
                 result = []
@@ -632,24 +664,14 @@ class ApiKeyService:
                     if key.expires_at is not None and key.expires_at < expiry_now:
                         continue
                     if key.type == ApiKeyType.liberclaw:
-                        # Check rolling window usage against tier limit
+                        # Rolling-window usage vs tier limit (usage pre-fetched above).
                         if key.liberclaw_user_id is None:
                             continue
                         lc_user = key.liberclaw_user
                         if lc_user is None:
                             continue
                         tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
-                        cutoff = datetime.now() - timedelta(days=tier_config["rolling_window_days"])
-                        usage = float(
-                            (
-                                await db.execute(
-                                    select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
-                                        InferenceCall.api_key_id == key.id, InferenceCall.used_at >= cutoff
-                                    )
-                                )
-                            ).scalar()
-                            or 0.0
-                        )
+                        usage = liberclaw_usage.get(key.id, 0.0)
                         if usage >= tier_config["credits_limit"]:
                             continue
                     elif key.type in chargeable_api_types:

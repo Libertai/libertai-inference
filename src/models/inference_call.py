@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
 )
@@ -34,8 +35,12 @@ class InferenceCall(Base):
 
     api_key: Mapped["ApiKey"] = relationship("ApiKey", back_populates="usages")
 
-    # Enforce non-negative credits usage
-    __table_args__ = (CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),)
+    # Enforce non-negative credits usage; index the usage-rollup access path
+    # (SUM(credits_used) WHERE api_key_id = ? AND used_at >= ?).
+    __table_args__ = (
+        CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),
+        Index("ix_inference_calls_api_key_id_used_at", "api_key_id", "used_at"),
+    )
 
     def __init__(
         self,
