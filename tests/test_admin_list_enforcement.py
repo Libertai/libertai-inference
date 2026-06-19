@@ -11,11 +11,13 @@ import pytest
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
+from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
+from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.api_key import ApiKeyService
@@ -172,6 +174,67 @@ async def test_pool_keys_are_included_in_whitelist_unconditionally():
 
             await db.execute(delete(ApiKeyDB).where(ApiKeyDB.key == pool_key))
             await db.commit()
+
+
+async def _setup_liberclaw(*, tier="free", usage=None, used_days_ago=1):
+    """Create a liberclaw user + liberclaw key with optional usage at ``used_days_ago``.
+
+    Returns (liberclaw_user_id, key_str).
+    """
+    now = datetime.now()
+    async with AsyncSessionLocal() as db:
+        lc = LiberclawUser(user_id=uuid.uuid4().hex, user_type="discord", tier=tier)
+        db.add(lc)
+        await db.flush()
+        key = ApiKeyDB(
+            key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, type=ApiKeyType.liberclaw, liberclaw_user_id=lc.id
+        )
+        db.add(key)
+        await db.flush()
+        if usage:
+            call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m")
+            call.used_at = now - timedelta(days=used_days_ago)
+            db.add(call)
+        await db.commit()
+        return lc.id, key.key
+
+
+async def _cleanup_liberclaw(lc_id):
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import delete
+
+        # inference_calls cascade via api_keys FK; delete keys then the liberclaw user.
+        await db.execute(delete(ApiKeyDB).where(ApiKeyDB.liberclaw_user_id == lc_id))
+        await db.execute(delete(LiberclawUser).where(LiberclawUser.id == lc_id))
+        await db.commit()
+
+
+async def test_liberclaw_key_included_within_tier_limit():
+    limit = LIBERCLAW_TIERS["free"]["credits_limit"]
+    lc_id, key = await _setup_liberclaw(usage=limit / 2)  # half the rolling-window allowance
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup_liberclaw(lc_id)
+
+
+async def test_liberclaw_key_excluded_over_tier_limit():
+    limit = LIBERCLAW_TIERS["free"]["credits_limit"]
+    lc_id, key = await _setup_liberclaw(usage=limit + 1)  # exhausted the rolling window
+    try:
+        assert key not in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup_liberclaw(lc_id)
+
+
+async def test_liberclaw_usage_outside_window_ignored():
+    """Usage older than the tier's rolling window must not count (validates the prefetch cutoff)."""
+    free = LIBERCLAW_TIERS["free"]
+    lc_id, key = await _setup_liberclaw(usage=free["credits_limit"] + 1, used_days_ago=free["rolling_window_days"] + 5)
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup_liberclaw(lc_id)
 
 
 async def _balance(user_id) -> float:
