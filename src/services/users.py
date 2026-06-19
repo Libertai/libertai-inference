@@ -51,6 +51,11 @@ async def get_or_create_user_by_wallet(db: AsyncSession, address: str, chain: st
     return user
 
 
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
+    """Look up a user by email without creating one. Returns None if no account exists."""
+    return (await db.execute(select(User).where(User.email == email.strip().lower()))).scalars().first()
+
+
 async def get_or_create_user_by_email(db: AsyncSession, email: str) -> tuple[User, bool]:
     """Resolve an email to its user (created via magic link => email is verified). No wallet."""
     email = email.strip().lower()

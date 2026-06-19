@@ -5,7 +5,7 @@ from typing import Literal, Annotated
 
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_core.core_schema import FieldValidationInfo
 
 from src.config import config
@@ -121,15 +121,21 @@ class ThirdwebOnrampTransactionData(BaseModel):
 
 
 class VoucherAddCreditsRequest(BaseModel):
-    chain: LibertaiChain
-    address: str
     amount: Annotated[float, Field(gt=0)]
     expired_at: datetime | None = None
     password: str
+    # Exactly one recipient: a wallet (chain + address) or an email account.
+    chain: LibertaiChain | None = None
+    address: str | None = None
+    email: str | None = None
 
     @field_validator("address")
     def validate_address(cls, value, info: FieldValidationInfo):
-        chain: LibertaiChain = info.data.get("chain")
+        if value is None:
+            return value
+        chain: LibertaiChain | None = info.data.get("chain")
+        if chain is None:
+            raise ValueError("chain is required when address is provided")
         if not is_address_valid(chain, value):
             raise ValueError(f"Invalid address for chain {chain}")
         return value
@@ -138,6 +144,12 @@ class VoucherAddCreditsRequest(BaseModel):
     def valid_password(cls, password):
         if password not in config.VOUCHERS_PASSWORDS:
             raise ValueError("Given password isn't in the list of allowed passwords.")
+
+    @model_validator(mode="after")
+    def exactly_one_recipient(self):
+        if (self.address is not None) == (self.email is not None):
+            raise ValueError("Provide exactly one recipient: a wallet (chain + address) or an email.")
+        return self
 
 
 class VoucherCreditsResponse(BaseModel):

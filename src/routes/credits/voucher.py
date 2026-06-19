@@ -11,24 +11,37 @@ from src.interfaces.credits import (
     GetVouchersRequest,
     VoucherChangeExpireRequest,
 )
+from src.models.base import AsyncSessionLocal
 from src.routes.credits import router
 from src.services.credit import CreditService
+from src.services.users import get_user_by_email
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 
-@router.post("/vouchers", description="Add credits via voucher to a specific address")  # type: ignore
+@router.post("/vouchers", description="Add credits via voucher to a wallet address or an email account")  # type: ignore
 async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool:
-    # Add credits using the voucher provider
-    success = await CreditService.add_credits(
+    if voucher_request.email is not None:
+        # Existing email account only — never create one from a voucher. Credit by user id, no wallet.
+        async with AsyncSessionLocal() as db:
+            user = await get_user_by_email(db, voucher_request.email)
+        if user is None:
+            raise HTTPException(status_code=404, detail="No account found for this email")
+        return await CreditService.add_credits_for_user(
+            user_id=user.id,
+            amount=voucher_request.amount,
+            provider=CreditTransactionProvider.voucher,
+            expired_at=voucher_request.expired_at,
+        )
+
+    # Wallet recipient: resolve/create the user from the address (unchanged behaviour).
+    return await CreditService.add_credits(
         provider=CreditTransactionProvider.voucher,
         address=format_address(voucher_request.chain, voucher_request.address),
         amount=voucher_request.amount,
         expired_at=voucher_request.expired_at,
     )
-
-    return success
 
 
 @router.get("/vouchers", description="Get all vouchers for a specific address")  # type: ignore
