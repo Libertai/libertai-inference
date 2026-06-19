@@ -1,7 +1,6 @@
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
-from pydantic import BaseModel, field_validator
-from pydantic_core.core_schema import FieldValidationInfo
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 
 class AuthMessageRequest(BaseModel):
@@ -9,7 +8,7 @@ class AuthMessageRequest(BaseModel):
     address: str
 
     @field_validator("address")
-    def validate_address(cls, value, info: FieldValidationInfo):
+    def validate_address(cls, value, info: ValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
         if not is_address_valid(chain, value):
             raise ValueError(f"Invalid address for chain {chain}")
@@ -26,7 +25,7 @@ class AuthLoginRequest(BaseModel):
     signature: str
 
     @field_validator("address")
-    def validate_address(cls, value, info: FieldValidationInfo):
+    def validate_address(cls, value, info: ValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
         if not is_address_valid(chain, value):
             raise ValueError(f"Invalid address for chain {chain}")

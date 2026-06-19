@@ -5,8 +5,7 @@ from typing import Literal, Annotated
 
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
-from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_core.core_schema import FieldValidationInfo
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from src.config import config
 
@@ -130,7 +129,7 @@ class VoucherAddCreditsRequest(BaseModel):
     email: str | None = None
 
     @field_validator("address")
-    def validate_address(cls, value, info: FieldValidationInfo):
+    def validate_address(cls, value, info: ValidationInfo):
         if value is None:
             return value
         chain: LibertaiChain | None = info.data.get("chain")
@@ -168,7 +167,7 @@ class GetVouchersRequest(BaseModel):
     password: str
 
     @field_validator("address")
-    def validate_address(cls, value, info: FieldValidationInfo):
+    def validate_address(cls, value, info: ValidationInfo):
         chain: LibertaiChain = info.data.get("chain")
         if not is_address_valid(chain, value):
             raise ValueError(f"Invalid address for chain {chain}")

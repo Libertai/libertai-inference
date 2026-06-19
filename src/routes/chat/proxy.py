@@ -1,7 +1,7 @@
 import httpx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from src.config import config
 from src.routes.chat import router
@@ -16,8 +16,7 @@ client = httpx.AsyncClient(timeout=timeout)
 class ChatRequest(BaseModel):
     model: str
 
-    class Config:
-        extra = "allow"  # Allow extra fields
+    model_config = ConfigDict(extra="allow")  # allow extra fields
 
 
 async def shutdown_event():
