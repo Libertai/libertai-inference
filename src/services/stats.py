@@ -339,6 +339,7 @@ class StatsService:
                         InferenceCall.model_name.label("model_name"),
                         func.sum(InferenceCall.input_tokens).label("input_tokens"),
                         func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                        func.sum(InferenceCall.cached_tokens).label("cached_tokens"),
                     )
                     .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .where(
@@ -353,22 +354,31 @@ class StatsService:
 
             total_input = 0
             total_output = 0
+            total_cached = 0
             calls = []
             for stat in inference_stats:
                 inp = stat.input_tokens or 0
                 out = stat.output_tokens or 0
+                cached = stat.cached_tokens or 0
                 total_input += inp
                 total_output += out
+                total_cached += cached
                 calls.append(
                     Call(
                         date=stat.date.strftime("%Y-%m-%d"),
                         nb_input_tokens=inp,
                         nb_output_tokens=out,
+                        nb_cached_tokens=cached,
                         model_name=stat.model_name,
                     )
                 )
 
-            return GlobalTokensStats(total_input_tokens=total_input, total_output_tokens=total_output, calls=calls)
+            return GlobalTokensStats(
+                total_input_tokens=total_input,
+                total_output_tokens=total_output,
+                total_cached_tokens=total_cached,
+                calls=calls,
+            )
 
     @staticmethod
     async def _get_inference_users_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalUsersStats:
@@ -545,8 +555,7 @@ class StatsService:
                 return GlobalUsersStats(
                     total_unique_users=len(overall),
                     daily_active_users=[
-                        DailyActiveUsers(date=day, active_users=len(idents))
-                        for day, idents in sorted(per_day.items())
+                        DailyActiveUsers(date=day, active_users=len(idents)) for day, idents in sorted(per_day.items())
                     ],
                 )
         except Exception as e:
