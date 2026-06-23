@@ -1,7 +1,21 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainSerializer
+
+# Reset/period timestamps come from naive ``TIMESTAMP`` columns (naive UTC on our UTC
+# hosts). Serialize them as tz-aware UTC so clients get an unambiguous instant: a naive
+# ISO string carries no offset, and JS ``new Date(s)`` parses an offset-less datetime as
+# *browser-local* time — which skewed reset countdowns by the client's UTC offset and
+# showed "Resets now" while the window was still live.
+UtcDatetime = Annotated[
+    datetime,
+    PlainSerializer(
+        lambda dt: (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).isoformat(),
+        return_type=str,
+        when_used="json",
+    ),
+]
 
 
 class PaymentProviderResponse(BaseModel):
@@ -66,7 +80,7 @@ class SubscriptionResponse(BaseModel):
     has_subscription: bool
     status: str | None = None
     provider: str | None = None
-    current_period_end: datetime | None = None
+    current_period_end: UtcDatetime | None = None
     cancel_at_period_end: bool = False
     pending_tier: str | None = None
     is_trial: bool = False
@@ -76,16 +90,16 @@ class SubscriptionResponse(BaseModel):
     # Dual-window allowance snapshot (free tier by default, larger if subscribed).
     window_5h_used: float = 0.0
     window_5h_limit: float = 0.0
-    window_5h_resets_at: datetime | None = None
+    window_5h_resets_at: UtcDatetime | None = None
     weekly_used: float = 0.0
     weekly_limit: float = 0.0
-    weekly_resets_at: datetime | None = None
+    weekly_resets_at: UtcDatetime | None = None
     prepaid_balance: float = 0.0
 
 
 class CancelResponse(BaseModel):
     message: str
-    effective_date: datetime | None = None
+    effective_date: UtcDatetime | None = None
 
 
 class ResumeResponse(BaseModel):
@@ -95,4 +109,4 @@ class ResumeResponse(BaseModel):
 
 class DowngradeResponse(BaseModel):
     new_tier: str
-    effective_date: datetime | None = None
+    effective_date: UtcDatetime | None = None

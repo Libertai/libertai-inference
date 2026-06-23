@@ -86,6 +86,38 @@ async def test_subscription_defaults_to_free(async_client):
         await _cleanup(user.id)
 
 
+async def test_subscription_window_resets_at_serialized_as_utc(async_client):
+    """Reset timestamps must carry a UTC offset, not a naive offset-less string.
+
+    The columns are naive UTC; serialized without an offset, JS ``new Date`` reads them
+    as browser-local and the reset countdown skews by the client's UTC offset (showed
+    "Resets now" on a still-live window). Regression guard for that.
+    """
+    from datetime import datetime
+
+    from src.services.entitlement import open_windows
+
+    user, headers = await _auth_user()
+    try:
+        async with AsyncSessionLocal() as db:
+            await open_windows(db, user.id)
+            await db.commit()
+        resp = await async_client.get("/payments/subscription", headers=headers)
+        assert resp.status_code == 200
+        resets_at = resp.json()["window_5h_resets_at"]
+        assert resets_at is not None
+        # Parseable as an aware instant (no offset would make fromisoformat tz-naive).
+        assert datetime.fromisoformat(resets_at).tzinfo is not None
+        assert resets_at.endswith("+00:00")
+    finally:
+        async with AsyncSessionLocal() as db:
+            from src.models.entitlement_window import EntitlementWindow
+
+            await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user.id))
+            await db.commit()
+        await _cleanup(user.id)
+
+
 async def test_topup_then_webhook_credits_user(async_client, monkeypatch):
     user, headers = await _auth_user()
     revolut = payment_registry.get("revolut")

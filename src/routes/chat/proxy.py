@@ -1,6 +1,8 @@
 import httpx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from datetime import timezone
+
 from pydantic import BaseModel, ConfigDict
 
 from src.config import config
@@ -22,7 +24,8 @@ def _anon_usage_response(state: anon_rate_limit.AnonUsageState) -> AnonUsageResp
         used=state.used,
         limit=state.limit,
         allowed=state.allowed,
-        resets_at=state.resets_at.isoformat() if state.resets_at else None,
+        # Tag naive UTC so JS ``new Date`` parses the correct instant (offset-less ISO is read as browser-local).
+        resets_at=state.resets_at.replace(tzinfo=timezone.utc).isoformat() if state.resets_at else None,
     )
 
 
