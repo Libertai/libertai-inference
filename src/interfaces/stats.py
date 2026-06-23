@@ -200,3 +200,23 @@ class GlobalSubscriptionsStats(BaseModel):
     total_paid_subscribers: int
     free_users: int
     anonymous_users: int
+
+
+class TierSubscribersDay(BaseModel):
+    """Active paid subscribers in one tier on a single day."""
+
+    date: str
+    tier: str  # "go" | "plus" | "max"
+    active_subscribers: int
+
+
+class GlobalSubscribersOverTimeStats(BaseModel):
+    """Active paid subscribers per tier for each day in a date range.
+
+    A subscription counts toward a day if it had started (``created_at``) on or before that day and
+    had not yet ended — active/overdue subs run to today, cancelled/expired ones end on their last
+    update. Tier is the subscription's CURRENT tier (historical tier changes aren't recorded),
+    mirroring the messages-by-segment caveat.
+    """
+
+    daily: list[TierSubscribersDay]

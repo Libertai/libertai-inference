@@ -16,6 +16,7 @@ from src.interfaces.stats import (
     GlobalSegmentMessagesStats,
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
+    GlobalSubscribersOverTimeStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -198,4 +199,16 @@ async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
         return await StatsService.get_global_subscriptions_stats()
     except Exception as e:
         logger.error(f"Error in subscriptions stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get("/global/subscribers-over-time", response_model=GlobalSubscribersOverTimeStats)  # type: ignore
+async def get_subscribers_over_time(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalSubscribersOverTimeStats:
+    try:
+        return await StatsService.get_global_subscribers_over_time(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in subscribers-over-time stats route: {str(e)}", exc_info=True)
         raise

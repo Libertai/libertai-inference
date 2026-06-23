@@ -31,6 +31,8 @@ from src.interfaces.stats import (
     CreditsConsumptionDay,
     GlobalSubscriptionsStats,
     TierSubscribers,
+    GlobalSubscribersOverTimeStats,
+    TierSubscribersDay,
 )
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
@@ -845,4 +847,50 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_subscribers_over_time(start_date: date, end_date: date) -> GlobalSubscribersOverTimeStats:
+        """Active paid subscribers per tier for each day in the range.
+
+        Each subscription is active over a span: from ``created_at`` until it ends (today for
+        active/overdue, ``updated_at`` for cancelled/expired). Parked ``upgrading`` rows and
+        never-completed ``pending`` rows are excluded. Counts use the subscription's CURRENT tier.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                # Statuses that mean the subscription was (or still is) a real paid one.
+                counted_statuses = ("active", "overdue", "cancelled", "expired")
+                live_statuses = ("active", "overdue")
+                rows = (
+                    await db.execute(
+                        select(
+                            PlanSubscription.tier,
+                            PlanSubscription.status,
+                            cast(PlanSubscription.created_at, Date).label("start"),
+                            cast(PlanSubscription.updated_at, Date).label("updated"),
+                        ).where(PlanSubscription.status.in_(counted_statuses))
+                    )
+                ).all()
+
+                tiers = sorted({r.tier for r in rows})
+                daily: list[TierSubscribersDay] = []
+                day = start_date
+                while day <= end_date:
+                    per_tier: dict[str, int] = {t: 0 for t in tiers}
+                    for r in rows:
+                        # Live subs run through today; ended subs stop on their last update.
+                        end = end_date if r.status in live_statuses else r.updated
+                        if r.start <= day <= max(end, r.start):
+                            per_tier[r.tier] += 1
+                    for t in tiers:
+                        daily.append(
+                            TierSubscribersDay(
+                                date=day.strftime("%Y-%m-%d"), tier=t, active_subscribers=per_tier[t]
+                            )
+                        )
+                    day += timedelta(days=1)
+                return GlobalSubscribersOverTimeStats(daily=daily)
+        except Exception as e:
+            logger.error(f"Error retrieving subscribers-over-time stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
