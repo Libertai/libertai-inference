@@ -1,7 +1,7 @@
 """inference_calls.tier_credits_used (window vs prepaid split)
 
-Revision ID: d4e5f6a7b8c9
-Revises: c1d2e3f4a5b6
+Revision ID: e1f2a3b4c5d6
+Revises: d4e5f6a7b8c9
 Create Date: 2026-06-10
 
 Records, per inference call, the portion covered by the tier's entitlement
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "d4e5f6a7b8c9"
-down_revision: Union[str, None] = "c1d2e3f4a5b6"
+revision: str = "e1f2a3b4c5d6"
+down_revision: Union[str, None] = "d4e5f6a7b8c9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

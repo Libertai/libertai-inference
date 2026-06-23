@@ -4,7 +4,7 @@ The tier table key changed (power -> max); rows created before the rename would
 otherwise fail get_tier() in the entitlement service.
 
 Revision ID: 9c41f2ab77d0
-Revises: d4e5f6a7b8c9
+Revises: e1f2a3b4c5d6
 Create Date: 2026-06-11
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "9c41f2ab77d0"
-down_revision = "d4e5f6a7b8c9"
+down_revision = "e1f2a3b4c5d6"
 branch_labels = None
 depends_on = None
 
