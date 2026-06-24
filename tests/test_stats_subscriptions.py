@@ -112,6 +112,41 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
             await db.commit()
 
 
+async def test_subscribers_over_time_dedups_resubscribe_and_skips_abandoned(async_client):
+    """A same-day re-subscribe (churned span + fresh span) counts once; an abandoned checkout
+    (no current_period_start) is never counted."""
+    day = "2099-07-20"
+    ts = datetime(2099, 7, 20, 12, 0, 0)
+    user_ids: list[uuid.UUID] = []
+    async with AsyncSessionLocal() as db:
+        # User who churned then re-subscribed the same day: two plus rows covering `day`.
+        resub = await _mk_user(db)
+        churned = PlanSubscription(
+            user_id=resub, tier="plus", provider="revolut", status="expired", current_period_start=ts
+        )
+        churned.updated_at = ts
+        db.add(churned)
+        db.add(PlanSubscription(user_id=resub, tier="plus", provider="revolut", status="active", current_period_start=ts))
+
+        # User who abandoned checkout: expired, never reached a paid period.
+        abandoned = await _mk_user(db)
+        db.add(PlanSubscription(user_id=abandoned, tier="plus", provider="revolut", status="expired"))
+        user_ids += [resub, abandoned]
+        await db.commit()
+
+    try:
+        resp = await async_client.get(f"/stats/global/subscribers-over-time?start_date={day}&end_date={day}")
+        assert resp.status_code == 200, resp.text
+        plus = {d["date"]: d["active_subscribers"] for d in resp.json()["daily"] if d["tier"] == "plus"}
+        # Only the re-subscriber counts, and only once despite two rows; abandoned is excluded.
+        assert plus.get(day) == 1
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()
+
+
 async def test_subscriptions_snapshot_counts_segments(async_client):
     from src.models.anon_chat_usage import AnonChatUsage
 

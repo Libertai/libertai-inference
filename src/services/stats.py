@@ -851,11 +851,13 @@ class StatsService:
 
     @staticmethod
     async def get_global_subscribers_over_time(start_date: date, end_date: date) -> GlobalSubscribersOverTimeStats:
-        """Active paid subscribers per tier for each day in the range.
+        """Distinct paid subscribers per tier for each day in the range.
 
-        Each subscription is active over a span: from ``created_at`` until it ends (today for
-        active/overdue, ``updated_at`` for cancelled/expired). Parked ``upgrading`` rows and
-        never-completed ``pending`` rows are excluded. Counts use the subscription's CURRENT tier.
+        Each subscription is paid over a span: from ``current_period_start`` until it ends (today for
+        active/overdue, ``updated_at`` for cancelled/expired). Rows that never reached a paid period
+        (``current_period_start IS NULL`` — abandoned checkouts, parked ``upgrading``/``pending``
+        rows) are excluded. Each day counts DISTINCT users per tier, so a user who re-subscribes the
+        same day (a churned span + a fresh one) is counted once. Counts use the CURRENT tier.
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -865,11 +867,15 @@ class StatsService:
                 rows = (
                     await db.execute(
                         select(
+                            PlanSubscription.user_id,
                             PlanSubscription.tier,
                             PlanSubscription.status,
-                            cast(PlanSubscription.created_at, Date).label("start"),
+                            cast(PlanSubscription.current_period_start, Date).label("start"),
                             cast(PlanSubscription.updated_at, Date).label("updated"),
-                        ).where(PlanSubscription.status.in_(counted_statuses))
+                        ).where(
+                            PlanSubscription.status.in_(counted_statuses),
+                            PlanSubscription.current_period_start.isnot(None),
+                        )
                     )
                 ).all()
 
@@ -877,16 +883,16 @@ class StatsService:
                 daily: list[TierSubscribersDay] = []
                 day = start_date
                 while day <= end_date:
-                    per_tier: dict[str, int] = {t: 0 for t in tiers}
+                    per_tier: dict[str, set] = {t: set() for t in tiers}
                     for r in rows:
                         # Live subs run through today; ended subs stop on their last update.
                         end = end_date if r.status in live_statuses else r.updated
                         if r.start <= day <= max(end, r.start):
-                            per_tier[r.tier] += 1
+                            per_tier[r.tier].add(r.user_id)
                     for t in tiers:
                         daily.append(
                             TierSubscribersDay(
-                                date=day.strftime("%Y-%m-%d"), tier=t, active_subscribers=per_tier[t]
+                                date=day.strftime("%Y-%m-%d"), tier=t, active_subscribers=len(per_tier[t])
                             )
                         )
                     day += timedelta(days=1)
