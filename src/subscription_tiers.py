@@ -9,8 +9,8 @@ A tier defines two things:
      through Revolut today and another fiat provider tomorrow without touching
      the manager.
 
-Pricing: Go $8 / Plus $20 / Max $100 per month (EUR plans are net the same
-number; Revolut applies 20% VAT on the EUR variations).
+Pricing: Go $8 / Plus $20 / Max $100 per month (EUR plans use the same number,
+VAT-inclusive — the price IS the gross total and Revolut breaks the VAT out within it).
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         window_5h_credits=2.5,
         weekly_credits=10.0,
         provider_plan_ids={
-            # One Revolut plan per tier; currency is a plan VARIATION (EUR variation has 20% VAT).
+            # One Revolut plan per tier; currency is a plan VARIATION (EUR variation is VAT-inclusive: 20% VAT within the price).
             "revolut": {
                 "USD": {
                     "plan_id": "dbdd77ea-f4c8-4b8d-9dca-c62341a68eae",
