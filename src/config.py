@@ -23,7 +23,8 @@ class _Config:
 
     JWT_SECRET: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
-    IS_DEVELOPMENT: bool
+    # Allow localhost frontends as CORS + magic-link redirect targets (local dev only)
+    ALLOW_LOCALHOST_FRONTENDS: bool
 
     ADMIN_SECRET: str
     LIBERCLAW_SECRET: str
@@ -109,7 +110,7 @@ class _Config:
 
         self.JWT_SECRET = os.getenv("JWT_SECRET")
         self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES"))
-        self.IS_DEVELOPMENT = os.getenv("IS_DEVELOPMENT", "False").lower() == "true"
+        self.ALLOW_LOCALHOST_FRONTENDS = os.getenv("ALLOW_LOCALHOST_FRONTENDS", "False").lower() == "true"
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
         self.LIBERCLAW_SECRET: str = os.getenv("LIBERCLAW_SECRET", "")
@@ -157,7 +158,7 @@ class _Config:
             "https://analytics.libertai.io",
             "https://beta.chat.libertai.io",
             "https://chat.libertai.io",
-        ] + (["http://localhost:5173", "http://localhost:3000"] if self.IS_DEVELOPMENT else [])
+        ] + (["http://localhost:5173", "http://localhost:3000"] if self.ALLOW_LOCALHOST_FRONTENDS else [])
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
