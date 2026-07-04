@@ -34,6 +34,7 @@ from src.services.payments.base import (
     PaymentProvider,
     UnsupportedCapability,
 )
+from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
 from src.subscription_tiers import (
     DEFAULT_CURRENCY,
     DEFAULT_TIER,
@@ -64,6 +65,8 @@ class PaymentManager:
         stmt = select(PlanSubscription).where(
             PlanSubscription.user_id == user_id,
             PlanSubscription.status.in_(["pending", "active", "overdue"]),
+            # Team seats are managed by the team service, never by personal payment flows.
+            PlanSubscription.provider != TEAM_CREDITS_PROVIDER,
         )
         if lock:
             stmt = stmt.with_for_update()
@@ -510,6 +513,8 @@ class PaymentManager:
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.cancel_at_period_end == True,  # noqa: E712
                 PlanSubscription.current_period_end <= pre_cutoff,
+                # Team seats are managed by the team service, never by personal payment flows.
+                PlanSubscription.provider != TEAM_CREDITS_PROVIDER,
             )
             .with_for_update()
         )
@@ -524,6 +529,8 @@ class PaymentManager:
                 PlanSubscription.current_period_end < cutoff,
                 (PlanSubscription.cancel_at_period_end == True)  # noqa: E712
                 | (PlanSubscription.is_trial == True),  # noqa: E712
+                # Team seats are managed by the team service, never by personal payment flows.
+                PlanSubscription.provider != TEAM_CREDITS_PROVIDER,
             )
             .with_for_update()
         )

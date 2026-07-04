@@ -35,6 +35,7 @@ from src.services.payments.base import PaymentProviderKind, UnsupportedCapabilit
 from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
+from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
 from src.topup_packs import TOPUP_PACKS, get_pack
 from src.utils.cron import scheduler
@@ -299,6 +300,11 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
                 )
             )
         ).scalar_one_or_none()
+        if sub is not None and sub.provider == TEAM_CREDITS_PROVIDER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This subscription is managed by your team",
+            )
         if sub and sub.provider == "credits":
             try:
                 res = await CreditSubscriptionService.request_downgrade(db, user, body.tier)
@@ -337,6 +343,11 @@ async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
         ).scalar_one_or_none()
         if not sub:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription")
+        if sub is not None and sub.provider == TEAM_CREDITS_PROVIDER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This subscription is managed by your team",
+            )
         if sub.provider == "credits":
             try:
                 res = await CreditSubscriptionService.cancel(db, user)
@@ -363,6 +374,11 @@ async def resume(user: User = Depends(get_current_user)) -> ResumeResponse:
         ).scalar_one_or_none()
         if not sub:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription")
+        if sub is not None and sub.provider == TEAM_CREDITS_PROVIDER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This subscription is managed by your team",
+            )
         if sub.provider == "credits":
             try:
                 res = await CreditSubscriptionService.resume(db, user)
@@ -410,6 +426,7 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         cancel_at_period_end=sub.cancel_at_period_end if sub else False,
         pending_tier=sub.pending_tier if sub else None,
         is_trial=sub.is_trial if sub else False,
+        is_team_seat=(sub.provider == TEAM_CREDITS_PROVIDER) if sub else False,
         allowed=allowance.allowed,
         source=allowance.source,
         window_5h_used=allowance.window_5h_used,
