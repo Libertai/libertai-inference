@@ -91,3 +91,10 @@ async def test_remove_member_expires_seat_and_logs_actor(db):
     ).scalars().first()
     assert event.event_type == "member_removed"
     assert event.metadata_json["removed_by"] == str(admin.id)
+
+
+@pytest.mark.asyncio
+async def test_set_role_requires_admin_actor(db):
+    team, (admin, member) = await _setup(db)
+    with pytest.raises(PermissionError):
+        await TeamService.set_role(db, team.id, member.id, admin.id, ROLE_MEMBER)

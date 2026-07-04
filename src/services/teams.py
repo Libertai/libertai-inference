@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.team import Team
-from src.models.team_membership import ROLE_ADMIN, TeamMembership
+from src.models.team_membership import ROLE_ADMIN, ROLE_MEMBER, TeamMembership
 from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
 from src.subscription_tiers import PAID_TIERS, get_tier
 from src.utils.logger import setup_logger
@@ -118,7 +118,9 @@ class TeamService:
     async def set_role(
         db: AsyncSession, team_id: uuid.UUID, actor_id: uuid.UUID, target_user_id: uuid.UUID, role: str
     ) -> None:
-        if role not in (ROLE_ADMIN, "member"):
+        # Defense-in-depth: routes also gate on admin, but the service must not trust callers.
+        await TeamService.require_membership(db, team_id, actor_id, admin=True)
+        if role not in (ROLE_ADMIN, ROLE_MEMBER):
             raise ValueError(f"Unknown role: {role}")
         target = await TeamService.require_membership(db, team_id, target_user_id)
         if role != ROLE_ADMIN:
