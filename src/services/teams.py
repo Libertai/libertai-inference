@@ -4,20 +4,32 @@ Seat billing lives in ``payments/team_seat_subscription.py``; invites in this
 module too (Task 5). All methods flush only — the caller commits.
 """
 
+import hashlib
+import secrets
 import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.team import Team
+from src.models.team_invite import TeamInvite
 from src.models.team_membership import ROLE_ADMIN, ROLE_MEMBER, TeamMembership
+from src.models.user import User
+from src.services.credit import CreditService
 from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
 from src.subscription_tiers import PAID_TIERS, get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+_INVITE_TTL_DAYS = 7
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 async def expire_seat_now(
@@ -154,3 +166,81 @@ class TeamService:
         await expire_seat_now(db, user_id, "member_left", metadata={"removed_by": str(user_id)})
         await db.delete(membership)
         await db.flush()
+
+    @staticmethod
+    async def create_invite(
+        db: AsyncSession, team_id: uuid.UUID, email: str, role: str, invited_by: uuid.UUID | str
+    ) -> tuple[TeamInvite, str]:
+        if role not in (ROLE_ADMIN, ROLE_MEMBER):
+            raise ValueError(f"Unknown role: {role}")
+        email = email.strip().lower()
+        # A fresh invite supersedes any older pending one for the same address.
+        older = (
+            await db.execute(
+                select(TeamInvite).where(
+                    TeamInvite.team_id == team_id,
+                    TeamInvite.email == email,
+                    TeamInvite.status == "pending",
+                )
+            )
+        ).scalars().all()
+        for invite in older:
+            invite.status = "revoked"
+        token = secrets.token_urlsafe(32)
+        invite = TeamInvite(
+            team_id=team_id,
+            email=email,
+            role=role,
+            token_hash=_hash_token(token),
+            expires_at=datetime.now() + timedelta(days=_INVITE_TTL_DAYS),
+        )
+        db.add(invite)
+        await db.flush()
+        return invite, token
+
+    @staticmethod
+    async def revoke_invite(db: AsyncSession, team_id: uuid.UUID, invite_id: uuid.UUID) -> None:
+        invite = (
+            await db.execute(
+                select(TeamInvite).where(TeamInvite.id == invite_id, TeamInvite.team_id == team_id)
+            )
+        ).scalar_one_or_none()
+        if invite is None or invite.status != "pending":
+            raise ValueError("No pending invite to revoke")
+        invite.status = "revoked"
+        await db.flush()
+
+    @staticmethod
+    async def accept_invite(db: AsyncSession, token: str, user: User) -> TeamMembership:
+        """Join guard: verified matching email, no live personal sub, zero balance, no team."""
+        invite = (
+            await db.execute(
+                select(TeamInvite).where(TeamInvite.token_hash == _hash_token(token)).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if invite is None or invite.status != "pending" or invite.expires_at < datetime.now():
+            raise ValueError("Invalid or expired invite")
+        if not user.email or user.email.strip().lower() != invite.email:
+            raise ValueError("This invite was sent to a different email address")
+        if await TeamService.get_membership(db, user.id) is not None:
+            raise ValueError("You are already in a team")
+        live_sub = (
+            await db.execute(
+                select(PlanSubscription.id).where(
+                    PlanSubscription.user_id == user.id,
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
+                )
+            )
+        ).scalars().first()
+        if live_sub:
+            raise ValueError(
+                "You have an active personal subscription — cancel it and wait for it to end before joining"
+            )
+        if await CreditService.get_balance(user.id, db=db) > 0:
+            raise ValueError("Your personal credit balance must be empty before joining a team")
+
+        invite.status = "accepted"
+        membership = TeamMembership(team_id=invite.team_id, user_id=user.id, role=invite.role)
+        db.add(membership)
+        await db.flush()
+        return membership
