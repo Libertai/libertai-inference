@@ -63,6 +63,14 @@ async def expire_seat_now(
 
 class TeamService:
     @staticmethod
+    def _validate_seat_prices(seat_prices: dict[str, float]) -> None:
+        for tier, price in seat_prices.items():
+            if tier not in PAID_TIERS:
+                raise ValueError(f"Unknown tier in seat_prices: {tier}")
+            if not isinstance(price, (int, float)) or price <= 0:
+                raise ValueError(f"Seat price for {tier} must be positive")
+
+    @staticmethod
     async def create_team(
         db: AsyncSession,
         name: str,
@@ -71,11 +79,7 @@ class TeamService:
         extra_credits_member_default_cap: float | None = None,
     ) -> Team:
         seat_prices = seat_prices or {}
-        for tier, price in seat_prices.items():
-            if tier not in PAID_TIERS:
-                raise ValueError(f"Unknown tier in seat_prices: {tier}")
-            if not isinstance(price, (int, float)) or price <= 0:
-                raise ValueError(f"Seat price for {tier} must be positive")
+        TeamService._validate_seat_prices(seat_prices)
         team = Team(name=name)
         team.seat_prices = seat_prices
         team.extra_credits_monthly_cap = extra_credits_monthly_cap
