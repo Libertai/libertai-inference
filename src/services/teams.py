@@ -222,6 +222,8 @@ class TeamService:
             raise ValueError("Invalid or expired invite")
         if not user.email or user.email.strip().lower() != invite.email:
             raise ValueError("This invite was sent to a different email address")
+        if not user.email_verified:
+            raise ValueError("Verify your email address before accepting this invite")
         if await TeamService.get_membership(db, user.id) is not None:
             raise ValueError("You are already in a team")
         live_sub = (

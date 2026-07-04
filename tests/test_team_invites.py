@@ -95,3 +95,15 @@ async def test_new_invite_revokes_older_pending_for_same_email(db):
     await TeamService.create_invite(db, team.id, user.email, ROLE_MEMBER, "staff")
     refreshed = (await db.execute(select(TeamInvite).where(TeamInvite.id == old.id))).scalar_one()
     assert refreshed.status == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_accept_requires_verified_email(db):
+    team = await TeamService.create_team(db, "Acme", seat_prices={"plus": 16.0})
+    email = f"{uuid.uuid4()}@test.dev"
+    user = User(email=email, email_verified=False)
+    db.add(user)
+    await db.flush()
+    _, token = await TeamService.create_invite(db, team.id, email, ROLE_MEMBER, "staff")
+    with pytest.raises(ValueError, match="Verify your email"):
+        await TeamService.accept_invite(db, token, user)
