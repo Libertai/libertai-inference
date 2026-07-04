@@ -36,6 +36,7 @@ from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.registry import payment_registry
 from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
+from src.services.teams import TeamService
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
 from src.topup_packs import TOPUP_PACKS, get_pack
 from src.utils.cron import scheduler
@@ -174,6 +175,11 @@ async def topup(body: TopupRequest, request: Request, user: User = Depends(get_c
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="amount is required")
         usd_credits, charge_amount, charge_currency = body.amount, body.amount, "USD"
     async with AsyncSessionLocal() as db:
+        if await TeamService.get_membership(db, user.id) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Team members cannot hold personal credits — use your team balance",
+            )
         if await _user_wallet_chains(db, user.id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

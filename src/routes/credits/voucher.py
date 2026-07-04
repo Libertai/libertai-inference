@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
+from sqlalchemy import select
 
 from src.interfaces.credits import (
     VoucherAddCreditsRequest,
@@ -12,12 +13,17 @@ from src.interfaces.credits import (
     VoucherChangeExpireRequest,
 )
 from src.models.base import AsyncSessionLocal
+from src.models.wallet_connection import WalletConnection
 from src.routes.credits import router
 from src.services.credit import CreditService
+from src.services.teams import TeamService
 from src.services.users import get_user_by_email
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# Team members hold no personal credits — vouchers to them are refused (mirrors /payments/topup).
+_MEMBER_BLOCKED = "Team members cannot hold personal credits — use your team balance"
 
 
 @router.post("/vouchers", description="Add credits via voucher to a wallet address or an email account")  # type: ignore
@@ -26,8 +32,10 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
         # Existing email account only — never create one from a voucher. Credit by user id, no wallet.
         async with AsyncSessionLocal() as db:
             user = await get_user_by_email(db, voucher_request.email)
-        if user is None:
-            raise HTTPException(status_code=404, detail="No account found for this email")
+            if user is None:
+                raise HTTPException(status_code=404, detail="No account found for this email")
+            if await TeamService.get_membership(db, user.id) is not None:
+                raise HTTPException(status_code=400, detail=_MEMBER_BLOCKED)
         return await CreditService.add_credits_for_user(
             user_id=user.id,
             amount=voucher_request.amount,
@@ -35,10 +43,19 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
             expired_at=voucher_request.expired_at,
         )
 
-    # Wallet recipient: resolve/create the user from the address (unchanged behaviour).
+    # Wallet recipient: block an existing member before crediting (a brand-new address
+    # has no user/membership yet, so it falls through to the unchanged create+credit path).
+    address = format_address(voucher_request.chain, voucher_request.address)
+    async with AsyncSessionLocal() as db:
+        wallet = (
+            await db.execute(select(WalletConnection).where(WalletConnection.address == address))
+        ).scalar_one_or_none()
+        if wallet is not None and await TeamService.get_membership(db, wallet.user_id) is not None:
+            raise HTTPException(status_code=400, detail=_MEMBER_BLOCKED)
+
     return await CreditService.add_credits(
         provider=CreditTransactionProvider.voucher,
-        address=format_address(voucher_request.chain, voucher_request.address),
+        address=address,
         amount=voucher_request.amount,
         expired_at=voucher_request.expired_at,
     )

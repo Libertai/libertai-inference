@@ -14,6 +14,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
+from src.services.team_credit import TeamCreditService
 from src.services.entitlement import (
     CHARGEABLE_KEY_TYPES,
     WINDOW_5H,
@@ -21,7 +22,9 @@ from src.services.entitlement import (
     active_tiers_by_users,
     compute_source,
     get_allowance_state,
+    get_team_extra_context,
     open_windows,
+    team_extra_available_by_users,
     window_usage_by_users,
 )
 from src.subscription_tiers import DEFAULT_TIER, get_tier
@@ -595,6 +598,8 @@ class ApiKeyService:
                 window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
                 weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
                 active_tiers = await active_tiers_by_users(db, user_ids)
+                # Team members gate on team extra-credits headroom, not personal balance.
+                team_contexts = await team_extra_available_by_users(db, user_ids, now)
 
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
@@ -688,11 +693,13 @@ class ApiKeyService:
                         # Dual-window entitlement: free tier (or larger paid windows) by
                         # default, prepaid balance as the overflow path.
                         tier = get_tier(active_tiers.get(key.user_id, DEFAULT_TIER))
+                        ctx = team_contexts.get(key.user_id)
                         source = compute_source(
                             tier,
                             window_5h_usage.get(key.user_id, 0.0),
                             weekly_usage.get(key.user_id, 0.0),
-                            balances.get(key.user_id, 0.0),
+                            0.0 if ctx is not None else balances.get(key.user_id, 0.0),
+                            team_extra_available=ctx.available if ctx is not None else 0.0,
                         )
                         if source == "blocked":
                             continue
@@ -765,6 +772,7 @@ class ApiKeyService:
                 # only while both have room. The split is persisted on the row so window
                 # usage sums never count the prepaid-paid portion against the allowance.
                 tier_covered = 0.0
+                team_ctx = None
                 if chargeable_user_id is not None:
                     # Open/reset this user's fixed windows so usage accrues against them.
                     await open_windows(db, chargeable_user_id, now)
@@ -772,6 +780,16 @@ class ApiKeyService:
                     remaining_5h = max(0.0, state.window_5h_limit - state.window_5h_used)
                     remaining_weekly = max(0.0, state.weekly_limit - state.weekly_used)
                     tier_covered = min(credits_used, remaining_5h, remaining_weekly)
+                    # For members, resolve the team extra-credits headroom so the row can be
+                    # stamped and the overflow drained from the team (not personal) balance.
+                    team_ctx = await get_team_extra_context(db, chargeable_user_id, now)
+
+                overflow_preview = credits_used - tier_covered
+                stamped_team_id = (
+                    team_ctx.team_id
+                    if team_ctx is not None and overflow_preview > 0 and team_ctx.available > 0
+                    else None
+                )
 
                 usage = InferenceCall(
                     api_key_id=api_key.id,
@@ -782,6 +800,7 @@ class ApiKeyService:
                     cached_tokens=cached_tokens,
                     image_count=image_count,
                     tier_credits_used=tier_covered,
+                    team_id=stamped_team_id,
                 )
                 usage.used_at = now
                 db.add(usage)
@@ -792,11 +811,32 @@ class ApiKeyService:
                 if chargeable_user_id is not None:
                     overflow = credits_used - tier_covered
                     if overflow > 0:
-                        # Post-hoc billing: the call already happened, so capture what the
-                        # balance can cover rather than nothing if it falls short.
-                        success = await CreditService.use_credits(chargeable_user_id, overflow, allow_partial=True)
-                        if not success:
-                            logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
+                        if team_ctx is not None:
+                            # Members never spend personal credits: drain the team
+                            # balance up to the capped headroom (post-hoc call).
+                            drain = min(overflow, team_ctx.available)
+                            if drain > 0:
+                                async with AsyncSessionLocal() as team_db:
+                                    await TeamCreditService.use_credits(
+                                        team_db, team_ctx.team_id, drain, allow_partial=True
+                                    )
+                                    await TeamCreditService.log(
+                                        team_db, team_ctx.team_id, "extra_credits_usage", drain,
+                                        {"user_id": str(chargeable_user_id)},
+                                    )
+                                    await team_db.commit()
+                            if drain < overflow:
+                                logger.warning(
+                                    f"Team caps left {overflow - drain} credits uncollected for key {key}"
+                                )
+                        else:
+                            # Post-hoc billing: the call already happened, so capture what the
+                            # balance can cover rather than nothing if it falls short.
+                            success = await CreditService.use_credits(
+                                chargeable_user_id, overflow, allow_partial=True
+                            )
+                            if not success:
+                                logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
 
                 return True
 
