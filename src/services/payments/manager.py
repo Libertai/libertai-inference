@@ -24,6 +24,8 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
+from src.models.team import Team
+from src.models.team_credit_transaction import TeamCreditTransaction
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
 from src.services.payments.base import (
@@ -35,6 +37,7 @@ from src.services.payments.base import (
     UnsupportedCapability,
 )
 from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
+from src.services.team_credit import TeamCreditService
 from src.subscription_tiers import (
     DEFAULT_CURRENCY,
     DEFAULT_TIER,
@@ -49,6 +52,7 @@ logger = logging.getLogger(__name__)
 # A top-up credit transaction is keyed by this hash so webhook replays dedup and
 # the pending row created at checkout time can be completed on confirmation.
 TOPUP_EXT_REF_PREFIX = "topup:"
+TEAM_TOPUP_EXT_REF_PREFIX = "topup:team:"
 
 
 def _topup_external_ref(provider_id: str, order_id: str) -> str:
@@ -149,6 +153,46 @@ class PaymentManager:
             await self.db.flush()
         return result
 
+    async def start_team_topup(
+        self,
+        team: Team,
+        admin_email: str | None,
+        redirect_url: str,
+        *,
+        usd_credits: float,
+    ) -> CheckoutResult:
+        """Open a hosted checkout that funds a TEAM balance (USD only in v1).
+
+        Same shape as ``start_topup`` but the pending row lands in
+        ``team_credit_transactions`` — ``_settle_topup`` completes it from there.
+        """
+        if not self.provider.supports(PaymentCapability.topup):
+            raise UnsupportedCapability(f"{self.provider.id} does not support top-ups")
+        if usd_credits <= 0:
+            raise ValueError("Top-up credit amount must be positive")
+        if team.status != "active":
+            raise ValueError("Team is suspended")
+
+        result = await self.provider.create_topup(
+            amount=usd_credits,
+            currency="USD",
+            redirect_url=redirect_url,
+            user_email=admin_email,
+            metadata={"ext_ref": f"{TEAM_TOPUP_EXT_REF_PREFIX}{team.id}"},
+            vat_rate=vat_rate_for_currency("USD"),
+            item_name=f"LibertAI team credits (${usd_credits:g}) — {team.name}",
+        )
+        if result.order_id:
+            await TeamCreditService.add_credits(
+                self.db,
+                team.id,
+                usd_credits,
+                CreditTransactionProvider.revolut,
+                external_reference=_topup_external_ref(self.provider.id, result.order_id),
+                status=CreditTransactionStatus.pending,
+            )
+        return result
+
     async def _settle_topup(self, event: PaymentEvent) -> bool:
         """Complete/fail a pending top-up. Returns True if this event was a top-up."""
         if not event.order_id:
@@ -161,7 +205,7 @@ class PaymentManager:
             )
         ).scalar_one_or_none()
         if tx is None:
-            return False  # not a (locally-recorded) top-up — let the subscription path try
+            return await self._settle_team_topup(event)
 
         if event.type == PaymentEventType.order_completed:
             if tx.status != CreditTransactionStatus.completed:
@@ -169,6 +213,32 @@ class PaymentManager:
                 logger.info(f"Top-up {tx.external_reference} completed ({tx.amount} credits)")
             else:
                 logger.info(f"Top-up {tx.external_reference} already completed, skipping")
+        elif event.type == PaymentEventType.order_failed:
+            tx.status = CreditTransactionStatus.error
+            tx.is_active = False
+            tx.amount_left = 0
+        await self.db.flush()
+        return True
+
+    async def _settle_team_topup(self, event: PaymentEvent) -> bool:
+        if not event.order_id:
+            return False
+        tx = (
+            await self.db.execute(
+                select(TeamCreditTransaction)
+                .where(
+                    TeamCreditTransaction.external_reference
+                    == _topup_external_ref(event.provider, event.order_id)
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if tx is None:
+            return False
+        if event.type == PaymentEventType.order_completed:
+            if tx.status != CreditTransactionStatus.completed:
+                tx.status = CreditTransactionStatus.completed
+                logger.info(f"Team top-up {tx.external_reference} completed ({tx.amount} credits)")
         elif event.type == PaymentEventType.order_failed:
             tx.status = CreditTransactionStatus.error
             tx.is_active = False
