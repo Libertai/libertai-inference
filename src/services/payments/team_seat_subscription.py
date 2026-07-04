@@ -21,7 +21,7 @@ from src.models.team import Team
 from src.models.team_membership import ROLE_ADMIN, TeamMembership
 from src.models.user import User
 from src.services.team_credit import TeamCreditService
-from src.subscription_tiers import DEFAULT_TIER, PAID_TIERS, is_downgrade, is_upgrade
+from src.subscription_tiers import DEFAULT_TIER, PAID_TIERS, get_tier, is_downgrade, is_upgrade
 from src.utils.email import send_email
 from src.utils.logger import setup_logger
 
@@ -41,6 +41,29 @@ def prorated_price(price: float, now: datetime) -> float:
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     remaining_days = days_in_month - now.day + 1
     return round(price * remaining_days / days_in_month, 2)
+
+
+def _resolve_renewal_price(team: Team, target: str, seat: PlanSubscription) -> float:
+    """Seat price for renewal, tolerant of a tier dropped from the team's price map.
+
+    A non-empty ``seat_prices`` that lacks ``target`` would otherwise raise and wedge
+    the whole team's renewal every hour forever. Fall back to the seat's own snapshot
+    (what it last renewed at) or, failing that, the tier list price, and warn."""
+    from src.services.teams import TeamService
+
+    try:
+        return TeamService.seat_price(team, target)
+    except ValueError:
+        fallback = (
+            seat.seat_price_snapshot
+            if seat.seat_price_snapshot is not None
+            else get_tier(target).price_cents / 100
+        )
+        logger.warning(
+            f"Tier {target!r} missing from team {team.id} seat_prices; renewing seat "
+            f"{seat.id} at fallback price {fallback}"
+        )
+        return fallback
 
 
 def _log(db: AsyncSession, sub: PlanSubscription, event_type: str, metadata: dict | None = None) -> None:
@@ -195,8 +218,6 @@ class TeamSeatService:
         partial/priority charging). Returns (processed count, lapse notices) —
         the caller commits, then emails the notices (never inside the txn).
         """
-        from src.services.teams import TeamService
-
         now = now or datetime.now()
         due = (
             await db.execute(
@@ -244,7 +265,7 @@ class TeamSeatService:
                         continue
 
                     total = round(
-                        sum(TeamService.seat_price(team, s.pending_tier or s.tier) for s in renewing), 2
+                        sum(_resolve_renewal_price(team, s.pending_tier or s.tier, s) for s in renewing), 2
                     )
                     if total > 0 and not await TeamCreditService.use_credits(db, team.id, total):
                         for seat in renewing:
@@ -268,7 +289,7 @@ class TeamSeatService:
                             start = period_start
                         seat.tier = target
                         seat.pending_tier = None
-                        seat.seat_price_snapshot = TeamService.seat_price(team, target)
+                        seat.seat_price_snapshot = _resolve_renewal_price(team, target, seat)
                         seat.current_period_start = start
                         _, seat.current_period_end = month_bounds(start)
                         _log(db, seat, "renewed")

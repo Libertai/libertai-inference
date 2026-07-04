@@ -162,6 +162,25 @@ async def test_renewal_shortfall_expires_all_and_notifies(db):
 
 
 @pytest.mark.asyncio
+async def test_renewal_falls_back_to_snapshot_when_tier_dropped(db):
+    # A non-empty price map that no longer sells the seat's tier must not wedge the
+    # renewal — it falls back to the seat's snapshot price and renews normally.
+    team, user, _ = await _team_with_member(db)
+    now = datetime(2026, 6, 16)
+    seat = await TeamSeatService.assign_seat(db, team, user.id, "plus", now=now)
+    assert seat.seat_price_snapshot == 16.0
+    team.seat_prices = {"max": 80.0}  # "plus" dropped, map still non-empty
+    await db.flush()
+
+    balance_before = await TeamCreditService.get_balance(db, team.id)
+    processed, notices = await TeamSeatService.process_renewals(db, now=datetime(2026, 7, 1, 0, 30))
+    assert processed == 1 and notices == []
+    assert seat.status == "active" and seat.tier == "plus"
+    assert seat.seat_price_snapshot == 16.0  # snapshot preserved
+    assert await TeamCreditService.get_balance(db, team.id) == balance_before - 16.0
+
+
+@pytest.mark.asyncio
 async def test_renewal_reanchors_after_long_downtime(db):
     team, user, _ = await _team_with_member(db)
     seat = await TeamSeatService.assign_seat(db, team, user.id, "plus", now=datetime(2026, 6, 16))

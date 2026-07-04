@@ -1,7 +1,8 @@
 import uuid
-from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
+
+from src.interfaces.payments import UtcDatetime
 
 
 class TeamCreateRequest(BaseModel):
@@ -37,7 +38,7 @@ class InviteResponse(BaseModel):
     email: str
     role: str
     status: str
-    expires_at: datetime
+    expires_at: UtcDatetime
 
 
 class AcceptInviteRequest(BaseModel):
@@ -78,7 +79,7 @@ class MemberResponse(BaseModel):
     role: str
     seat_tier: str | None
     seat_status: str | None
-    seat_period_end: datetime | None
+    seat_period_end: UtcDatetime | None
     extra_credits_cap_override: float | None
 
 
@@ -88,20 +89,20 @@ class TeamMeResponse(BaseModel):
     balance: float | None = None  # admins only
     members: list[MemberResponse] | None = None  # admins only
     own_seat_tier: str | None = None
-    own_seat_period_end: datetime | None = None
+    own_seat_period_end: UtcDatetime | None = None
 
 
 class LedgerChargeResponse(BaseModel):
     entry_type: str
     amount: float
     metadata: dict | None
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class LedgerTopupResponse(BaseModel):
     amount: float
     status: str
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class LedgerResponse(BaseModel):

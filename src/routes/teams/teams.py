@@ -348,8 +348,13 @@ async def set_team_caps(
 ) -> TeamResponse:
     async with AsyncSessionLocal() as db:
         team, _ = await _load_team_as(db, team_id, user, admin=True)
-        team.extra_credits_monthly_cap = body.extra_credits_monthly_cap
-        team.extra_credits_member_default_cap = body.extra_credits_member_default_cap
+        # Only touch fields the caller actually sent; an omitted field must not silently
+        # clear a cap (explicit null still clears — that's how you disable one).
+        data = body.model_dump(exclude_unset=True)
+        if "extra_credits_monthly_cap" in data:
+            team.extra_credits_monthly_cap = data["extra_credits_monthly_cap"]
+        if "extra_credits_member_default_cap" in data:
+            team.extra_credits_member_default_cap = data["extra_credits_member_default_cap"]
         await db.flush()
         await db.commit()
         return _team_response(team)

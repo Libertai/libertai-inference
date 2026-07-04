@@ -17,6 +17,7 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.team import Team
@@ -26,7 +27,7 @@ from src.models.team_membership import ROLE_MEMBER, TeamMembership
 from src.models.user import User
 from src.services.api_key import ApiKeyService
 from src.services.auth_tokens import create_access_token
-from src.services.entitlement import compute_source, get_team_extra_context
+from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, compute_source, get_team_extra_context
 from src.services.payments.registry import payment_registry
 from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER
 from src.services.team_credit import TeamCreditService
@@ -242,6 +243,92 @@ async def test_register_inference_call_blocked_caps_leaves_team_balance():
                 await s.execute(select(CreditTransaction).where(CreditTransaction.user_id == user_id))
             ).scalar_one()
             assert personal.amount_left == pytest.approx(5.0)
+    finally:
+        await _cleanup_member(team_id, user_id)
+
+
+async def test_register_inference_call_partial_headroom_ledger_matches_drain():
+    # Balance 1.0 binds below the caps (5.0). A 3.5 call is 0.5 tier-covered, 3.0 overflow,
+    # but only 1.0 can be drained -> the ledger records the 1.0 actually deducted, not 3.0.
+    team_id, user_id, key = await _committed_member(member_cap=5.0, team_cap=5.0, balance=1.0)
+    try:
+        ok = await ApiKeyService.register_inference_call(key, credits_used=3.5, model_name="m")
+        assert ok is True
+        async with AsyncSessionLocal() as s:
+            assert await TeamCreditService.get_balance(s, team_id) == pytest.approx(0.0)
+            entry = (
+                await s.execute(
+                    select(TeamLedgerEntry).where(
+                        TeamLedgerEntry.team_id == team_id,
+                        TeamLedgerEntry.entry_type == "extra_credits_usage",
+                    )
+                )
+            ).scalar_one()
+            assert entry.amount == pytest.approx(1.0)
+    finally:
+        await _cleanup_member(team_id, user_id)
+
+
+# --- batched gateway path: seat member with exhausted windows (spec-mandated) ---
+
+
+async def _committed_member_exhausted(*, member_cap, team_cap, balance):
+    """Committed member with an active PLUS seat, both entitlement windows exhausted,
+    and zero personal balance. Returns (team_id, user_id, key_str)."""
+    now = datetime.now()
+    async with AsyncSessionLocal() as db:
+        team = await TeamService.create_team(
+            db, "Acme", seat_prices={"plus": 16.0},
+            extra_credits_monthly_cap=team_cap, extra_credits_member_default_cap=member_cap,
+        )
+        user = User(email=f"{uuid.uuid4()}@test.dev", email_verified=True)
+        db.add(user)
+        await db.flush()
+        db.add(TeamMembership(team_id=team.id, user_id=user.id, role=ROLE_MEMBER))
+        db.add(
+            PlanSubscription(
+                user_id=user.id, tier="plus", provider=TEAM_CREDITS_PROVIDER, status="active",
+                team_id=team.id, seat_price_snapshot=16.0,
+                current_period_start=now, current_period_end=now + timedelta(days=20),
+            )
+        )
+        key = ApiKeyDB(key=f"k-{uuid.uuid4()}", user_id=user.id, name="k", type=ApiKeyType.api)
+        db.add(key)
+        await db.flush()
+        # Open both windows now and fill them past the plus limits (7 / 30) with one
+        # tier-covered call so the gateway must fall through to the team path.
+        for kind, dur in ((WINDOW_5H, timedelta(hours=5)), (WINDOW_WEEKLY, timedelta(days=7))):
+            db.add(
+                EntitlementWindow(
+                    user_id=user.id, kind=kind,
+                    started_at=now - timedelta(minutes=1), expires_at=now + dur,
+                )
+            )
+        call = InferenceCall(api_key_id=key.id, credits_used=30.0, model_name="m", tier_credits_used=30.0)
+        call.used_at = now
+        db.add(call)
+        if balance:
+            await TeamCreditService.add_credits(db, team.id, balance, CreditTransactionProvider.revolut)
+        await db.commit()
+        return team.id, user.id, key.key
+
+
+async def test_gateway_includes_seat_member_with_team_headroom():
+    team_id, user_id, key = await _committed_member_exhausted(
+        member_cap=100.0, team_cap=100.0, balance=100.0
+    )
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup_member(team_id, user_id)
+
+
+async def test_gateway_excludes_seat_member_with_zero_caps():
+    team_id, user_id, key = await _committed_member_exhausted(
+        member_cap=None, team_cap=None, balance=100.0
+    )
+    try:
+        assert key not in await ApiKeyService.get_admin_all_api_keys()
     finally:
         await _cleanup_member(team_id, user_id)
 

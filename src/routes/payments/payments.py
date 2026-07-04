@@ -25,6 +25,7 @@ from src.interfaces.payments import (
 )
 from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import PlanSubscription
+from src.models.team import Team
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
@@ -81,6 +82,24 @@ async def _user_wallet_chains(db, user_id) -> list[str]:
 # Rails are split by account type: wallet users pay on-chain, email users pay by card.
 _WALLET_MUST_PAY_ONCHAIN = "Wallet accounts pay on-chain — use the credits provider"
 _CREDITS_REQUIRE_WALLET = "Credits subscriptions require a connected wallet"
+
+
+async def _reject_if_team_seat(db, user_id) -> None:
+    """Team seats are managed by the team, not the personal payment surface. Reject
+    before any provider/manager call so a seat holder can't mint an orphan sub."""
+    sub = (
+        await db.execute(
+            select(PlanSubscription).where(
+                PlanSubscription.user_id == user_id,
+                PlanSubscription.status.in_(["pending", "active", "overdue"]),
+            )
+        )
+    ).scalar_one_or_none()
+    if sub is not None and sub.provider == TEAM_CREDITS_PROVIDER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This subscription is managed by your team",
+        )
 
 
 def _require_provider(provider_id: str):
@@ -214,6 +233,7 @@ async def subscribe(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            await _reject_if_team_seat(db, user.id)
             if not await _user_wallet_chains(db, user.id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
             try:
@@ -225,6 +245,7 @@ async def subscribe(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        await _reject_if_team_seat(db, user.id)
         if await _user_wallet_chains(db, user.id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_WALLET_MUST_PAY_ONCHAIN)
         manager = PaymentManager(provider, db)
@@ -252,6 +273,7 @@ async def upgrade(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            await _reject_if_team_seat(db, user.id)
             if not await _user_wallet_chains(db, user.id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
             try:
@@ -263,6 +285,7 @@ async def upgrade(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        await _reject_if_team_seat(db, user.id)
         if await _user_wallet_chains(db, user.id):
             # A wallet user may still hold a fiat subscription opened before they
             # connected a wallet — let them upgrade it on its original provider.
@@ -421,6 +444,11 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
             )
         ).scalars().first()
         allowance = await get_allowance_state(db, user.id)
+        team_name = None
+        if sub is not None and sub.provider == TEAM_CREDITS_PROVIDER and sub.team_id is not None:
+            team_name = (
+                await db.execute(select(Team.name).where(Team.id == sub.team_id))
+            ).scalar_one_or_none()
 
     has_sub = sub is not None
     return SubscriptionResponse(
@@ -433,6 +461,7 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         pending_tier=sub.pending_tier if sub else None,
         is_trial=sub.is_trial if sub else False,
         is_team_seat=(sub.provider == TEAM_CREDITS_PROVIDER) if sub else False,
+        team_name=team_name,
         allowed=allowance.allowed,
         source=allowance.source,
         window_5h_used=allowance.window_5h_used,

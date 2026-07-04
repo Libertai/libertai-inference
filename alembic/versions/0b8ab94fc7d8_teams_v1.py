@@ -96,16 +96,25 @@ def upgrade() -> None:
         "inference_calls",
         sa.Column("team_id", sa.UUID(), sa.ForeignKey("teams.id", ondelete="SET NULL"), nullable=True),
     )
-    op.create_index(
-        "ix_inference_calls_team_id_used_at",
-        "inference_calls",
-        ["team_id", "used_at"],
-        postgresql_where=sa.text("team_id IS NOT NULL"),
-    )
+    # inference_calls is the hottest table — build this index CONCURRENTLY (outside the
+    # migration's transaction) so it never takes a write-blocking lock in production.
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_inference_calls_team_id_used_at",
+            "inference_calls",
+            ["team_id", "used_at"],
+            postgresql_where=sa.text("team_id IS NOT NULL"),
+            postgresql_concurrently=True,
+        )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_inference_calls_team_id_used_at", table_name="inference_calls")
+    with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_inference_calls_team_id_used_at",
+            table_name="inference_calls",
+            postgresql_concurrently=True,
+        )
     op.drop_column("inference_calls", "team_id")
     op.drop_column("plan_subscriptions", "seat_price_snapshot")
     op.drop_column("plan_subscriptions", "team_id")

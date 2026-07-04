@@ -804,39 +804,41 @@ class ApiKeyService:
                 )
                 usage.used_at = now
                 db.add(usage)
+
+                # Members never spend personal credits: drain the team balance up to the
+                # capped headroom. This runs in the SAME transaction as the usage-row insert
+                # so a stamped call and its debit commit atomically (a crash between them
+                # can't leave a stamped call with no debit).
+                overflow = credits_used - tier_covered if chargeable_user_id is not None else 0.0
+                if chargeable_user_id is not None and team_ctx is not None and overflow > 0:
+                    drain = min(overflow, team_ctx.available)
+                    if drain > 0:
+                        # Log the amount actually deducted (bounded by the live balance),
+                        # not the intended drain, so the ledger never overstates.
+                        balance_before = await TeamCreditService.get_balance(db, team_ctx.team_id)
+                        await TeamCreditService.use_credits(
+                            db, team_ctx.team_id, drain, allow_partial=True
+                        )
+                        await TeamCreditService.log(
+                            db, team_ctx.team_id, "extra_credits_usage", min(drain, balance_before),
+                            {"user_id": str(chargeable_user_id)},
+                        )
+                    if drain < overflow:
+                        logger.warning(
+                            f"Team caps left {overflow - drain} credits uncollected for key {key}"
+                        )
+
                 await db.commit()
 
-                # Deduct the overflow from the user's prepaid balance (skip for liberclaw,
-                # x402 and the shared free chat key).
-                if chargeable_user_id is not None:
-                    overflow = credits_used - tier_covered
-                    if overflow > 0:
-                        if team_ctx is not None:
-                            # Members never spend personal credits: drain the team
-                            # balance up to the capped headroom (post-hoc call).
-                            drain = min(overflow, team_ctx.available)
-                            if drain > 0:
-                                async with AsyncSessionLocal() as team_db:
-                                    await TeamCreditService.use_credits(
-                                        team_db, team_ctx.team_id, drain, allow_partial=True
-                                    )
-                                    await TeamCreditService.log(
-                                        team_db, team_ctx.team_id, "extra_credits_usage", drain,
-                                        {"user_id": str(chargeable_user_id)},
-                                    )
-                                    await team_db.commit()
-                            if drain < overflow:
-                                logger.warning(
-                                    f"Team caps left {overflow - drain} credits uncollected for key {key}"
-                                )
-                        else:
-                            # Post-hoc billing: the call already happened, so capture what the
-                            # balance can cover rather than nothing if it falls short.
-                            success = await CreditService.use_credits(
-                                chargeable_user_id, overflow, allow_partial=True
-                            )
-                            if not success:
-                                logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
+                # Personal (non-member) overflow stays a post-hoc, separate-session debit:
+                # the call already happened, so capture what the balance can cover rather than
+                # nothing if it falls short.
+                if chargeable_user_id is not None and team_ctx is None and overflow > 0:
+                    success = await CreditService.use_credits(
+                        chargeable_user_id, overflow, allow_partial=True
+                    )
+                    if not success:
+                        logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
 
                 return True
 

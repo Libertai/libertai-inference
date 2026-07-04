@@ -14,12 +14,14 @@ from src.interfaces.teams import (
     TeamUpdateRequest,
 )
 from src.models.base import AsyncSessionLocal
+from src.models.plan_subscription import PlanSubscription
 from src.models.team import Team
 from src.routes.teams import router
 from src.routes.teams.teams import _invite_response, _team_response, send_invite_email
 from src.services.auth import verify_admin_token
-from src.services.payments.team_seat_subscription import TeamSeatService
+from src.services.payments.team_seat_subscription import TEAM_CREDITS_PROVIDER, TeamSeatService
 from src.services.teams import TeamService
+from src.subscription_tiers import PAID_TIERS
 
 
 @router.post(
@@ -56,6 +58,30 @@ async def staff_update_team(team_id: uuid.UUID, body: TeamUpdateRequest) -> Team
                 TeamService._validate_seat_prices(body.seat_prices)
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            # A non-empty price map that drops a tier still in use would wedge that
+            # seat's renewal — reject it up front so pricing stays a superset of live seats.
+            if body.seat_prices:
+                active_seats = (
+                    await db.execute(
+                        select(PlanSubscription).where(
+                            PlanSubscription.team_id == team_id,
+                            PlanSubscription.provider == TEAM_CREDITS_PROVIDER,
+                            PlanSubscription.status == "active",
+                        )
+                    )
+                ).scalars().all()
+                in_use = {s.tier for s in active_seats} | {
+                    s.pending_tier for s in active_seats if s.pending_tier
+                }
+                orphaned = sorted(t for t in in_use if t in PAID_TIERS and t not in body.seat_prices)
+                if orphaned:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            "Cannot drop tiers still used by active seats: "
+                            f"{', '.join(orphaned)}"
+                        ),
+                    )
             team.seat_prices = body.seat_prices
         if body.extra_credits_monthly_cap is not None:
             team.extra_credits_monthly_cap = body.extra_credits_monthly_cap

@@ -187,6 +187,34 @@ async def test_staff_update_prices_and_suspend(async_client, monkeypatch):
         await _cleanup(team.id, admin.id, member.id)
 
 
+async def test_staff_update_prices_rejects_orphaning_active_seat(async_client, monkeypatch):
+    headers = _staff_headers(monkeypatch)
+    team, admin = await _seed_team(seat_prices={"plus": 16.0, "max": 80.0})
+    member = await _add_member(team.id)
+    async with AsyncSessionLocal() as db:
+        db.add(
+            PlanSubscription(
+                user_id=member.id, tier="plus", provider=TEAM_CREDITS_PROVIDER, status="active",
+                team_id=team.id, seat_price_snapshot=16.0,
+                current_period_start=datetime.now(), current_period_end=datetime.now() + timedelta(days=15),
+            )
+        )
+        await db.commit()
+    try:
+        # New map drops "plus", still used by an active seat -> 400 naming the tier.
+        resp = await async_client.patch(
+            f"/teams/admin/{team.id}", json={"seat_prices": {"max": 90.0}}, headers=headers
+        )
+        assert resp.status_code == 400, resp.text
+        assert "plus" in resp.json()["detail"]
+        # Prices untouched after the rejection.
+        async with AsyncSessionLocal() as db:
+            t = (await db.execute(select(Team).where(Team.id == team.id))).scalar_one()
+            assert t.seat_prices == {"plus": 16.0, "max": 80.0}
+    finally:
+        await _cleanup(team.id, admin.id, member.id)
+
+
 async def test_staff_update_missing_team_404(async_client, monkeypatch):
     headers = _staff_headers(monkeypatch)
     resp = await async_client.patch(f"/teams/admin/{uuid.uuid4()}", json={"name": "X"}, headers=headers)
@@ -344,6 +372,77 @@ async def test_admin_caps_endpoints(async_client, monkeypatch):
                 await db.execute(select(TeamMembership).where(TeamMembership.user_id == member.id))
             ).scalar_one()
             assert m.extra_credits_cap_override == 5.0
+    finally:
+        await _cleanup(team.id, admin.id, member.id)
+
+
+async def test_caps_patch_leaves_omitted_field_unchanged(async_client, monkeypatch):
+    team, admin = await _seed_team(extra_credits_monthly_cap=200.0, extra_credits_member_default_cap=20.0)
+    try:
+        # PATCH only the monthly cap; the omitted member default must stay at 20.0.
+        resp = await async_client.patch(
+            f"/teams/{team.id}/caps", json={"extra_credits_monthly_cap": 300.0}, headers=_auth(admin.id)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["extra_credits_monthly_cap"] == 300.0
+        assert resp.json()["extra_credits_member_default_cap"] == 20.0
+        async with AsyncSessionLocal() as db:
+            t = (await db.execute(select(Team).where(Team.id == team.id))).scalar_one()
+            assert t.extra_credits_member_default_cap == 20.0
+    finally:
+        await _cleanup(team.id, admin.id)
+
+
+async def test_seat_holder_blocked_from_subscribe_and_upgrade(async_client, monkeypatch):
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    team, admin = await _seed_team()
+    member = await _add_member(team.id)
+    async with AsyncSessionLocal() as db:
+        db.add(
+            PlanSubscription(
+                user_id=member.id, tier="plus", provider=TEAM_CREDITS_PROVIDER, status="active",
+                team_id=team.id, seat_price_snapshot=16.0,
+                current_period_start=datetime.now(), current_period_end=datetime.now() + timedelta(days=15),
+            )
+        )
+        await db.commit()
+    h = _auth(member.id)
+    try:
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "revolut", "tier": "max"}, headers=h
+        )
+        assert resp.status_code == 400, resp.text
+        assert "team" in resp.json()["detail"].lower()
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "revolut", "tier": "max"}, headers=h
+        )
+        assert resp.status_code == 400, resp.text
+        assert "team" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(team.id, admin.id, member.id)
+
+
+async def test_seat_holder_subscription_shows_team_name(async_client, monkeypatch):
+    team, admin = await _seed_team()
+    member = await _add_member(team.id)
+    async with AsyncSessionLocal() as db:
+        db.add(
+            PlanSubscription(
+                user_id=member.id, tier="plus", provider=TEAM_CREDITS_PROVIDER, status="active",
+                team_id=team.id, seat_price_snapshot=16.0,
+                current_period_start=datetime.now(), current_period_end=datetime.now() + timedelta(days=15),
+            )
+        )
+        await db.commit()
+    try:
+        resp = await async_client.get("/payments/subscription", headers=_auth(member.id))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["is_team_seat"] is True
+        assert body["team_name"] == team.name
     finally:
         await _cleanup(team.id, admin.id, member.id)
 
