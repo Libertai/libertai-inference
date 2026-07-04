@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, ForeignKey, Index, String, func, text
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Float, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
@@ -38,6 +38,13 @@ class PlanSubscription(Base):
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pending_tier: Mapped[str | None] = mapped_column(String, nullable=True)
     is_trial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Teams: which team pays this seat (null for personal subs). Kept after the
+    # member leaves as audit history. seat_price_snapshot is the negotiated USD
+    # price actually charged for the current period (team.seat_prices is mutable).
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, ForeignKey("teams.id", ondelete="SET NULL"), nullable=True
+    )
+    seat_price_snapshot: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.current_timestamp(), onupdate=func.current_timestamp()
@@ -73,6 +80,8 @@ class PlanSubscription(Base):
         cancel_at_period_end: bool = False,
         pending_tier: str | None = None,
         is_trial: bool = False,
+        team_id: uuid.UUID | None = None,
+        seat_price_snapshot: float | None = None,
     ):
         self.user_id = user_id
         self.tier = tier
@@ -86,3 +95,5 @@ class PlanSubscription(Base):
         self.cancel_at_period_end = cancel_at_period_end
         self.pending_tier = pending_tier
         self.is_trial = is_trial
+        self.team_id = team_id
+        self.seat_price_snapshot = seat_price_snapshot
