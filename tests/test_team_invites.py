@@ -79,6 +79,27 @@ async def test_accept_blocked_if_already_in_a_team(db):
 
 
 @pytest.mark.asyncio
+async def test_accept_duplicate_membership_race_raises_value_error(db, monkeypatch):
+    """If the get_membership check is raced past, the unique constraint surfaces as
+    ValueError (not a raw IntegrityError 500)."""
+    from src.models.team_membership import TeamMembership
+
+    team, user = await _team_and_user(db)
+    _, token = await TeamService.create_invite(db, team.id, user.email, ROLE_MEMBER, "staff")
+    # Pre-existing membership simulates a concurrent accept that already committed.
+    db.add(TeamMembership(team_id=team.id, user_id=user.id, role=ROLE_MEMBER))
+    await db.flush()
+    # Make the pre-insert guard miss it, forcing the flush to trip the unique constraint.
+    monkeypatch.setattr(TeamService, "get_membership", staticmethod(lambda db, user_id: _none()))
+    with pytest.raises(ValueError, match="already in a team"):
+        await TeamService.accept_invite(db, token, user)
+
+
+async def _none():
+    return None
+
+
+@pytest.mark.asyncio
 async def test_expired_invite_rejected(db):
     team, user = await _team_and_user(db)
     invite, token = await TeamService.create_invite(db, team.id, user.email, ROLE_MEMBER, "staff")

@@ -51,6 +51,9 @@ async def staff_update_team(team_id: uuid.UUID, body: TeamUpdateRequest) -> Team
         team = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
         if team is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        # Only touch fields the caller actually sent; an omitted field leaves the value
+        # unchanged, while an explicit null clears a cap (same semantics as /caps).
+        data = body.model_dump(exclude_unset=True)
         if body.name is not None:
             team.name = body.name
         if body.seat_prices is not None:
@@ -83,10 +86,10 @@ async def staff_update_team(team_id: uuid.UUID, body: TeamUpdateRequest) -> Team
                         ),
                     )
             team.seat_prices = body.seat_prices
-        if body.extra_credits_monthly_cap is not None:
-            team.extra_credits_monthly_cap = body.extra_credits_monthly_cap
-        if body.extra_credits_member_default_cap is not None:
-            team.extra_credits_member_default_cap = body.extra_credits_member_default_cap
+        if "extra_credits_monthly_cap" in data:
+            team.extra_credits_monthly_cap = data["extra_credits_monthly_cap"]
+        if "extra_credits_member_default_cap" in data:
+            team.extra_credits_member_default_cap = data["extra_credits_member_default_cap"]
         await db.flush()
         await db.commit()
         return _team_response(team)

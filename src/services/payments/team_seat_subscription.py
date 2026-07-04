@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.plan_subscription import PlanSubscription
@@ -134,7 +135,12 @@ class TeamSeatService:
             seat_price_snapshot=price,
         )
         db.add(seat)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Concurrent assign/personal-subscribe slipped past the checks above; the
+            # partial unique index (one live sub per user) is the source of truth.
+            raise ValueError("Member already has an active subscription or seat")
         _log(db, seat, "activated", {"team_id": str(team.id), "prorated_charge": charge})
         return seat
 
@@ -165,13 +171,26 @@ class TeamSeatService:
                     db, team.id, "seat_charge_prorated", charge,
                     {"user_id": str(user_id), "tier": new_tier, "upgrade_from": seat.tier},
                 )
-            _log(db, seat, "upgraded", {"from": seat.tier, "to": new_tier, "prorated_charge": charge})
+            # A tier change expresses intent to keep the seat: clear any prior cancel
+            # so an admin who cancelled then upgraded doesn't still lose the seat at
+            # month end (mirrors personal request_downgrade paid->paid semantics).
+            reactivated = seat.cancel_at_period_end
+            _log(
+                db,
+                seat,
+                "upgraded",
+                {"from": seat.tier, "to": new_tier, "prorated_charge": charge, "reactivated": reactivated},
+            )
             seat.tier = new_tier
             seat.pending_tier = None
             seat.seat_price_snapshot = new_price
+            seat.cancel_at_period_end = False
         elif is_downgrade(seat.tier, new_tier):
+            # Downgrade to a still-paid tier also keeps the seat alive — supersede any cancel.
+            reactivated = seat.cancel_at_period_end
             seat.pending_tier = new_tier
-            _log(db, seat, "downgrade_requested", {"new_tier": new_tier})
+            seat.cancel_at_period_end = False
+            _log(db, seat, "downgrade_requested", {"new_tier": new_tier, "reactivated": reactivated})
         else:
             raise ValueError("Seat is already on this tier")
         await db.flush()
@@ -191,7 +210,7 @@ class TeamSeatService:
     async def suspend_team(db: AsyncSession, team: Team) -> None:
         """Suspension is mechanical: seats are expired NOW, so entitlement (which
         reads active subs only) stops granting the tier without any team join."""
-        team.status = "suspended"
+        # Lock seats before touching the team row — process_renewals locks in the same order (seats -> team).
         seats = (
             await db.execute(
                 select(PlanSubscription)
@@ -203,6 +222,7 @@ class TeamSeatService:
                 .with_for_update()
             )
         ).scalars().all()
+        team.status = "suspended"
         for seat in seats:
             seat.status = "expired"
             _log(db, seat, "team_suspended")

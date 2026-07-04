@@ -214,9 +214,16 @@ class PaymentManager:
             else:
                 logger.info(f"Top-up {tx.external_reference} already completed, skipping")
         elif event.type == PaymentEventType.order_failed:
-            tx.status = CreditTransactionStatus.error
-            tx.is_active = False
-            tx.amount_left = 0
+            # An out-of-order failed event after completion must not erase a spendable
+            # balance — only fail a row that hasn't already been credited.
+            if tx.status != CreditTransactionStatus.completed:
+                tx.status = CreditTransactionStatus.error
+                tx.is_active = False
+                tx.amount_left = 0
+            else:
+                logger.warning(
+                    f"Ignoring out-of-order order_failed for completed top-up {tx.external_reference}"
+                )
         await self.db.flush()
         return True
 
@@ -240,9 +247,16 @@ class PaymentManager:
                 tx.status = CreditTransactionStatus.completed
                 logger.info(f"Team top-up {tx.external_reference} completed ({tx.amount} credits)")
         elif event.type == PaymentEventType.order_failed:
-            tx.status = CreditTransactionStatus.error
-            tx.is_active = False
-            tx.amount_left = 0
+            # An out-of-order failed event after completion must not erase a spendable
+            # balance — only fail a row that hasn't already been credited.
+            if tx.status != CreditTransactionStatus.completed:
+                tx.status = CreditTransactionStatus.error
+                tx.is_active = False
+                tx.amount_left = 0
+            else:
+                logger.warning(
+                    f"Ignoring out-of-order order_failed for completed top-up {tx.external_reference}"
+                )
         await self.db.flush()
         return True
 

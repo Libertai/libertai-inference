@@ -182,6 +182,7 @@ async def renew_team_seats() -> int:
     async with AsyncSessionLocal() as db:
         count, notices = await TeamSeatService.process_renewals(db)
         await db.commit()
+    # Best-effort: a crash between commit and send loses the notice (seats stay expired; admins see it in the console).
     await send_lapse_emails(notices)
     return count
 

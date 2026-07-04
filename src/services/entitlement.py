@@ -148,6 +148,7 @@ async def get_team_extra_context(
     member_spent = await _team_extra_spend(db, team.id, month_start, user_id=user_id)
     team_spent = await _team_extra_spend(db, team.id, month_start)
     balance = await TeamCreditService.get_balance(db, team.id)
+    # Caps are best-effort under concurrency: spend is read without locks, so N members racing can collectively overshoot by up to (N-1) calls' overflow, bounded by the team balance.
     available = max(0.0, min(member_cap - member_spent, team_cap - team_spent, balance))
     return TeamExtraContext(team_id=team.id, available=available)
 

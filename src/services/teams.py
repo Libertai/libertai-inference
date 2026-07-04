@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
@@ -248,5 +249,10 @@ class TeamService:
         invite.status = "accepted"
         membership = TeamMembership(team_id=invite.team_id, user_id=user.id, role=invite.role)
         db.add(membership)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Concurrent accept slipped past the get_membership check above; the unique
+            # constraint on user membership is the source of truth.
+            raise ValueError("You are already in a team")
         return membership

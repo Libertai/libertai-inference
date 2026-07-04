@@ -8,15 +8,15 @@ from src.interfaces.payments import UtcDatetime
 class TeamCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     seat_prices: dict[str, float] = {}
-    extra_credits_monthly_cap: float | None = None
-    extra_credits_member_default_cap: float | None = None
+    extra_credits_monthly_cap: float | None = Field(default=None, ge=0)
+    extra_credits_member_default_cap: float | None = Field(default=None, ge=0)
 
 
 class TeamUpdateRequest(BaseModel):
     name: str | None = None
     seat_prices: dict[str, float] | None = None
-    extra_credits_monthly_cap: float | None = None
-    extra_credits_member_default_cap: float | None = None
+    extra_credits_monthly_cap: float | None = Field(default=None, ge=0)
+    extra_credits_member_default_cap: float | None = Field(default=None, ge=0)
 
 
 class TeamResponse(BaseModel):
@@ -59,12 +59,12 @@ class SeatChangeRequest(BaseModel):
 
 
 class CapsRequest(BaseModel):
-    extra_credits_monthly_cap: float | None = None
-    extra_credits_member_default_cap: float | None = None
+    extra_credits_monthly_cap: float | None = Field(default=None, ge=0)
+    extra_credits_member_default_cap: float | None = Field(default=None, ge=0)
 
 
 class MemberCapRequest(BaseModel):
-    extra_credits_cap_override: float | None = None
+    extra_credits_cap_override: float | None = Field(default=None, ge=0)
 
 
 class TeamTopupRequest(BaseModel):

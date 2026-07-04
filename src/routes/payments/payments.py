@@ -102,6 +102,16 @@ async def _reject_if_team_seat(db, user_id) -> None:
         )
 
 
+async def _reject_if_team_personal_sub(db, user_id) -> None:
+    """Team members hold seats managed by their team, not personal subscriptions.
+    Reject before any service/provider call so a member can't mint a personal sub."""
+    if await TeamService.get_membership(db, user_id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Team members cannot hold personal subscriptions — seats are managed by your team",
+        )
+
+
 def _require_provider(provider_id: str):
     try:
         provider = payment_registry.get(provider_id)
@@ -233,6 +243,7 @@ async def subscribe(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            await _reject_if_team_personal_sub(db, user.id)
             await _reject_if_team_seat(db, user.id)
             if not await _user_wallet_chains(db, user.id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
@@ -245,6 +256,7 @@ async def subscribe(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        await _reject_if_team_personal_sub(db, user.id)
         await _reject_if_team_seat(db, user.id)
         if await _user_wallet_chains(db, user.id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_WALLET_MUST_PAY_ONCHAIN)
@@ -273,6 +285,7 @@ async def upgrade(
 ) -> CheckoutResponse:
     if body.provider == "credits":
         async with AsyncSessionLocal() as db:
+            await _reject_if_team_personal_sub(db, user.id)
             await _reject_if_team_seat(db, user.id)
             if not await _user_wallet_chains(db, user.id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_CREDITS_REQUIRE_WALLET)
@@ -285,6 +298,7 @@ async def upgrade(
     provider = _require_provider(body.provider)
     currency = resolve_currency(request)
     async with AsyncSessionLocal() as db:
+        await _reject_if_team_personal_sub(db, user.id)
         await _reject_if_team_seat(db, user.id)
         if await _user_wallet_chains(db, user.id):
             # A wallet user may still hold a fiat subscription opened before they

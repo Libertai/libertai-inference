@@ -97,6 +97,56 @@ async def test_downgrade_sets_pending_tier(db):
 
 
 @pytest.mark.asyncio
+async def test_change_tier_reactivates_cancelled_seat(db):
+    """Cancel then upgrade must clear cancel_at_period_end so the seat renews, not lapses."""
+    team, user, _ = await _team_with_member(db)
+    now = datetime(2026, 6, 16)
+    await TeamSeatService.assign_seat(db, team, user.id, "plus", now=now)
+    await TeamSeatService.cancel_seat(db, team, user.id)
+    seat = await TeamSeatService.change_tier(db, team, user.id, "max", now=now)
+    assert seat.cancel_at_period_end is False
+    assert seat.pending_tier is None and seat.tier == "max"
+
+    # Next renewal renews the seat (it is not expired).
+    await TeamSeatService.process_renewals(db, now=datetime(2026, 7, 1, 0, 30))
+    assert seat.status == "active"
+    assert seat.current_period_end == datetime(2026, 8, 1)
+
+
+@pytest.mark.asyncio
+async def test_change_tier_downgrade_reactivates_cancelled_seat(db):
+    """Cancel then downgrade-to-paid-tier also clears the cancel flag."""
+    team, user, _ = await _team_with_member(db)
+    now = datetime(2026, 6, 16)
+    await TeamSeatService.assign_seat(db, team, user.id, "max", now=now)
+    await TeamSeatService.cancel_seat(db, team, user.id)
+    seat = await TeamSeatService.change_tier(db, team, user.id, "plus", now=now)
+    assert seat.cancel_at_period_end is False
+    assert seat.tier == "max" and seat.pending_tier == "plus"
+
+    await TeamSeatService.process_renewals(db, now=datetime(2026, 7, 1, 0, 30))
+    assert seat.status == "active" and seat.tier == "plus"
+
+
+@pytest.mark.asyncio
+async def test_assign_seat_duplicate_raises_value_error(db):
+    """A personal active sub on the member surfaces as ValueError, not IntegrityError."""
+    from src.services.payments.credit_subscription import CREDITS_PROVIDER
+
+    team, user, _ = await _team_with_member(db)
+    # Give the member a live personal sub so the seat insert trips the one-live-sub index.
+    db.add(
+        PlanSubscription(
+            user_id=user.id, tier="plus", provider=CREDITS_PROVIDER, status="active", currency="USD",
+            current_period_start=datetime(2026, 6, 1), current_period_end=datetime(2026, 7, 1),
+        )
+    )
+    await db.flush()
+    with pytest.raises(ValueError, match="already has an active subscription or seat"):
+        await TeamSeatService.assign_seat(db, team, user.id, "plus", now=datetime(2026, 6, 16))
+
+
+@pytest.mark.asyncio
 async def test_renewal_aggregate_debit_and_roll(db):
     team, user, admin = await _team_with_member(db)
     now = datetime(2026, 6, 16)

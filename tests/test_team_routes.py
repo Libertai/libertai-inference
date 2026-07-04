@@ -425,6 +425,59 @@ async def test_seat_holder_blocked_from_subscribe_and_upgrade(async_client, monk
         await _cleanup(team.id, admin.id, member.id)
 
 
+async def test_seatless_member_blocked_from_subscribe_and_upgrade(async_client, monkeypatch):
+    """A team member without a seat still cannot open a personal subscription."""
+    monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "USD")
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+    team, admin = await _seed_team()
+    member = await _add_member(team.id)  # member, no seat assigned
+    h = _auth(member.id)
+    try:
+        resp = await async_client.post(
+            "/payments/subscribe", json={"provider": "revolut", "tier": "max"}, headers=h
+        )
+        assert resp.status_code == 400, resp.text
+        assert "team" in resp.json()["detail"].lower()
+        resp = await async_client.post(
+            "/payments/upgrade", json={"provider": "revolut", "tier": "max"}, headers=h
+        )
+        assert resp.status_code == 400, resp.text
+        assert "team" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(team.id, admin.id, member.id)
+
+
+async def test_staff_update_caps_null_clears_omitted_leaves(async_client, monkeypatch):
+    """staff PATCH: explicit null clears a cap; omitting caps leaves them unchanged."""
+    headers = _staff_headers(monkeypatch)
+    team, admin = await _seed_team(
+        extra_credits_monthly_cap=100.0, extra_credits_member_default_cap=20.0
+    )
+    try:
+        # Explicit null clears the monthly cap; omitted member cap is left untouched.
+        resp = await async_client.patch(
+            f"/teams/admin/{team.id}", json={"extra_credits_monthly_cap": None}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        async with AsyncSessionLocal() as db:
+            t = (await db.execute(select(Team).where(Team.id == team.id))).scalar_one()
+            assert t.extra_credits_monthly_cap is None
+            assert t.extra_credits_member_default_cap == 20.0
+        # PATCH with neither cap present leaves both unchanged.
+        resp = await async_client.patch(
+            f"/teams/admin/{team.id}", json={"name": "Renamed"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        async with AsyncSessionLocal() as db:
+            t = (await db.execute(select(Team).where(Team.id == team.id))).scalar_one()
+            assert t.extra_credits_monthly_cap is None
+            assert t.extra_credits_member_default_cap == 20.0
+    finally:
+        await _cleanup(team.id, admin.id)
+
+
 async def test_seat_holder_subscription_shows_team_name(async_client, monkeypatch):
     team, admin = await _seed_team()
     member = await _add_member(team.id)
