@@ -393,6 +393,20 @@ async def test_admin_topup_returns_checkout_url(async_client, monkeypatch):
         await _cleanup(team.id, admin.id, member.id)
 
 
+async def test_remove_nonmember_target_returns_400(async_client, monkeypatch):
+    team, admin = await _seed_team()
+    nonmember = await _make_user()
+    try:
+        # Team admin tries to remove a user who is NOT a member of the team.
+        resp = await async_client.delete(
+            f"/teams/{team.id}/members/{nonmember.id}", headers=_auth(admin.id)
+        )
+        assert resp.status_code == 400, resp.text
+        assert "member" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(team.id, admin.id, nonmember.id)
+
+
 # ---------------------------------------------------------------- Member endpoints
 
 

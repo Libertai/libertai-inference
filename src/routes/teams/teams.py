@@ -280,7 +280,7 @@ async def remove_team_member(
         await _load_team_as(db, team_id, user, admin=True)
         try:
             await TeamService.remove_member(db, team_id, user_id, removed_by=user.id)
-        except ValueError as e:
+        except (ValueError, PermissionError) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await db.commit()
         return {"status": "removed"}
@@ -294,7 +294,7 @@ async def set_member_role(
         await _load_team_as(db, team_id, user, admin=True)
         try:
             await TeamService.set_role(db, team_id, user.id, user_id, body.role)
-        except ValueError as e:
+        except (ValueError, PermissionError) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await db.commit()
         return {"status": "ok", "role": body.role}
