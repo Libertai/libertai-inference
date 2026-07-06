@@ -10,7 +10,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from src.config import config
 from src.interfaces.credits import VoucherAddCreditsRequest
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -21,14 +20,8 @@ from src.services.users import get_or_create_user_by_wallet
 
 pytestmark = pytest.mark.asyncio
 
-PW = "test-voucher-pw"
 # A valid lowercase Base/EVM address (lowercase => no checksum requirement).
 ADDR = "0x000000000000000000000000000000000000dead"
-
-
-@pytest.fixture(autouse=True)
-def _allow_pw(monkeypatch):
-    monkeypatch.setattr(config, "VOUCHERS_PASSWORDS", [PW])
 
 
 async def _balance(user_id) -> float:
@@ -58,9 +51,7 @@ async def _cleanup_user(user_id):
 
 
 async def test_wallet_path_credits_wallet_user():
-    ok = await add_voucher_credits(
-        VoucherAddCreditsRequest(chain="base", address=ADDR, amount=7.0, password=PW)
-    )
+    ok = await add_voucher_credits(VoucherAddCreditsRequest(chain="base", address=ADDR, amount=7.0))
     assert ok is True
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, ADDR)
@@ -77,7 +68,7 @@ async def test_wallet_path_credits_wallet_user():
 async def test_email_unknown_account_is_rejected_and_creates_nothing():
     email = f"voucher-{uuid.uuid4().hex}@example.com"
     with pytest.raises(HTTPException) as exc:
-        await add_voucher_credits(VoucherAddCreditsRequest(email=email, amount=12.0, password=PW))
+        await add_voucher_credits(VoucherAddCreditsRequest(email=email, amount=12.0))
     assert exc.value.status_code == 404
     assert await _user_by_email(email) is None  # must not be created
 
@@ -90,7 +81,7 @@ async def test_email_path_credits_existing_user():
         await db.commit()
         user_id = user.id
     try:
-        ok = await add_voucher_credits(VoucherAddCreditsRequest(email=email.upper(), amount=3.0, password=PW))
+        ok = await add_voucher_credits(VoucherAddCreditsRequest(email=email.upper(), amount=3.0))
         assert ok is True
         # Same user (email normalised), not a duplicate.
         assert (await _user_by_email(email)).id == user_id
@@ -104,19 +95,14 @@ async def test_email_path_credits_existing_user():
 
 async def test_rejects_both_wallet_and_email():
     with pytest.raises(ValidationError):
-        VoucherAddCreditsRequest(chain="base", address=ADDR, email="a@b.com", amount=1.0, password=PW)
+        VoucherAddCreditsRequest(chain="base", address=ADDR, email="a@b.com", amount=1.0)
 
 
 async def test_rejects_neither_wallet_nor_email():
     with pytest.raises(ValidationError):
-        VoucherAddCreditsRequest(amount=1.0, password=PW)
+        VoucherAddCreditsRequest(amount=1.0)
 
 
 async def test_rejects_address_without_chain():
     with pytest.raises(ValidationError):
-        VoucherAddCreditsRequest(address=ADDR, amount=1.0, password=PW)
-
-
-async def test_rejects_bad_password():
-    with pytest.raises(ValidationError):
-        VoucherAddCreditsRequest(email="a@b.com", amount=1.0, password="nope")
+        VoucherAddCreditsRequest(address=ADDR, amount=1.0)

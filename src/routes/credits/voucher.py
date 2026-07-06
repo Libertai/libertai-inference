@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 
@@ -13,6 +13,7 @@ from src.interfaces.credits import (
 )
 from src.models.base import AsyncSessionLocal
 from src.routes.credits import router
+from src.services.auth import require_staff
 from src.services.credit import CreditService
 from src.services.users import get_user_by_email
 from src.utils.logger import setup_logger
@@ -20,7 +21,11 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-@router.post("/vouchers", description="Add credits via voucher to a wallet address or an email account")  # type: ignore
+@router.post(
+    "/vouchers",
+    description="[staff] Add credits via voucher to a wallet address or an email account",
+    dependencies=[Depends(require_staff)],
+)  # type: ignore
 async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool:
     if voucher_request.email is not None:
         # Existing email account only — never create one from a voucher. Credit by user id, no wallet.

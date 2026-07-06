@@ -124,7 +124,6 @@ class ThirdwebOnrampTransactionData(BaseModel):
 class VoucherAddCreditsRequest(BaseModel):
     amount: Annotated[float, Field(gt=0)]
     expired_at: datetime | None = None
-    password: str
     # Exactly one recipient: a wallet (chain + address) or an email account.
     chain: LibertaiChain | None = None
     address: str | None = None
@@ -140,11 +139,6 @@ class VoucherAddCreditsRequest(BaseModel):
         if not is_address_valid(chain, value):
             raise ValueError(f"Invalid address for chain {chain}")
         return value
-
-    @field_validator("password")
-    def valid_password(cls, password):
-        if password not in config.VOUCHERS_PASSWORDS:
-            raise ValueError("Given password isn't in the list of allowed passwords.")
 
     @model_validator(mode="after")
     def exactly_one_recipient(self):

@@ -18,6 +18,7 @@ from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
+from src.services.auth_tokens import create_access_token
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,6 +31,14 @@ async def _mk_user(db) -> uuid.UUID:
     db.add(u)
     await db.flush()
     return u.id
+
+
+async def _mk_staff_headers(db) -> tuple[dict, uuid.UUID]:
+    u = User(email=f"stats-staff-{uuid.uuid4().hex}@example.com", email_verified=True)
+    u.is_libertai_staff = True
+    db.add(u)
+    await db.flush()
+    return {"Authorization": f"Bearer {create_access_token(u.id)}"}, u.id
 
 
 async def _mk_key(db, *, user_id, key=None, type_=ApiKeyType.chat) -> uuid.UUID:
@@ -55,6 +64,9 @@ async def test_messages_by_segment_splits_anon_free_paid(async_client, monkeypat
         db.add(PlanSubscription(user_id=paid_user, tier="plus", provider="revolut", status="active"))
         user_ids += [free_user, paid_user]
 
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
+
         for key_id, n in ((anon_key, 3), (free_key, 2), (paid_key, 4)):
             for _ in range(n):
                 cr = ChatRequest(api_key_id=key_id, input_tokens=1, output_tokens=1, cached_tokens=0, model_name="m")
@@ -63,7 +75,9 @@ async def test_messages_by_segment_splits_anon_free_paid(async_client, monkeypat
         await db.commit()
 
     try:
-        resp = await async_client.get(f"/stats/global/messages-by-segment?start_date={_DAY}&end_date={_DAY}")
+        resp = await async_client.get(
+            f"/stats/global/messages-by-segment?start_date={_DAY}&end_date={_DAY}", headers=headers
+        )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         counts = {m["segment"]: m["message_count"] for m in body["messages"]}
@@ -93,10 +107,15 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
             )
             ic.used_at = _TS
             db.add(ic)
+
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
         await db.commit()
 
     try:
-        resp = await async_client.get(f"/stats/global/credits-consumption?start_date={_DAY}&end_date={_DAY}")
+        resp = await async_client.get(
+            f"/stats/global/credits-consumption?start_date={_DAY}&end_date={_DAY}", headers=headers
+        )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["total_tier_credits"] == pytest.approx(0.8)
@@ -132,10 +151,15 @@ async def test_subscribers_over_time_dedups_resubscribe_and_skips_abandoned(asyn
         abandoned = await _mk_user(db)
         db.add(PlanSubscription(user_id=abandoned, tier="plus", provider="revolut", status="expired"))
         user_ids += [resub, abandoned]
+
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
         await db.commit()
 
     try:
-        resp = await async_client.get(f"/stats/global/subscribers-over-time?start_date={day}&end_date={day}")
+        resp = await async_client.get(
+            f"/stats/global/subscribers-over-time?start_date={day}&end_date={day}", headers=headers
+        )
         assert resp.status_code == 200, resp.text
         plus = {d["date"]: d["active_subscribers"] for d in resp.json()["daily"] if d["tier"] == "plus"}
         # Only the re-subscriber counts, and only once despite two rows; abandoned is excluded.
@@ -158,10 +182,13 @@ async def test_subscriptions_snapshot_counts_segments(async_client):
         free = await _mk_user(db)  # registered, no paid sub
         user_ids += [paid, free]
         db.add(AnonChatUsage(ip=anon_ip, window_started_at=_TS, count=3))
+
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
         await db.commit()
 
     try:
-        resp = await async_client.get("/stats/global/subscriptions")
+        resp = await async_client.get("/stats/global/subscriptions", headers=headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         by_tier = {t["tier"]: t["active_subscribers"] for t in body["subscribers_by_tier"]}

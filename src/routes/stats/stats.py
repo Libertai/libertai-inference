@@ -20,7 +20,7 @@ from src.interfaces.stats import (
 )
 from src.models.user import User
 from src.routes.stats import router
-from src.services.auth import get_current_user
+from src.services.auth import get_current_user, require_staff
 from src.services.stats import StatsService
 from src.utils.logger import setup_logger
 
@@ -54,7 +54,7 @@ async def get_usage_stats(
 # Registered before the generic /global/{key_type}/... routes below.
 
 
-@router.get("/global/chat/calls", response_model=GlobalChatCallsStats)  # type: ignore
+@router.get("/global/chat/calls", response_model=GlobalChatCallsStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_chat_calls_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -66,7 +66,7 @@ async def get_chat_calls_stats(
         raise
 
 
-@router.get("/global/chat/tokens", response_model=GlobalChatTokensStats)  # type: ignore
+@router.get("/global/chat/tokens", response_model=GlobalChatTokensStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_chat_tokens_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -78,7 +78,7 @@ async def get_chat_tokens_stats(
         raise
 
 
-@router.get("/global/chat/users", response_model=GlobalUsersStats)  # type: ignore
+@router.get("/global/chat/users", response_model=GlobalUsersStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_chat_users_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -93,7 +93,7 @@ async def get_chat_users_stats(
 # --- Generic inference stats: one set of routes for api / liberclaw / x402 / cli ---
 
 
-@router.get("/global/{key_type}/calls", response_model=GlobalApiStats)  # type: ignore
+@router.get("/global/{key_type}/calls", response_model=GlobalApiStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_inference_calls_stats(
     key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
@@ -106,7 +106,7 @@ async def get_inference_calls_stats(
         raise
 
 
-@router.get("/global/{key_type}/tokens", response_model=GlobalTokensStats)  # type: ignore
+@router.get("/global/{key_type}/tokens", response_model=GlobalTokensStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_inference_tokens_stats(
     key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
@@ -119,7 +119,7 @@ async def get_inference_tokens_stats(
         raise
 
 
-@router.get("/global/{key_type}/credits", response_model=GlobalCreditsStats)  # type: ignore
+@router.get("/global/{key_type}/credits", response_model=GlobalCreditsStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_inference_credits_stats(
     key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
@@ -132,7 +132,7 @@ async def get_inference_credits_stats(
         raise
 
 
-@router.get("/global/{key_type}/users", response_model=GlobalUsersStats)  # type: ignore
+@router.get("/global/{key_type}/users", response_model=GlobalUsersStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_inference_users_stats(
     key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
@@ -145,7 +145,7 @@ async def get_inference_users_stats(
         raise
 
 
-@router.get("/global/users", response_model=GlobalUsersStats)  # type: ignore
+@router.get("/global/users", response_model=GlobalUsersStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_aggregate_users_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -157,7 +157,7 @@ async def get_aggregate_users_stats(
         raise
 
 
-@router.get("/global/summary", response_model=GlobalSummaryStats)  # type: ignore
+@router.get("/global/summary", response_model=GlobalSummaryStats, dependencies=[Depends(require_staff)])  # type: ignore
 async def get_global_summary(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -169,7 +169,9 @@ async def get_global_summary(
         raise
 
 
-@router.get("/global/messages-by-segment", response_model=GlobalSegmentMessagesStats)  # type: ignore
+@router.get(
+    "/global/messages-by-segment", response_model=GlobalSegmentMessagesStats, dependencies=[Depends(require_staff)]
+)  # type: ignore
 async def get_messages_by_segment(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -181,7 +183,11 @@ async def get_messages_by_segment(
         raise
 
 
-@router.get("/global/credits-consumption", response_model=GlobalCreditsConsumptionStats)  # type: ignore
+@router.get(
+    "/global/credits-consumption",
+    response_model=GlobalCreditsConsumptionStats,
+    dependencies=[Depends(require_staff)],
+)  # type: ignore
 async def get_credits_consumption(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -193,7 +199,9 @@ async def get_credits_consumption(
         raise
 
 
-@router.get("/global/subscriptions", response_model=GlobalSubscriptionsStats)  # type: ignore
+@router.get(
+    "/global/subscriptions", response_model=GlobalSubscriptionsStats, dependencies=[Depends(require_staff)]
+)  # type: ignore
 async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
     try:
         return await StatsService.get_global_subscriptions_stats()
@@ -202,7 +210,11 @@ async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
         raise
 
 
-@router.get("/global/subscribers-over-time", response_model=GlobalSubscribersOverTimeStats)  # type: ignore
+@router.get(
+    "/global/subscribers-over-time",
+    response_model=GlobalSubscribersOverTimeStats,
+    dependencies=[Depends(require_staff)],
+)  # type: ignore
 async def get_subscribers_over_time(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
