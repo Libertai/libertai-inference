@@ -34,6 +34,8 @@ from src.interfaces.stats import (
     TierSubscribers,
     GlobalSubscribersOverTimeStats,
     TierSubscribersDay,
+    LatestSubscriber,
+    GlobalLatestSubscribersStats,
 )
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
@@ -893,4 +895,40 @@ class StatsService:
                 return GlobalSubscribersOverTimeStats(daily=daily)
         except Exception as e:
             logger.error(f"Error retrieving subscribers-over-time stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_latest_subscribers(limit: int = 20) -> GlobalLatestSubscribersStats:
+        """Most recent plan subscriptions (all providers), newest first, with a display label per user."""
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = (
+                    await db.execute(
+                        select(PlanSubscription, User)
+                        .join(User, PlanSubscription.user_id == User.id)
+                        .order_by(PlanSubscription.created_at.desc())
+                        .limit(limit)
+                    )
+                ).all()
+
+                subscribers = []
+                for sub, user in rows:
+                    label = user.email or user.display_name or user.address or str(user.id)
+                    subscribers.append(
+                        LatestSubscriber(
+                            user_label=label,
+                            tier=sub.tier,
+                            status=sub.status,
+                            provider=sub.provider,
+                            is_trial=sub.is_trial,
+                            cancel_at_period_end=sub.cancel_at_period_end,
+                            created_at=sub.created_at.isoformat(),
+                            current_period_end=sub.current_period_end.isoformat()
+                            if sub.current_period_end
+                            else None,
+                        )
+                    )
+                return GlobalLatestSubscribersStats(subscribers=subscribers)
+        except Exception as e:
+            logger.error(f"Error retrieving latest subscribers: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
