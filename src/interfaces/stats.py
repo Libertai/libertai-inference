@@ -1,3 +1,5 @@
+from enum import Enum
+
 from pydantic import BaseModel
 
 
@@ -143,6 +145,18 @@ class GlobalUsersStats(BaseModel):
 
     total_unique_users: int
     daily_active_users: list[DailyActiveUsers]
+
+
+class UsersWindow(str, Enum):
+    """Rolling window for active-user counts: DAU (day), WAU (week), MAU (month)."""
+
+    day = "day"
+    week = "week"
+    month = "month"
+
+    @property
+    def days(self) -> int:
+        return {"day": 1, "week": 7, "month": 30}[self.value]
 
 
 class SegmentMessageUsage(BaseModel):
