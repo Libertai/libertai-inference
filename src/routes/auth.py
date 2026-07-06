@@ -158,6 +158,7 @@ async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
         display_name=user.display_name,
         avatar_url=user.avatar_url,
         address=user.address,
+        is_libertai_staff=user.is_libertai_staff,
     )
 
 
@@ -175,6 +176,7 @@ async def update_me(
             display_name=updated.display_name,
             avatar_url=updated.avatar_url,
             address=updated.address,
+            is_libertai_staff=updated.is_libertai_staff,
         )
 
 

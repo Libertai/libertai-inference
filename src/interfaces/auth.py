@@ -85,6 +85,7 @@ class CurrentUserResponse(BaseModel):
     display_name: str | None = None
     avatar_url: str | None = None
     address: str | None = None
+    is_libertai_staff: bool = False
 
 
 class UpdateProfileRequest(BaseModel):
