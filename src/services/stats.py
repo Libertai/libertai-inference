@@ -25,6 +25,7 @@ from src.interfaces.stats import (
     GlobalSummaryStats,
     DailyActiveUsers,
     GlobalUsersStats,
+    UsersWindow,
     GlobalSegmentMessagesStats,
     SegmentMessageUsage,
     GlobalCreditsConsumptionStats,
@@ -393,7 +394,43 @@ class StatsService:
             )
 
     @staticmethod
-    async def _get_inference_users_stats(key_type: ApiKeyType, start_date: date, end_date: date) -> GlobalUsersStats:
+    def _rolling_users_stats(
+        rows: list[tuple[date, str]], start_date: date, end_date: date, window_days: int
+    ) -> GlobalUsersStats:
+        """Rolling distinct-user counts from (day, identity) activity rows.
+
+        For each day in [start_date, end_date], counts identities active in the trailing
+        ``window_days`` days (inclusive). ``rows`` may (and for window > 1 must) include
+        activity from before start_date. Days with a 0 count are omitted (sparse, matching
+        the plain-DAU output). total_unique_users only counts activity inside the range.
+        """
+        by_day: dict[date, set[str]] = {}
+        for day, ident in rows:
+            by_day.setdefault(day, set()).add(ident)
+
+        overall_in_range: set[str] = set()
+        for day, idents in by_day.items():
+            if start_date <= day <= end_date:
+                overall_in_range |= idents
+
+        daily: list[DailyActiveUsers] = []
+        current = start_date
+        while current <= end_date:
+            window_start = current - timedelta(days=window_days - 1)
+            active: set[str] = set()
+            for day, idents in by_day.items():
+                if window_start <= day <= current:
+                    active |= idents
+            if active:
+                daily.append(DailyActiveUsers(date=current.strftime("%Y-%m-%d"), active_users=len(active)))
+            current += timedelta(days=1)
+
+        return GlobalUsersStats(total_unique_users=len(overall_in_range), daily_active_users=daily)
+
+    @staticmethod
+    async def _get_inference_users_stats(
+        key_type: ApiKeyType, start_date: date, end_date: date, window: UsersWindow = UsersWindow.day
+    ) -> GlobalUsersStats:
         """Daily active users + range-wide unique users for an inference key type.
 
         Identity is the owning user: ``api_keys.user_id`` for api/cli, ``api_keys.liberclaw_user_id``
@@ -404,98 +441,68 @@ class StatsService:
             return GlobalUsersStats(total_unique_users=0, daily_active_users=[])
 
         async with AsyncSessionLocal() as db:
-            start_datetime = datetime.combine(start_date, datetime.min.time())
+            fetch_start = start_date - timedelta(days=window.days - 1)
+            start_datetime = datetime.combine(fetch_start, datetime.min.time())
             end_datetime = datetime.combine(end_date, datetime.max.time())
 
             identity = ApiKey.liberclaw_user_id if key_type == ApiKeyType.liberclaw else ApiKey.user_id
-            base_filter = (
-                ApiKey.type == key_type,
-                identity.isnot(None),
-                InferenceCall.used_at >= start_datetime,
-                InferenceCall.used_at <= end_datetime,
-            )
-
-            daily_rows = (
+            raw = (
                 await db.execute(
                     select(
                         cast(InferenceCall.used_at, Date).label("date"),
-                        func.count(distinct(identity)).label("active_users"),
+                        identity.label("ident"),
                     )
                     .select_from(InferenceCall)
                     .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                    .where(*base_filter)
-                    .group_by(cast(InferenceCall.used_at, Date))
-                    .order_by(cast(InferenceCall.used_at, Date))
+                    .where(
+                        ApiKey.type == key_type,
+                        identity.isnot(None),
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .distinct()
                 )
             ).all()
-
-            total = (
-                await db.execute(
-                    select(func.count(distinct(identity)))
-                    .select_from(InferenceCall)
-                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                    .where(*base_filter)
-                )
-            ).scalar() or 0
-
-            return GlobalUsersStats(
-                total_unique_users=int(total),
-                daily_active_users=[
-                    DailyActiveUsers(date=r.date.strftime("%Y-%m-%d"), active_users=int(r.active_users or 0))
-                    for r in daily_rows
-                ],
-            )
+            rows = [(r.date, str(r.ident)) for r in raw]
+            return StatsService._rolling_users_stats(rows, start_date, end_date, window.days)
 
     @staticmethod
-    async def get_global_chat_users_stats(start_date: date, end_date: date) -> GlobalUsersStats:
+    async def get_global_chat_users_stats(
+        start_date: date, end_date: date, window: UsersWindow = UsersWindow.day
+    ) -> GlobalUsersStats:
         """Daily active users + range-wide unique users for chat (separate chat_requests table)."""
         try:
             async with AsyncSessionLocal() as db:
-                start_datetime = datetime.combine(start_date, datetime.min.time())
+                fetch_start = start_date - timedelta(days=window.days - 1)
+                start_datetime = datetime.combine(fetch_start, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-                base_filter = (
-                    ApiKey.user_id.isnot(None),
-                    ChatRequest.created_at >= start_datetime,
-                    ChatRequest.created_at <= end_datetime,
-                )
-
-                daily_rows = (
+                raw = (
                     await db.execute(
                         select(
                             cast(ChatRequest.created_at, Date).label("date"),
-                            func.count(distinct(ApiKey.user_id)).label("active_users"),
+                            ApiKey.user_id.label("ident"),
                         )
                         .select_from(ChatRequest)
                         .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        .where(*base_filter)
-                        .group_by(cast(ChatRequest.created_at, Date))
-                        .order_by(cast(ChatRequest.created_at, Date))
+                        .where(
+                            ApiKey.user_id.isnot(None),
+                            ChatRequest.created_at >= start_datetime,
+                            ChatRequest.created_at <= end_datetime,
+                        )
+                        .distinct()
                     )
                 ).all()
-
-                total = (
-                    await db.execute(
-                        select(func.count(distinct(ApiKey.user_id)))
-                        .select_from(ChatRequest)
-                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        .where(*base_filter)
-                    )
-                ).scalar() or 0
-
-                return GlobalUsersStats(
-                    total_unique_users=int(total),
-                    daily_active_users=[
-                        DailyActiveUsers(date=r.date.strftime("%Y-%m-%d"), active_users=int(r.active_users or 0))
-                        for r in daily_rows
-                    ],
-                )
+                rows = [(r.date, str(r.ident)) for r in raw]
+                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days)
         except Exception as e:
             logger.error(f"Error retrieving chat users stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    async def get_global_users_stats(start_date: date, end_date: date) -> GlobalUsersStats:
+    async def get_global_users_stats(
+        start_date: date, end_date: date, window: UsersWindow = UsersWindow.day
+    ) -> GlobalUsersStats:
         """Aggregate distinct users across api / cli / chat / liberclaw, deduplicated.
 
         api/cli/chat share ``users.id`` (namespaced ``u:``); liberclaw lives in its own
@@ -506,7 +513,8 @@ class StatsService:
         """
         try:
             async with AsyncSessionLocal() as db:
-                start_datetime = datetime.combine(start_date, datetime.min.time())
+                fetch_start = start_date - timedelta(days=window.days - 1)
+                start_datetime = datetime.combine(fetch_start, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
                 inference_rows = (
@@ -545,31 +553,17 @@ class StatsService:
                     )
                 ).all()
 
-                per_day: dict[str, set[str]] = {}
-                overall: set[str] = set()
-
-                def _add(day: str, ident: str | None) -> None:
-                    if ident is None:
-                        return
-                    per_day.setdefault(day, set()).add(ident)
-                    overall.add(ident)
-
+                rows: list[tuple[date, str]] = []
                 for r in inference_rows:
-                    day = r.date.strftime("%Y-%m-%d")
                     if r.type == ApiKeyType.liberclaw:
-                        _add(day, f"l:{r.liberclaw_user_id}" if r.liberclaw_user_id else None)
-                    else:
-                        _add(day, f"u:{r.user_id}" if r.user_id else None)
-
+                        if r.liberclaw_user_id:
+                            rows.append((r.date, f"l:{r.liberclaw_user_id}"))
+                    elif r.user_id:
+                        rows.append((r.date, f"u:{r.user_id}"))
                 for cr in chat_rows:
-                    _add(cr.date.strftime("%Y-%m-%d"), f"u:{cr.user_id}" if cr.user_id else None)
-
-                return GlobalUsersStats(
-                    total_unique_users=len(overall),
-                    daily_active_users=[
-                        DailyActiveUsers(date=day, active_users=len(idents)) for day, idents in sorted(per_day.items())
-                    ],
-                )
+                    if cr.user_id:
+                        rows.append((cr.date, f"u:{cr.user_id}"))
+                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days)
         except Exception as e:
             logger.error(f"Error retrieving aggregate users stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

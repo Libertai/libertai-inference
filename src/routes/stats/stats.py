@@ -13,6 +13,7 @@ from src.interfaces.stats import (
     GlobalChatTokensStats,
     GlobalSummaryStats,
     GlobalUsersStats,
+    UsersWindow,
     GlobalSegmentMessagesStats,
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
@@ -82,9 +83,10 @@ async def get_chat_tokens_stats(
 async def get_chat_users_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    window: UsersWindow = Query(UsersWindow.day, description="Rolling window: day (DAU), week (WAU), month (MAU)"),
 ) -> GlobalUsersStats:
     try:
-        return await StatsService.get_global_chat_users_stats(start_date, end_date)
+        return await StatsService.get_global_chat_users_stats(start_date, end_date, window)
     except Exception as e:
         logger.error(f"Error in chat users stats route: {str(e)}", exc_info=True)
         raise
@@ -137,9 +139,10 @@ async def get_inference_users_stats(
     key_type: InferenceKeyType,
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    window: UsersWindow = Query(UsersWindow.day, description="Rolling window: day (DAU), week (WAU), month (MAU)"),
 ) -> GlobalUsersStats:
     try:
-        return await StatsService._get_inference_users_stats(ApiKeyType(key_type.value), start_date, end_date)
+        return await StatsService._get_inference_users_stats(ApiKeyType(key_type.value), start_date, end_date, window)
     except Exception as e:
         logger.error(f"Error in {key_type.value} users stats route: {str(e)}", exc_info=True)
         raise
@@ -149,9 +152,10 @@ async def get_inference_users_stats(
 async def get_aggregate_users_stats(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    window: UsersWindow = Query(UsersWindow.day, description="Rolling window: day (DAU), week (WAU), month (MAU)"),
 ) -> GlobalUsersStats:
     try:
-        return await StatsService.get_global_users_stats(start_date, end_date)
+        return await StatsService.get_global_users_stats(start_date, end_date, window)
     except Exception as e:
         logger.error(f"Error in aggregate users stats route: {str(e)}", exc_info=True)
         raise
