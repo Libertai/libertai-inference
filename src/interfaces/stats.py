@@ -274,3 +274,19 @@ class GlobalSubscriptionsRevenueStats(BaseModel):
     current_mrr: float
     mrr_by_tier: list[MrrByTier]
     daily: list[MrrDay]
+
+
+class ChurnWeek(BaseModel):
+    week_start: str  # Monday, YYYY-MM-DD
+    new: int
+    churned: int
+    net: int
+
+
+class GlobalSubscriptionsChurnStats(BaseModel):
+    """Revolut, non-trial. new = first activations (upgrade replacements excluded);
+    churned = real terminations (cancelled/expired/finished; upgrades excluded)."""
+
+    weekly: list[ChurnWeek]
+    total_new: int
+    total_churned: int

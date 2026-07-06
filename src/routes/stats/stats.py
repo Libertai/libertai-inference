@@ -20,6 +20,7 @@ from src.interfaces.stats import (
     GlobalSubscribersOverTimeStats,
     GlobalLatestSubscribersStats,
     GlobalSubscriptionsRevenueStats,
+    GlobalSubscriptionsChurnStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -122,6 +123,22 @@ async def get_subscriptions_revenue(
         return await StatsService.get_global_subscriptions_revenue(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in subscriptions revenue route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(
+    "/global/subscriptions/churn",
+    response_model=GlobalSubscriptionsChurnStats,
+    dependencies=[Depends(require_staff)],
+)  # type: ignore
+async def get_subscriptions_churn(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalSubscriptionsChurnStats:
+    try:
+        return await StatsService.get_global_subscriptions_churn(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in subscriptions churn route: {str(e)}", exc_info=True)
         raise
 
 
