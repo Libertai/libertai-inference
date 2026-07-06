@@ -49,11 +49,15 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
     )
 
 
-@router.get("/vouchers", description="Get all vouchers for a specific address")  # type: ignore
-async def get_vouchers(chain: LibertaiChain, address: str, password: str) -> list[VoucherCreditsResponse]:
+@router.get(  # type: ignore
+    "/vouchers",
+    description="[staff] Get all vouchers for a specific address",
+    dependencies=[Depends(require_staff)],
+)
+async def get_vouchers(chain: LibertaiChain, address: str) -> list[VoucherCreditsResponse]:
     # Validate input using Pydantic model
     try:
-        params = GetVouchersRequest(chain=chain, address=address, password=password)
+        params = GetVouchersRequest(chain=chain, address=address)
     except ValueError as e:
         # This explicitly raises the validation error to be handled by FastAPI
         raise HTTPException(status_code=400, detail=str(e))
@@ -76,7 +80,11 @@ async def get_vouchers(chain: LibertaiChain, address: str, password: str) -> lis
     ]
 
 
-@router.post("/voucher/expiration", description="Change a voucher's expiration date")  # type: ignore
+@router.post(  # type: ignore
+    "/voucher/expiration",
+    description="[staff] Change a voucher's expiration date",
+    dependencies=[Depends(require_staff)],
+)
 async def change_voucher_expiration(request: VoucherChangeExpireRequest) -> bool:
     # Convert string to UUID to ensure it's valid
     try:

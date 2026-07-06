@@ -1,5 +1,5 @@
 from calendar import month_abbr
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date, Integer, select, distinct, case, literal, and_
@@ -981,6 +981,11 @@ class StatsService:
                     activated_on = day
                 elif e.event_type == "downgraded" and e.metadata_json and e.metadata_json.get("to"):
                     downgrades.append((day, e.metadata_json["to"]))
+                elif e.event_type == "downgraded":
+                    logger.warning(
+                        f"downgraded event {e.id} (subscription {sub.id}) missing tier metadata; "
+                        "MRR keeps prior tier"
+                    )
                 elif e.event_type in StatsService._TERMINAL_EVENTS and ended_on is None:
                     ended_on = day
                     terminal_event = e.event_type
@@ -1061,7 +1066,7 @@ class StatsService:
                 timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
                 daily = StatsService._mrr_daily(timelines, start_date, end_date)
 
-                today = date.today()
+                today = datetime.now(timezone.utc).date()
                 by_tier: dict[str, float] = {}
                 for t in timelines:
                     tier = StatsService._tier_at(t, today)
@@ -1084,7 +1089,10 @@ class StatsService:
         """Weekly new vs churned subs. Weeks start Monday and are clipped to the requested range.
 
         An activation is not "new" if the same user had another sub terminated with
-        ``cancelled_for_upgrade`` in the same ISO week (upgrade replacement).
+        ``cancelled_for_upgrade`` in the same ISO week (upgrade replacement). This match is by
+        ISO week, so an upgrade pair straddling a week boundary (old sub ends Sunday, new
+        activates Monday) counts as +1 new / 0 churned instead of being netted out — inherent
+        to week bucketing, rare.
         """
 
         def week_of(day: date) -> date:
