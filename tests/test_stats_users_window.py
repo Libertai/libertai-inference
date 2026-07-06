@@ -1,7 +1,65 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 
+from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import UsersWindow
+from src.models.api_key import ApiKey
+from src.models.base import AsyncSessionLocal
+from src.models.inference_call import InferenceCall
 from src.services.stats import StatsService
+from src.services.users import get_or_create_user_by_wallet
+
+D = date(2020, 6, 10)
+PRE_RANGE = datetime.combine(D - timedelta(days=3), datetime.min.time().replace(hour=12))
+IN_RANGE = datetime.combine(D, datetime.min.time().replace(hour=12))
+
+U1 = "0xDA0200000000000000000000000000000000B001"
+U2 = "0xDA0200000000000000000000000000000000B002"
+
+
+def _inference_call(api_key_id, when: datetime) -> InferenceCall:
+    call = InferenceCall(api_key_id=api_key_id, credits_used=0.0, model_name="test-model")
+    call.used_at = when
+    return call
+
+
+async def _seed_fetch_start_extension() -> None:
+    async with AsyncSessionLocal() as db:
+        user1 = await get_or_create_user_by_wallet(db, U1)
+        user2 = await get_or_create_user_by_wallet(db, U2)
+        await db.flush()
+
+        u1_api = ApiKey(key=ApiKey.generate_key(), name="fse-u1-api", user_id=user1.id, type=ApiKeyType.api)
+        u2_api = ApiKey(key=ApiKey.generate_key(), name="fse-u2-api", user_id=user2.id, type=ApiKeyType.api)
+        db.add_all([u1_api, u2_api])
+        await db.flush()
+
+        db.add_all(
+            [
+                _inference_call(u1_api.id, PRE_RANGE),  # u1: D-3, before the queried range
+                _inference_call(u2_api.id, IN_RANGE),  # u2: D, inside the queried range
+            ]
+        )
+        await db.commit()
+
+
+async def test_get_inference_users_stats_fetch_start_extension():
+    await _seed_fetch_start_extension()
+
+    week = await StatsService._get_inference_users_stats(
+        ApiKeyType.api, start_date=D, end_date=D + timedelta(days=1), window=UsersWindow.week
+    )
+    by_day = {d.date: d.active_users for d in week.daily_active_users}
+    # D's trailing 7-day window reaches back to D-3, so both u1 (pre-range) and u2 count.
+    assert by_day[D.strftime("%Y-%m-%d")] == 2
+    # total_unique_users only counts activity inside [D, D+1] -> just u2.
+    assert week.total_unique_users == 1
+
+    day = await StatsService._get_inference_users_stats(
+        ApiKeyType.api, start_date=D, end_date=D + timedelta(days=1), window=UsersWindow.day
+    )
+    day_by_day = {d.date: d.active_users for d in day.daily_active_users}
+    # No fetch-start extension -> pre-range u1 not counted on D.
+    assert day_by_day[D.strftime("%Y-%m-%d")] == 1
 
 
 def test_rolling_users_stats_week_window():
