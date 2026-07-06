@@ -39,6 +39,8 @@ from src.interfaces.stats import (
     MrrByTier,
     MrrDay,
     GlobalSubscriptionsRevenueStats,
+    ChurnWeek,
+    GlobalSubscriptionsChurnStats,
 )
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
@@ -957,6 +959,7 @@ class StatsService:
             events = sorted(events_by_sub.get(sub.id, []), key=lambda e: e.created_at)
             activated_on: date | None = None
             ended_on: date | None = None
+            terminal_event: str | None = None
             initial_tier: str | None = None
             downgrades: list[tuple[date, str]] = []
             for e in events:
@@ -969,6 +972,7 @@ class StatsService:
                     downgrades.append((day, e.metadata_json["to"]))
                 elif e.event_type in StatsService._TERMINAL_EVENTS and ended_on is None:
                     ended_on = day
+                    terminal_event = e.event_type
             tier_changes: list[tuple[date, str]] = []
             if activated_on is not None:
                 tier_changes = [(activated_on, initial_tier or sub.tier)] + downgrades
@@ -977,6 +981,7 @@ class StatsService:
                     "user_id": sub.user_id,
                     "activated_on": activated_on,
                     "ended_on": ended_on,
+                    "terminal_event": terminal_event,
                     "tier_changes": tier_changes,
                 }
             )
@@ -1059,4 +1064,89 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions revenue: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def _churn_from_timelines(
+        timelines: list[dict], start_date: date, end_date: date
+    ) -> GlobalSubscriptionsChurnStats:
+        """Weekly new vs churned subs. Weeks start Monday and are clipped to the requested range.
+
+        An activation is not "new" if the same user had another sub terminated with
+        ``cancelled_for_upgrade`` in the same ISO week (upgrade replacement).
+        """
+
+        def week_of(day: date) -> date:
+            return day - timedelta(days=day.weekday())
+
+        upgrade_weeks: dict = {}
+        for t in timelines:
+            if t["terminal_event"] == "cancelled_for_upgrade" and t["ended_on"]:
+                upgrade_weeks.setdefault(t["user_id"], set()).add(week_of(t["ended_on"]))
+
+        weeks: dict[date, dict[str, int]] = {}
+        w = week_of(start_date)
+        while w <= end_date:
+            weeks[w] = {"new": 0, "churned": 0}
+            w += timedelta(days=7)
+
+        total_new = 0
+        total_churned = 0
+        for t in timelines:
+            a = t["activated_on"]
+            if a and start_date <= a <= end_date:
+                if week_of(a) not in upgrade_weeks.get(t["user_id"], set()):
+                    weeks[week_of(a)]["new"] += 1
+                    total_new += 1
+            e = t["ended_on"]
+            if (
+                e
+                and start_date <= e <= end_date
+                and t["terminal_event"] in ("cancelled", "expired", "finished")
+            ):
+                weeks[week_of(e)]["churned"] += 1
+                total_churned += 1
+
+        weekly = [
+            ChurnWeek(week_start=w.strftime("%Y-%m-%d"), new=c["new"], churned=c["churned"], net=c["new"] - c["churned"])
+            for w, c in sorted(weeks.items())
+        ]
+        return GlobalSubscriptionsChurnStats(weekly=weekly, total_new=total_new, total_churned=total_churned)
+
+    @staticmethod
+    async def get_global_subscriptions_churn(start_date: date, end_date: date) -> GlobalSubscriptionsChurnStats:
+        """Revolut new-vs-churned subscribers per week (event-based; trials excluded)."""
+        try:
+            async with AsyncSessionLocal() as db:
+                subs = (
+                    (
+                        await db.execute(
+                            select(PlanSubscription).where(
+                                PlanSubscription.provider == "revolut",
+                                PlanSubscription.is_trial.is_(False),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                sub_ids = [s.id for s in subs]
+                events = (
+                    (
+                        await db.execute(
+                            select(PlanSubscriptionEvent).where(
+                                PlanSubscriptionEvent.subscription_id.in_(sub_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    if sub_ids
+                    else []
+                )
+                events_by_sub: dict = {}
+                for e in events:
+                    events_by_sub.setdefault(e.subscription_id, []).append(e)
+                timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
+                return StatsService._churn_from_timelines(timelines, start_date, end_date)
+        except Exception as e:
+            logger.error(f"Error retrieving subscriptions churn: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
