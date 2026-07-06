@@ -95,11 +95,11 @@ async def get_chat_users_stats(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/subscriptions/latest",
     response_model=GlobalLatestSubscribersStats,
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def get_latest_subscribers(
     limit: int = Query(20, ge=1, le=200, description="Number of most recent subscriptions to return"),
 ) -> GlobalLatestSubscribersStats:
@@ -110,11 +110,11 @@ async def get_latest_subscribers(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/subscriptions/revenue",
     response_model=GlobalSubscriptionsRevenueStats,
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def get_subscriptions_revenue(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -126,11 +126,11 @@ async def get_subscriptions_revenue(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/subscriptions/churn",
     response_model=GlobalSubscriptionsChurnStats,
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def get_subscriptions_churn(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -223,9 +223,9 @@ async def get_global_summary(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/messages-by-segment", response_model=GlobalSegmentMessagesStats, dependencies=[Depends(require_staff)]
-)  # type: ignore
+)
 async def get_messages_by_segment(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -237,11 +237,11 @@ async def get_messages_by_segment(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/credits-consumption",
     response_model=GlobalCreditsConsumptionStats,
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def get_credits_consumption(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
@@ -253,9 +253,9 @@ async def get_credits_consumption(
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/subscriptions", response_model=GlobalSubscriptionsStats, dependencies=[Depends(require_staff)]
-)  # type: ignore
+)
 async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
     try:
         return await StatsService.get_global_subscriptions_stats()
@@ -264,11 +264,11 @@ async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
         raise
 
 
-@router.get(
+@router.get(  # type: ignore
     "/global/subscribers-over-time",
     response_model=GlobalSubscribersOverTimeStats,
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def get_subscribers_over_time(
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),

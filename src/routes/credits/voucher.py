@@ -21,11 +21,11 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-@router.post(
+@router.post(  # type: ignore
     "/vouchers",
     description="[staff] Add credits via voucher to a wallet address or an email account",
     dependencies=[Depends(require_staff)],
-)  # type: ignore
+)
 async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool:
     if voucher_request.email is not None:
         # Existing email account only — never create one from a voucher. Credit by user id, no wallet.

@@ -56,6 +56,15 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def _tier_price(tier: str) -> float:
+    """Price for a tier; unknown/legacy tier strings are skipped (0) instead of 500ing the endpoint."""
+    try:
+        return get_tier(tier).price_cents / 100
+    except ValueError:
+        logger.warning(f"Unknown subscription tier in MRR computation: {tier}")
+        return 0.0
+
+
 class StatsService:
     @staticmethod
     async def get_dashboard_stats(user_address: str) -> DashboardStats:
@@ -943,6 +952,8 @@ class StatsService:
     # Events that end a subscription's paying life. ``cancelled_for_upgrade`` ends the old row of
     # an upgrade pair (the replacement row has its own ``activated``), avoiding double-counting.
     _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade")
+    # Terminal events that count as churn (excludes cancelled_for_upgrade, an upgrade replacement).
+    _CHURN_TERMINAL_EVENTS = tuple(e for e in _TERMINAL_EVENTS if e != "cancelled_for_upgrade")
 
     @staticmethod
     def _replay_subscription_timelines(subs, events_by_sub) -> list[dict]:
@@ -1009,7 +1020,7 @@ class StatsService:
             for t in timelines:
                 tier = StatsService._tier_at(t, day)
                 if tier:
-                    total += get_tier(tier).price_cents / 100
+                    total += _tier_price(tier)
             daily.append(MrrDay(date=day.strftime("%Y-%m-%d"), mrr=round(total, 2)))
             day += timedelta(days=1)
         return daily
@@ -1055,7 +1066,7 @@ class StatsService:
                 for t in timelines:
                     tier = StatsService._tier_at(t, today)
                     if tier:
-                        by_tier[tier] = by_tier.get(tier, 0.0) + get_tier(tier).price_cents / 100
+                        by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier)
                 current_mrr = round(sum(by_tier.values()), 2)
                 return GlobalSubscriptionsRevenueStats(
                     current_mrr=current_mrr,
@@ -1102,7 +1113,7 @@ class StatsService:
             if (
                 e
                 and start_date <= e <= end_date
-                and t["terminal_event"] in ("cancelled", "expired", "finished")
+                and t["terminal_event"] in StatsService._CHURN_TERMINAL_EVENTS
             ):
                 weeks[week_of(e)]["churned"] += 1
                 total_churned += 1
