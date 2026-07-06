@@ -25,6 +25,8 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
+    # Grants access to the staff backoffice (analytics + admin actions). Set manually via SQL.
+    is_libertai_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Legacy wallet address. Identity moved to wallet_connections; kept (nullable, unique) for one
     # release as a rollback hatch and so existing address-based FKs resolve until the FK swap.
