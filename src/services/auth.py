@@ -141,6 +141,13 @@ async def get_current_user(
     return await _resolve_user_from_token(token)
 
 
+async def require_staff(user: User = Depends(get_current_user)) -> User:
+    """Allow only LibertAI staff (backoffice endpoints)."""
+    if not user.is_libertai_staff:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff access required")
+    return user
+
+
 async def get_optional_user(
     authorization: str | None = Header(default=None),
     libertai_auth: str | None = Cookie(default=None),
