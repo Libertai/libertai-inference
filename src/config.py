@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 
@@ -28,7 +27,6 @@ class _Config:
 
     ADMIN_SECRET: str
     LIBERCLAW_SECRET: str
-    VOUCHERS_PASSWORDS: list[str]
 
     ALEPH_API_URL: str | None
     ALEPH_SENDER: str
@@ -114,7 +112,6 @@ class _Config:
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
         self.LIBERCLAW_SECRET: str = os.getenv("LIBERCLAW_SECRET", "")
-        self.VOUCHERS_PASSWORDS = json.loads(os.environ["VOUCHERS_PASSWORDS"])
 
         self.ALEPH_API_URL = os.getenv("ALEPH_API_URL")
         self.ALEPH_SENDER = os.getenv("ALEPH_SENDER")

@@ -7,8 +7,6 @@ from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
-from src.config import config
-
 
 class CreditTransactionProvider(str, Enum):
     ltai_base = "ltai_base"  # LTAI Base payments
@@ -160,7 +158,6 @@ class VoucherCreditsResponse(BaseModel):
 class GetVouchersRequest(BaseModel):
     chain: LibertaiChain
     address: str
-    password: str
 
     @field_validator("address")
     def validate_address(cls, value, info: ValidationInfo):
@@ -169,18 +166,7 @@ class GetVouchersRequest(BaseModel):
             raise ValueError(f"Invalid address for chain {chain}")
         return value
 
-    @field_validator("password")
-    def valid_password(cls, password):
-        if password not in config.VOUCHERS_PASSWORDS:
-            raise ValueError("Given password isn't in the list of allowed passwords.")
-
 
 class VoucherChangeExpireRequest(BaseModel):
     voucher_id: str
     expired_at: datetime | None
-    password: str
-
-    @field_validator("password")
-    def valid_password(cls, password):
-        if password not in config.VOUCHERS_PASSWORDS:
-            raise ValueError("Given password isn't in the list of allowed passwords.")
