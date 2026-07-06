@@ -36,6 +36,9 @@ from src.interfaces.stats import (
     TierSubscribersDay,
     LatestSubscriber,
     GlobalLatestSubscribersStats,
+    MrrByTier,
+    MrrDay,
+    GlobalSubscriptionsRevenueStats,
 )
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
@@ -43,7 +46,9 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.subscription_tiers import get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -931,4 +936,127 @@ class StatsService:
                 return GlobalLatestSubscribersStats(subscribers=subscribers)
         except Exception as e:
             logger.error(f"Error retrieving latest subscribers: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    # Events that end a subscription's paying life. ``cancelled_for_upgrade`` ends the old row of
+    # an upgrade pair (the replacement row has its own ``activated``), avoiding double-counting.
+    _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade")
+
+    @staticmethod
+    def _replay_subscription_timelines(subs, events_by_sub) -> list[dict]:
+        """Rebuild each sub's activation window and tier timeline from its event log.
+
+        - activated_on: day of the FIRST ``activated`` event (renewals repeat it), None if never.
+        - ended_on: day of the first terminal event (exclusive — no MRR that day), None if live.
+        - tier_changes: [(activation_day, initial_tier)] + one entry per ``downgraded`` event.
+          Initial tier from the ``created`` event metadata, falling back to the row's current tier
+          (covers rows predating event logging).
+        """
+        timelines: list[dict] = []
+        for sub in subs:
+            events = sorted(events_by_sub.get(sub.id, []), key=lambda e: e.created_at)
+            activated_on: date | None = None
+            ended_on: date | None = None
+            initial_tier: str | None = None
+            downgrades: list[tuple[date, str]] = []
+            for e in events:
+                day = e.created_at.date()
+                if e.event_type == "created" and e.metadata_json and e.metadata_json.get("tier"):
+                    initial_tier = e.metadata_json["tier"]
+                elif e.event_type == "activated" and activated_on is None:
+                    activated_on = day
+                elif e.event_type == "downgraded" and e.metadata_json and e.metadata_json.get("to"):
+                    downgrades.append((day, e.metadata_json["to"]))
+                elif e.event_type in StatsService._TERMINAL_EVENTS and ended_on is None:
+                    ended_on = day
+            tier_changes: list[tuple[date, str]] = []
+            if activated_on is not None:
+                tier_changes = [(activated_on, initial_tier or sub.tier)] + downgrades
+            timelines.append(
+                {
+                    "user_id": sub.user_id,
+                    "activated_on": activated_on,
+                    "ended_on": ended_on,
+                    "tier_changes": tier_changes,
+                }
+            )
+        return timelines
+
+    @staticmethod
+    def _tier_at(timeline: dict, day: date) -> str | None:
+        """The sub's tier on ``day``, or None if not active that day."""
+        if timeline["activated_on"] is None or day < timeline["activated_on"]:
+            return None
+        if timeline["ended_on"] is not None and day >= timeline["ended_on"]:
+            return None
+        tier = None
+        for change_day, change_tier in timeline["tier_changes"]:
+            if change_day <= day:
+                tier = change_tier
+        return tier
+
+    @staticmethod
+    def _mrr_daily(timelines: list[dict], start_date: date, end_date: date) -> list[MrrDay]:
+        daily: list[MrrDay] = []
+        day = start_date
+        while day <= end_date:
+            total = 0.0
+            for t in timelines:
+                tier = StatsService._tier_at(t, day)
+                if tier:
+                    total += get_tier(tier).price_cents / 100
+            daily.append(MrrDay(date=day.strftime("%Y-%m-%d"), mrr=round(total, 2)))
+            day += timedelta(days=1)
+        return daily
+
+    @staticmethod
+    async def get_global_subscriptions_revenue(start_date: date, end_date: date) -> GlobalSubscriptionsRevenueStats:
+        """Revolut MRR (nominal, currency-blind, trials excluded), event-replayed over the range."""
+        try:
+            async with AsyncSessionLocal() as db:
+                subs = (
+                    (
+                        await db.execute(
+                            select(PlanSubscription).where(
+                                PlanSubscription.provider == "revolut",
+                                PlanSubscription.is_trial.is_(False),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                sub_ids = [s.id for s in subs]
+                events = (
+                    (
+                        await db.execute(
+                            select(PlanSubscriptionEvent).where(
+                                PlanSubscriptionEvent.subscription_id.in_(sub_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    if sub_ids
+                    else []
+                )
+                events_by_sub: dict = {}
+                for e in events:
+                    events_by_sub.setdefault(e.subscription_id, []).append(e)
+
+                timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
+                daily = StatsService._mrr_daily(timelines, start_date, end_date)
+
+                today = date.today()
+                by_tier: dict[str, float] = {}
+                for t in timelines:
+                    tier = StatsService._tier_at(t, today)
+                    if tier:
+                        by_tier[tier] = by_tier.get(tier, 0.0) + get_tier(tier).price_cents / 100
+                current_mrr = round(sum(by_tier.values()), 2)
+                return GlobalSubscriptionsRevenueStats(
+                    current_mrr=current_mrr,
+                    mrr_by_tier=[MrrByTier(tier=k, mrr=round(v, 2)) for k, v in sorted(by_tier.items())],
+                    daily=daily,
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving subscriptions revenue: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

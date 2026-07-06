@@ -256,3 +256,21 @@ class GlobalLatestSubscribersStats(BaseModel):
     """Most recent plan subscriptions across all providers, newest first."""
 
     subscribers: list[LatestSubscriber]
+
+
+class MrrByTier(BaseModel):
+    tier: str
+    mrr: float
+
+
+class MrrDay(BaseModel):
+    date: str
+    mrr: float
+
+
+class GlobalSubscriptionsRevenueStats(BaseModel):
+    """Revolut (fiat) MRR, nominal and currency-blind; trials excluded. Event-replayed history."""
+
+    current_mrr: float
+    mrr_by_tier: list[MrrByTier]
+    daily: list[MrrDay]
