@@ -87,3 +87,45 @@ def test_mrr_from_timelines():
         ("2026-01-03", 0.0),   # ended_on is exclusive: terminated that day
         ("2026-01-04", 0.0),
     ]
+
+
+def test_mrr_upgrade_pair_no_double_count():
+    # same user: old "go" sub cancelled_for_upgrade on the upgrade day, new "max" sub activated that same day.
+    user_id = uuid.uuid4()
+    timelines = [
+        {
+            "user_id": user_id,
+            "activated_on": date(2026, 1, 1),
+            "ended_on": date(2026, 1, 10),
+            "tier_changes": [(date(2026, 1, 1), "go")],
+        },
+        {
+            "user_id": user_id,
+            "activated_on": date(2026, 1, 10),
+            "ended_on": None,
+            "tier_changes": [(date(2026, 1, 10), "max")],
+        },
+    ]
+    daily = StatsService._mrr_daily(timelines, date(2026, 1, 9), date(2026, 1, 11))
+    assert [(d.date, d.mrr) for d in daily] == [
+        ("2026-01-09", 8.0),
+        ("2026-01-10", 100.0),  # old row's ended_on is exclusive: contributes 0 on the upgrade day
+        ("2026-01-11", 100.0),
+    ]
+
+
+def test_mrr_downgrade_dollar_amounts():
+    sub = FakeSub(tier="go")
+    timelines = [
+        {
+            "user_id": sub.user_id,
+            "activated_on": date(2026, 1, 1),
+            "ended_on": None,
+            "tier_changes": [(date(2026, 1, 1), "plus"), (date(2026, 2, 1), "go")],
+        }
+    ]
+    daily = StatsService._mrr_daily(timelines, date(2026, 1, 31), date(2026, 2, 1))
+    assert [(d.date, d.mrr) for d in daily] == [
+        ("2026-01-31", 20.0),
+        ("2026-02-01", 8.0),
+    ]
