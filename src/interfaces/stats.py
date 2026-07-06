@@ -234,3 +234,25 @@ class GlobalSubscribersOverTimeStats(BaseModel):
     """
 
     daily: list[TierSubscribersDay]
+
+
+class LatestSubscriber(BaseModel):
+    """A single recent plan subscription with a human-friendly label for its user.
+
+    ``user_label`` resolution order: email > display_name > wallet address > user id.
+    """
+
+    user_label: str
+    tier: str
+    status: str
+    provider: str
+    is_trial: bool
+    cancel_at_period_end: bool
+    created_at: str  # ISO date-time
+    current_period_end: str | None
+
+
+class GlobalLatestSubscribersStats(BaseModel):
+    """Most recent plan subscriptions across all providers, newest first."""
+
+    subscribers: list[LatestSubscriber]

@@ -18,6 +18,7 @@ from src.interfaces.stats import (
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
     GlobalSubscribersOverTimeStats,
+    GlobalLatestSubscribersStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -89,6 +90,21 @@ async def get_chat_users_stats(
         return await StatsService.get_global_chat_users_stats(start_date, end_date, window)
     except Exception as e:
         logger.error(f"Error in chat users stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(
+    "/global/subscriptions/latest",
+    response_model=GlobalLatestSubscribersStats,
+    dependencies=[Depends(require_staff)],
+)  # type: ignore
+async def get_latest_subscribers(
+    limit: int = Query(20, ge=1, le=200, description="Number of most recent subscriptions to return"),
+) -> GlobalLatestSubscribersStats:
+    try:
+        return await StatsService.get_latest_subscribers(limit)
+    except Exception as e:
+        logger.error(f"Error in latest subscribers route: {str(e)}", exc_info=True)
         raise
 
 
