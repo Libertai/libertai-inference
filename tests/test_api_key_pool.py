@@ -87,7 +87,7 @@ async def test_claim_returns_warm_row_and_resets_metadata():
         # Need a real user row for the FK; create a throwaway user.
         from src.models.user import User
 
-        user = User(email=f"pool-{uuid.uuid4().hex}@example.com", email_verified=True)
+        user = User(email=f"pool-{uuid.uuid4().hex}@example.com")
         db.add(user)
         await db.flush()
         row = await ApiKeyPoolService.claim_warm_key(
@@ -132,7 +132,7 @@ async def test_concurrent_claims_get_distinct_rows():
 
     warm_keys = {await _add_pool_key(age_seconds=120), await _add_pool_key(age_seconds=120)}
     async with AsyncSessionLocal() as db:
-        user = User(email=f"pool-{uuid.uuid4().hex}@example.com", email_verified=True)
+        user = User(email=f"pool-{uuid.uuid4().hex}@example.com")
         db.add(user)
         await db.commit()
         user_id = user.id

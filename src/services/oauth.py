@@ -18,7 +18,6 @@ class OAuthUserInfo:
     provider: str
     provider_id: str
     email: str | None
-    email_verified: bool
     name: str | None
     avatar_url: str | None
 
@@ -91,7 +90,6 @@ async def _google_user_info(
         provider="google",
         provider_id=str(data["sub"]),
         email=data.get("email"),
-        email_verified=bool(data.get("email_verified", False)),
         name=data.get("name"),
         avatar_url=data.get("picture"),
     )
@@ -118,22 +116,19 @@ async def _github_user_info(
     user_resp.raise_for_status()
     user = user_resp.json()
 
-    # GitHub may omit a public email on /user; resolve the primary verified one.
+    # GitHub may omit a public email on /user; resolve the primary one.
     email: str | None = user.get("email")
-    email_verified = False
     emails_resp = await client.get("https://api.github.com/user/emails", headers=headers)
     if emails_resp.status_code == 200:
         for entry in emails_resp.json():
             if entry.get("primary"):
                 email = entry.get("email")
-                email_verified = bool(entry.get("verified", False))
                 break
 
     return OAuthUserInfo(
         provider="github",
         provider_id=str(user["id"]),
         email=email,
-        email_verified=email_verified,
         name=user.get("name") or user.get("login"),
         avatar_url=user.get("avatar_url"),
     )

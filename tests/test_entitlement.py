@@ -20,7 +20,7 @@ NOW = datetime(2026, 6, 3, 12, 0, 0)
 
 
 async def _user(db) -> User:
-    u = User(email=f"{uuid.uuid4().hex}@example.com", email_verified=True)
+    u = User(email=f"{uuid.uuid4().hex}@example.com")
     db.add(u)
     await db.flush()
     return u

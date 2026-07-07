@@ -14,7 +14,6 @@ def _oauth_info(provider="google", provider_id="oauth-1", email="oauth1@example.
         provider=provider,
         provider_id=provider_id,
         email=email,
-        email_verified=True,
         name="OAuth User",
         avatar_url="http://avatar",
     )

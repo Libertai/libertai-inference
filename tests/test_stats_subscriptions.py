@@ -27,14 +27,14 @@ _TS = datetime(2099, 6, 15, 12, 0, 0)
 
 
 async def _mk_user(db) -> uuid.UUID:
-    u = User(email=f"stats-{uuid.uuid4().hex}@example.com", email_verified=True)
+    u = User(email=f"stats-{uuid.uuid4().hex}@example.com")
     db.add(u)
     await db.flush()
     return u.id
 
 
 async def _mk_staff_headers(db) -> tuple[dict, uuid.UUID]:
-    u = User(email=f"stats-staff-{uuid.uuid4().hex}@example.com", email_verified=True)
+    u = User(email=f"stats-staff-{uuid.uuid4().hex}@example.com")
     u.is_libertai_staff = True
     db.add(u)
     await db.flush()

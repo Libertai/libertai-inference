@@ -21,7 +21,6 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
-    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
@@ -53,13 +52,11 @@ class User(Base):
         self,
         address: str | None = None,
         email: str | None = None,
-        email_verified: bool = False,
         display_name: str | None = None,
         avatar_url: str | None = None,
     ):
         self.address = address
         self.email = email
-        self.email_verified = email_verified
         self.display_name = display_name
         self.avatar_url = avatar_url
 

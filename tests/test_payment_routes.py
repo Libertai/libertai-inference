@@ -24,7 +24,7 @@ from src.topup_packs import TOPUP_PACKS
 async def _auth_user() -> tuple[User, dict]:
     """Email/OAuth user with no wallet connection (fiat rail)."""
     async with AsyncSessionLocal() as db:
-        user = User(email=f"pay-route-{int(time.time()*1000)}@example.com", email_verified=True)
+        user = User(email=f"pay-route-{int(time.time()*1000)}@example.com")
         db.add(user)
         await db.commit()
         await db.refresh(user)

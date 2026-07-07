@@ -115,4 +115,3 @@ async def test_google_exchange_maps_user_info(monkeypatch):
     assert info.provider == "google"
     assert info.provider_id == "123"
     assert info.email == "g@example.com"
-    assert info.email_verified is True

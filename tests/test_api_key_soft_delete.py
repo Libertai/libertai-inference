@@ -20,7 +20,7 @@ _ADDRESS = "0x40203608fb7393faabea20e59c5223c513e82214"
 
 async def _user_with_key() -> tuple[uuid.UUID, uuid.UUID]:
     async with AsyncSessionLocal() as db:
-        user = User(email=f"sd-{uuid.uuid4().hex}@example.com", email_verified=True)
+        user = User(email=f"sd-{uuid.uuid4().hex}@example.com")
         db.add(user)
         await db.flush()
         # user_address set to mirror production: the dropped UNIQUE(user_address, name)

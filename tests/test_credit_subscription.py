@@ -29,7 +29,7 @@ from src.subscription_tiers import get_tier
 # ------------------------------------------------------------------ helpers
 
 async def _make_user(db: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4().hex}@example.com", email_verified=True)
+    user = User(email=f"{uuid.uuid4().hex}@example.com")
     db.add(user)
     await db.flush()
     return user

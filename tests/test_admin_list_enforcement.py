@@ -36,7 +36,7 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
     """
     now = datetime.now()
     async with AsyncSessionLocal() as db:
-        user = User(email=f"enf-{uuid.uuid4().hex}@example.com", email_verified=True)
+        user = User(email=f"enf-{uuid.uuid4().hex}@example.com")
         db.add(user)
         await db.flush()
         key = ApiKeyDB(key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api)

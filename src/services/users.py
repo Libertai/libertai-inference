@@ -57,12 +57,12 @@ async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
 
 
 async def get_or_create_user_by_email(db: AsyncSession, email: str) -> tuple[User, bool]:
-    """Resolve an email to its user (created via magic link => email is verified). No wallet."""
+    """Resolve an email to its user, creating one if none exists. No wallet."""
     email = email.strip().lower()
     user = (await db.execute(select(User).where(User.email == email))).scalars().first()
     if user is not None:
         return user, False
-    user = User(email=email, email_verified=True)
+    user = User(email=email)
     db.add(user)
     await db.flush()
     return user, True
@@ -93,7 +93,6 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
     if user is None:
         user = User(
             email=info.email.strip().lower() if info.email else None,
-            email_verified=info.email_verified,
             display_name=info.name,
             avatar_url=info.avatar_url,
         )

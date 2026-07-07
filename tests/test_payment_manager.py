@@ -84,7 +84,7 @@ class FakeProvider(PaymentProvider):
 
 
 async def _make_user(db) -> User:
-    user = User(email=f"{uuid.uuid4().hex}@example.com", email_verified=True)
+    user = User(email=f"{uuid.uuid4().hex}@example.com")
     db.add(user)
     await db.flush()
     return user

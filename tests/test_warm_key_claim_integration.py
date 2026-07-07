@@ -38,7 +38,7 @@ async def _clear_pool() -> None:
 
 async def _make_user() -> uuid.UUID:
     async with AsyncSessionLocal() as db:
-        user = User(email=f"warm-{uuid.uuid4().hex}@example.com", email_verified=True)
+        user = User(email=f"warm-{uuid.uuid4().hex}@example.com")
         db.add(user)
         await db.commit()
         return user.id
