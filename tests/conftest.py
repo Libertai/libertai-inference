@@ -76,6 +76,11 @@ import src.models.entitlement_window  # noqa: E402,F401
 import src.models.plan_subscription  # noqa: E402,F401
 import src.models.plan_subscription_event  # noqa: E402,F401
 import src.models.session  # noqa: E402,F401
+import src.models.team  # noqa: E402,F401
+import src.models.team_credit_transaction  # noqa: E402,F401
+import src.models.team_invite  # noqa: E402,F401
+import src.models.team_ledger_entry  # noqa: E402,F401
+import src.models.team_membership  # noqa: E402,F401
 import src.models.user  # noqa: E402,F401
 import src.models.wallet_challenge  # noqa: E402,F401
 import src.models.wallet_connection  # noqa: E402,F401

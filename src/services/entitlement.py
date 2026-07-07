@@ -61,20 +61,190 @@ class AllowanceState:
     weekly_used: float
     weekly_limit: float
     prepaid_balance: float
-    source: str  # "tier" | "prepaid" | "blocked"
+    source: str  # "tier" | "prepaid" | "team" | "blocked"
     # When each active window resets (None if no active window of that kind).
     window_5h_resets_at: datetime | None
     weekly_resets_at: datetime | None
 
 
-def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepaid: float) -> str:
-    """Decide which path covers the *next* call: tier window, prepaid, or none."""
+@dataclass
+class TeamExtraContext:
+    team_id: uuid.UUID
+    available: float
+
+
+def compute_source(
+    tier: TierConfig,
+    usage_5h: float,
+    usage_weekly: float,
+    prepaid: float,
+    team_extra_available: float = 0.0,
+) -> str:
+    """Decide which path covers the *next* call: tier window, prepaid, team extra, or none."""
     within_window = usage_5h < tier.window_5h_credits and usage_weekly < tier.weekly_credits
     if within_window:
         return "tier"
     if prepaid >= PREPAID_MIN:
         return "prepaid"
+    if team_extra_available >= PREPAID_MIN:
+        return "team"
     return "blocked"
+
+
+def _month_start(now: datetime) -> datetime:
+    return datetime(now.year, now.month, 1)
+
+
+async def _team_extra_spend(
+    db: AsyncSession, team_id: uuid.UUID, month_start: datetime, user_id: uuid.UUID | None = None
+) -> float:
+    """Month-to-date team-funded spend: SUM(credits_used - tier_credits_used) over
+    team-stamped calls. NEVER sum credits_used alone — the window-covered portion
+    of a straddling call must not eat the cap."""
+    stmt = select(
+        sql_func.coalesce(
+            sql_func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0
+        )
+    ).where(InferenceCall.team_id == team_id, InferenceCall.used_at >= month_start)
+    if user_id is not None:
+        stmt = stmt.join(ApiKeyDB, InferenceCall.api_key_id == ApiKeyDB.id).where(
+            ApiKeyDB.user_id == user_id
+        )
+    return float((await db.execute(stmt)).scalar() or 0.0)
+
+
+async def get_team_extra_context(
+    db: AsyncSession, user_id: uuid.UUID, now: datetime
+) -> TeamExtraContext | None:
+    """Extra-credits headroom for a team member (None = not a member).
+
+    available = max(0, min(member cap headroom, team cap headroom, team balance)).
+    Caps of None mean 0 (disabled). Suspended teams always yield 0.
+    """
+    from src.models.team import Team
+    from src.models.team_membership import TeamMembership
+    from src.services.team_credit import TeamCreditService
+
+    row = (
+        await db.execute(
+            select(TeamMembership, Team)
+            .join(Team, Team.id == TeamMembership.team_id)
+            .where(TeamMembership.user_id == user_id)
+        )
+    ).first()
+    if row is None:
+        return None
+    membership, team = row
+    if team.status != "active":
+        return TeamExtraContext(team_id=team.id, available=0.0)
+
+    member_cap = (
+        membership.extra_credits_cap_override
+        if membership.extra_credits_cap_override is not None
+        else (team.extra_credits_member_default_cap or 0.0)
+    )
+    team_cap = team.extra_credits_monthly_cap or 0.0
+    month_start = _month_start(now)
+    member_spent = await _team_extra_spend(db, team.id, month_start, user_id=user_id)
+    team_spent = await _team_extra_spend(db, team.id, month_start)
+    balance = await TeamCreditService.get_balance(db, team.id)
+    # Caps are best-effort under concurrency: spend is read without locks, so N members racing can collectively overshoot by up to (N-1) calls' overflow, bounded by the team balance.
+    available = max(0.0, min(member_cap - member_spent, team_cap - team_spent, balance))
+    return TeamExtraContext(team_id=team.id, available=available)
+
+
+async def team_extra_available_by_users(
+    db: AsyncSession, user_ids: set[uuid.UUID], now: datetime
+) -> dict[uuid.UUID, TeamExtraContext]:
+    """Batched ``get_team_extra_context`` (gateway path — no per-key N+1)."""
+    from src.models.team import Team
+    from src.models.team_credit_transaction import TeamCreditTransaction
+    from src.models.team_membership import TeamMembership
+
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(TeamMembership, Team)
+            .join(Team, Team.id == TeamMembership.team_id)
+            .where(TeamMembership.user_id.in_(user_ids))
+        )
+    ).all()
+    if not rows:
+        return {}
+    team_ids = {team.id for _, team in rows}
+    month_start = _month_start(now)
+
+    member_spend_rows = (
+        await db.execute(
+            select(
+                ApiKeyDB.user_id,
+                sql_func.coalesce(
+                    sql_func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0
+                ),
+            )
+            .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
+            .where(
+                InferenceCall.team_id.in_(team_ids),
+                InferenceCall.used_at >= month_start,
+                ApiKeyDB.user_id.in_(user_ids),
+            )
+            .group_by(ApiKeyDB.user_id)
+        )
+    ).all()
+    member_spent = {r[0]: float(r[1]) for r in member_spend_rows}
+
+    team_spend_rows = (
+        await db.execute(
+            select(
+                InferenceCall.team_id,
+                sql_func.coalesce(
+                    sql_func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0
+                ),
+            )
+            .where(InferenceCall.team_id.in_(team_ids), InferenceCall.used_at >= month_start)
+            .group_by(InferenceCall.team_id)
+        )
+    ).all()
+    team_spent = {r[0]: float(r[1]) for r in team_spend_rows}
+
+    balance_rows = (
+        await db.execute(
+            select(
+                TeamCreditTransaction.team_id,
+                sql_func.coalesce(sql_func.sum(TeamCreditTransaction.amount_left), 0.0),
+            )
+            .where(
+                TeamCreditTransaction.team_id.in_(team_ids),
+                TeamCreditTransaction.is_active == True,  # noqa: E712
+                TeamCreditTransaction.status == CreditTransactionStatus.completed,
+            )
+            .group_by(TeamCreditTransaction.team_id)
+        )
+    ).all()
+    balances = {r[0]: float(r[1]) for r in balance_rows}
+
+    result: dict[uuid.UUID, TeamExtraContext] = {}
+    for membership, team in rows:
+        if team.status != "active":
+            result[membership.user_id] = TeamExtraContext(team_id=team.id, available=0.0)
+            continue
+        member_cap = (
+            membership.extra_credits_cap_override
+            if membership.extra_credits_cap_override is not None
+            else (team.extra_credits_member_default_cap or 0.0)
+        )
+        team_cap = team.extra_credits_monthly_cap or 0.0
+        available = max(
+            0.0,
+            min(
+                member_cap - member_spent.get(membership.user_id, 0.0),
+                team_cap - team_spent.get(team.id, 0.0),
+                balances.get(team.id, 0.0),
+            ),
+        )
+        result[membership.user_id] = TeamExtraContext(team_id=team.id, available=available)
+    return result
 
 
 async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | None = None) -> None:
@@ -227,7 +397,12 @@ async def get_allowance_state(
     usage_weekly = await _usage_since(db, user_id, window_weekly.started_at) if window_weekly else 0.0
     prepaid = await _prepaid_balance(db, user_id)
 
-    source = compute_source(tier, usage_5h, usage_weekly, prepaid)
+    ctx = await get_team_extra_context(db, user_id, now)
+    if ctx is not None:
+        # Members never spend personal prepaid — the team extra path funds overflow.
+        source = compute_source(tier, usage_5h, usage_weekly, 0.0, team_extra_available=ctx.available)
+    else:
+        source = compute_source(tier, usage_5h, usage_weekly, prepaid)
 
     return AllowanceState(
         allowed=source != "blocked",

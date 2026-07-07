@@ -84,6 +84,8 @@ class SubscriptionResponse(BaseModel):
     cancel_at_period_end: bool = False
     pending_tier: str | None = None
     is_trial: bool = False
+    is_team_seat: bool = False
+    team_name: str | None = None
     # Live gateway decision for the next call: lets the UI show the paywall directly.
     allowed: bool = True
     source: str = "tier"  # "tier" | "prepaid" | "blocked"

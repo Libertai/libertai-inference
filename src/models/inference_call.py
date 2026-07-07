@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -30,6 +31,12 @@ class InferenceCall(Base):
     # paid from prepaid balance. Window usage sums this column, so prepaid-paid usage
     # never drains the allowance.
     tier_credits_used: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    # Set when part of this call was paid from a team balance (the extra-credits
+    # portion, credits_used - tier_credits_used). Monthly team/member cap
+    # aggregation sums that difference over rows with a team_id.
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, ForeignKey("teams.id", ondelete="SET NULL"), nullable=True
+    )
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -45,6 +52,12 @@ class InferenceCall(Base):
         CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),
         CheckConstraint("tier_credits_used >= 0", name="check_tier_credits_used_non_negative"),
         Index("ix_inference_calls_api_key_id_used_at", "api_key_id", "used_at"),
+        Index(
+            "ix_inference_calls_team_id_used_at",
+            "team_id",
+            "used_at",
+            postgresql_where=text("team_id IS NOT NULL"),
+        ),
     )
 
     def __init__(
@@ -57,6 +70,7 @@ class InferenceCall(Base):
         cached_tokens: int = 0,
         image_count: int = 0,
         tier_credits_used: float = 0.0,
+        team_id: uuid.UUID | None = None,
     ):
         self.api_key_id = api_key_id
         self.credits_used = credits_used
@@ -66,3 +80,4 @@ class InferenceCall(Base):
         self.cached_tokens = cached_tokens
         self.image_count = image_count
         self.tier_credits_used = tier_credits_used
+        self.team_id = team_id

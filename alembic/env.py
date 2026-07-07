@@ -20,6 +20,11 @@ from src.models.oauth_connection import OAuthConnection  # noqa
 from src.models.plan_subscription import PlanSubscription  # noqa
 from src.models.plan_subscription_event import PlanSubscriptionEvent  # noqa
 from src.models.session import Session  # noqa
+from src.models.team import Team  # noqa
+from src.models.team_credit_transaction import TeamCreditTransaction  # noqa
+from src.models.team_invite import TeamInvite  # noqa
+from src.models.team_ledger_entry import TeamLedgerEntry  # noqa
+from src.models.team_membership import TeamMembership  # noqa
 from src.models.user import User  # noqa
 from src.models.wallet_challenge import WalletChallenge  # noqa
 from src.models.wallet_connection import WalletConnection  # noqa
