@@ -49,9 +49,16 @@ async def test_latest_subscribers_status_filtering():
     assert all(s.status != "pending" for s in default.subscribers)
 
     # all: pending included (it's the newest row overall).
-    everything = await StatsService.get_latest_subscribers(limit=5, status=SubscriptionStatusFilter.all)
+    everything = await StatsService.get_latest_subscribers(limit=5, statuses=[SubscriptionStatusFilter.all])
     assert everything.subscribers[0].status == "pending"
 
     # Exact status filter.
-    only_pending = await StatsService.get_latest_subscribers(limit=5, status=SubscriptionStatusFilter.pending)
+    only_pending = await StatsService.get_latest_subscribers(limit=5, statuses=[SubscriptionStatusFilter.pending])
     assert only_pending.subscribers and all(s.status == "pending" for s in only_pending.subscribers)
+
+    # Multi-status set: rows whose status is in the set.
+    subset = await StatsService.get_latest_subscribers(
+        limit=5, statuses=[SubscriptionStatusFilter.pending, SubscriptionStatusFilter.active]
+    )
+    got = {s.status for s in subset.subscribers}
+    assert got == {"pending", "active"}

@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 
 from src.interfaces.api_keys import ApiKeyType, InferenceKeyType
 from src.interfaces.stats import (
@@ -103,12 +103,20 @@ async def get_chat_users_stats(
 )
 async def get_latest_subscribers(
     limit: int = Query(20, ge=1, le=200, description="Number of most recent subscriptions to return"),
-    status: SubscriptionStatusFilter | None = Query(
-        None, description="Filter by subscription status; omitted = all except pending"
+    status: str | None = Query(
+        None, description="Comma-separated subscription statuses; omitted = all except pending"
     ),
 ) -> GlobalLatestSubscribersStats:
+    statuses: list[SubscriptionStatusFilter] | None = None
+    if status:
+        try:
+            statuses = [SubscriptionStatusFilter(s) for s in status.split(",") if s]
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status filter: {status}")
     try:
-        return await StatsService.get_latest_subscribers(limit, status)
+        return await StatsService.get_latest_subscribers(limit, statuses)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in latest subscribers route: {str(e)}", exc_info=True)
         raise

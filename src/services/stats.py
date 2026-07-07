@@ -916,12 +916,12 @@ class StatsService:
 
     @staticmethod
     async def get_latest_subscribers(
-        limit: int = 20, status: SubscriptionStatusFilter | None = None
+        limit: int = 20, statuses: list[SubscriptionStatusFilter] | None = None
     ) -> GlobalLatestSubscribersStats:
         """Most recent plan subscriptions (all providers), newest first, with a display label per user.
 
-        ``status=None`` excludes ``pending`` rows (mostly abandoned checkouts); ``all`` returns
-        everything; any other value filters to exactly that status.
+        ``statuses=None``/empty excludes ``pending`` rows (mostly abandoned checkouts); an ``all``
+        entry returns everything; otherwise filters to exactly the given statuses.
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -931,10 +931,10 @@ class StatsService:
                     .order_by(PlanSubscription.created_at.desc())
                     .limit(limit)
                 )
-                if status is None:
+                if not statuses:
                     stmt = stmt.where(PlanSubscription.status != "pending")
-                elif status is not SubscriptionStatusFilter.all:
-                    stmt = stmt.where(PlanSubscription.status == status.value)
+                elif SubscriptionStatusFilter.all not in statuses:
+                    stmt = stmt.where(PlanSubscription.status.in_([s.value for s in statuses]))
                 rows = (await db.execute(stmt)).all()
 
                 subscribers = []
