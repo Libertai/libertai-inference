@@ -36,6 +36,7 @@ from src.interfaces.stats import (
     TierSubscribersDay,
     LatestSubscriber,
     GlobalLatestSubscribersStats,
+    SubscriptionStatusFilter,
     MrrByTier,
     MrrDay,
     GlobalSubscriptionsRevenueStats,
@@ -914,18 +915,27 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    async def get_latest_subscribers(limit: int = 20) -> GlobalLatestSubscribersStats:
-        """Most recent plan subscriptions (all providers), newest first, with a display label per user."""
+    async def get_latest_subscribers(
+        limit: int = 20, status: SubscriptionStatusFilter | None = None
+    ) -> GlobalLatestSubscribersStats:
+        """Most recent plan subscriptions (all providers), newest first, with a display label per user.
+
+        ``status=None`` excludes ``pending`` rows (mostly abandoned checkouts); ``all`` returns
+        everything; any other value filters to exactly that status.
+        """
         try:
             async with AsyncSessionLocal() as db:
-                rows = (
-                    await db.execute(
-                        select(PlanSubscription, User)
-                        .join(User, PlanSubscription.user_id == User.id)
-                        .order_by(PlanSubscription.created_at.desc())
-                        .limit(limit)
-                    )
-                ).all()
+                stmt = (
+                    select(PlanSubscription, User)
+                    .join(User, PlanSubscription.user_id == User.id)
+                    .order_by(PlanSubscription.created_at.desc())
+                    .limit(limit)
+                )
+                if status is None:
+                    stmt = stmt.where(PlanSubscription.status != "pending")
+                elif status is not SubscriptionStatusFilter.all:
+                    stmt = stmt.where(PlanSubscription.status == status.value)
+                rows = (await db.execute(stmt)).all()
 
                 subscribers = []
                 for sub, user in rows:

@@ -19,6 +19,7 @@ from src.interfaces.stats import (
     GlobalSubscriptionsStats,
     GlobalSubscribersOverTimeStats,
     GlobalLatestSubscribersStats,
+    SubscriptionStatusFilter,
     GlobalSubscriptionsRevenueStats,
     GlobalSubscriptionsChurnStats,
 )
@@ -102,9 +103,12 @@ async def get_chat_users_stats(
 )
 async def get_latest_subscribers(
     limit: int = Query(20, ge=1, le=200, description="Number of most recent subscriptions to return"),
+    status: SubscriptionStatusFilter | None = Query(
+        None, description="Filter by subscription status; omitted = all except pending"
+    ),
 ) -> GlobalLatestSubscribersStats:
     try:
-        return await StatsService.get_latest_subscribers(limit)
+        return await StatsService.get_latest_subscribers(limit, status)
     except Exception as e:
         logger.error(f"Error in latest subscribers route: {str(e)}", exc_info=True)
         raise

@@ -236,6 +236,19 @@ class GlobalSubscribersOverTimeStats(BaseModel):
     daily: list[TierSubscribersDay]
 
 
+class SubscriptionStatusFilter(str, Enum):
+    """Status filter for the latest-subscribers list. ``all`` includes every status;
+    omitting the filter defaults to everything EXCEPT ``pending`` (abandoned checkouts)."""
+
+    all = "all"
+    active = "active"
+    pending = "pending"
+    overdue = "overdue"
+    cancelled = "cancelled"
+    expired = "expired"
+    upgrading = "upgrading"
+
+
 class LatestSubscriber(BaseModel):
     """A single recent plan subscription with a human-friendly label for its user.
 
