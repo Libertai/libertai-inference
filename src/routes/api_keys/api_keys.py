@@ -41,9 +41,11 @@ async def create_api_key(api_key_create: ApiKeyCreate, user: User = Depends(get_
             user_address=user.address,
         )
         return full_api_key
-    except Exception as e:
-        logger.error(f"Error creating API key: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+    except Exception:
+        logger.error("Error creating API key", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create API key"
+        )
 
 
 @router.get("")  # type: ignore
@@ -53,7 +55,7 @@ async def get_api_keys(user: User = Depends(get_current_user)) -> ApiKeyListResp
         return ApiKeyListResponse(keys=api_keys)
     except Exception as e:
         logger.error(f"Error getting API keys: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.get("/chat")  # type: ignore
@@ -63,7 +65,7 @@ async def get_chat_api_key(user: User = Depends(get_current_user)) -> ChatApiKey
         return ChatApiKeyResponse(key=chat_api_key.full_key)
     except Exception as e:
         logger.error(f"Error getting or creating chat API key: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.post("/cli")  # type: ignore
@@ -81,7 +83,7 @@ async def create_cli_api_key(
         )
     except Exception as e:
         logger.error(f"Error creating CLI API key: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.get("/cli")  # type: ignore
@@ -90,7 +92,7 @@ async def get_cli_api_keys(user: User = Depends(get_current_user)) -> list[ApiKe
         return await ApiKeyService.get_cli_api_keys(user_id=user.id)
     except Exception as e:
         logger.error(f"Error getting CLI API keys: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.put("/{key_id}")  # type: ignore
@@ -130,7 +132,7 @@ async def update_api_key(
         raise
     except Exception as e:
         logger.error(f"Error updating API key: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.delete("/{key_id}")  # type: ignore
@@ -154,7 +156,7 @@ async def delete_api_key(key_id: uuid.UUID, user: User = Depends(get_current_use
         raise
     except Exception as e:
         logger.error(f"Error deleting API key: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.post("/admin/usage")  # type: ignore
@@ -341,7 +343,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
         raise
     except Exception as e:
         logger.error(f"Error logging API key usage: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @router.get("/admin/list", dependencies=[Depends(verify_admin_token)])  # type: ignore
@@ -351,4 +353,4 @@ async def get_admin_all_api_keys() -> ApiKeyAdminListResponse:
         return ApiKeyAdminListResponse(keys=api_keys)
     except Exception as e:
         logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"{str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")

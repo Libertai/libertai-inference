@@ -60,25 +60,7 @@ class ApiKeyService:
 
         try:
             async with AsyncSessionLocal() as db:
-                # Check if name already exists for this user (ignoring soft-deleted keys,
-                # so a deleted key's name can be reused).
-                existing_key = (
-                    (
-                        await db.execute(
-                            select(ApiKeyDB).where(
-                                ApiKeyDB.user_id == user_id,
-                                ApiKeyDB.name == name,
-                                ApiKeyDB.deleted_at.is_(None),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .first()
-                )
-
-                if existing_key:
-                    await db.rollback()
-                    raise ValueError(f"API key with name '{name}' already exists")
+                # Names are not unique — a user may have several keys sharing a name.
 
                 # Prefer a pre-warmed pool key (already propagated to instances);
                 # fall back to cold generation when none is ready.
@@ -455,28 +437,8 @@ class ApiKeyService:
                     logger.warning(f"API key {key_id} not found for update")
                     return None
 
-                # Update fields if provided
+                # Update fields if provided (names are not unique per user)
                 if name is not None:
-                    # Check if name already exists for this user
-                    existing_key = (
-                        (
-                            await db.execute(
-                                select(ApiKeyDB).where(
-                                    ApiKeyDB.user_id == api_key.user_id,
-                                    ApiKeyDB.name == name,
-                                    ApiKeyDB.id != key_id,
-                                )
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-
-                    if existing_key:
-                        logger.warning(f"API key with name '{name}' already exists for user {api_key.user_id}")
-                        await db.rollback()
-                        return None
-
                     api_key.name = name
 
                 if is_active is not None:

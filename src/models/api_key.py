@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UniqueConstraint, UUID, Enum, select
+from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UUID, Enum, select
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql.expression import func as sql_func
 
@@ -51,7 +51,8 @@ class ApiKey(Base):
     )
     liberclaw_user: Mapped["LiberclawUser | None"] = relationship("LiberclawUser", back_populates="api_keys")
 
-    __table_args__ = (UniqueConstraint("user_address", "name", name="unique_api_key_name_per_user"),)
+    # Names are not unique: a user may have several keys sharing a name (and reuse a
+    # soft-deleted key's name freely).
 
     def __init__(
         self,

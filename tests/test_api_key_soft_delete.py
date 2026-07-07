@@ -15,12 +15,23 @@ from src.services.api_key import ApiKeyService
 pytestmark = pytest.mark.asyncio
 
 
+_ADDRESS = "0x40203608fb7393faabea20e59c5223c513e82214"
+
+
 async def _user_with_key() -> tuple[uuid.UUID, uuid.UUID]:
     async with AsyncSessionLocal() as db:
         user = User(email=f"sd-{uuid.uuid4().hex}@example.com", email_verified=True)
         db.add(user)
         await db.flush()
-        key = ApiKeyDB(key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api)
+        # user_address set to mirror production: the dropped UNIQUE(user_address, name)
+        # constraint used to collide here on same-name recreate.
+        key = ApiKeyDB(
+            key=ApiKeyDB.generate_key(),
+            name=uuid.uuid4().hex,
+            user_id=user.id,
+            user_address=_ADDRESS,
+            type=ApiKeyType.api,
+        )
         db.add(key)
         await db.flush()
         db.add(InferenceCall(api_key_id=key.id, credits_used=0.3, model_name="m"))
@@ -72,7 +83,21 @@ async def test_deleted_key_name_is_reusable():
             name = (await db.get(ApiKeyDB, key_id)).name
         await ApiKeyService.delete_api_key(key_id)
         # Same name can be created again after the original was soft-deleted.
-        created = await ApiKeyService.create_api_key(user_id=user_id, name=name)
+        created = await ApiKeyService.create_api_key(user_id=user_id, name=name, user_address=_ADDRESS)
         assert created.name == name
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_duplicate_live_name_allowed():
+    user_id, key_id = await _user_with_key()
+    try:
+        async with AsyncSessionLocal() as db:
+            name = (await db.get(ApiKeyDB, key_id)).name
+        # A second live key with the same name (and same user_address) is allowed.
+        created = await ApiKeyService.create_api_key(user_id=user_id, name=name, user_address=_ADDRESS)
+        assert created.name == name
+        listed = await ApiKeyService.get_api_keys(user_id)
+        assert sum(1 for k in listed if k.name == name) == 2
     finally:
         await _cleanup(user_id)

@@ -14,9 +14,7 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 # Sentinel name for unclaimed pool rows. `api_keys.name` is NOT NULL, so pool rows
-# need a placeholder; it is overwritten with the user's name on claim. Multiple pool
-# rows sharing this name do not violate the legacy (user_address, name) unique
-# constraint because user_address is NULL (NULLs are distinct in PG unique indexes).
+# need a placeholder; it is overwritten with the user's name on claim.
 POOL_SENTINEL_NAME = "__pool__"
 
 # Serialize refills so two concurrent top-ups don't both observe a stale count and
