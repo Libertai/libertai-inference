@@ -7,7 +7,6 @@ sessions), so each test cleans up its own rows.
 import uuid
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.interfaces.credits import VoucherAddCreditsRequest
@@ -65,18 +64,22 @@ async def test_wallet_path_credits_wallet_user():
 # --- email path (new) ---
 
 
-async def test_email_unknown_account_is_rejected_and_creates_nothing():
+async def test_email_unknown_account_is_created_and_credited():
     email = f"voucher-{uuid.uuid4().hex}@example.com"
-    with pytest.raises(HTTPException) as exc:
-        await add_voucher_credits(VoucherAddCreditsRequest(email=email, amount=12.0))
-    assert exc.value.status_code == 404
-    assert await _user_by_email(email) is None  # must not be created
+    ok = await add_voucher_credits(VoucherAddCreditsRequest(email=email, amount=12.0))
+    assert ok is True
+    user = await _user_by_email(email)
+    assert user is not None  # account auto-created
+    try:
+        assert await _balance(user.id) == pytest.approx(12.0)
+    finally:
+        await _cleanup_user(user.id)
 
 
 async def test_email_path_credits_existing_user():
     email = f"voucher-{uuid.uuid4().hex}@example.com"
     async with AsyncSessionLocal() as db:
-        user = User(email=email, email_verified=True)
+        user = User(email=email)
         db.add(user)
         await db.commit()
         user_id = user.id
