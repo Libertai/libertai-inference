@@ -266,9 +266,41 @@ class LatestSubscriber(BaseModel):
 
 
 class GlobalLatestSubscribersStats(BaseModel):
-    """Most recent plan subscriptions across all providers, newest first."""
+    """Most recent plan subscriptions across all providers, newest first.
+
+    ``total`` is the count of ALL rows matching the status filter (ignoring ``limit``),
+    so callers can show "showing N of total".
+    """
 
     subscribers: list[LatestSubscriber]
+    total: int
+
+
+class SubscriptionActivityType(str, Enum):
+    """Human-facing subscription lifecycle events for the activity feed."""
+
+    subscribed = "subscribed"
+    upgraded = "upgraded"
+    downgraded = "downgraded"
+    cancelled = "cancelled"
+    churned = "churned"
+    payment_failed = "payment_failed"
+
+
+class SubscriptionActivityEvent(BaseModel):
+    """One lifecycle event, mapped from the raw event log to a human-facing type."""
+
+    created_at: str  # ISO date-time
+    type: SubscriptionActivityType
+    user_label: str
+    tier: str
+    provider: str
+
+
+class GlobalSubscriptionActivityStats(BaseModel):
+    """Recent subscription lifecycle events across all providers, newest first."""
+
+    events: list[SubscriptionActivityEvent]
 
 
 class MrrByTier(BaseModel):

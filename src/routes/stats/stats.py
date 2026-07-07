@@ -20,6 +20,8 @@ from src.interfaces.stats import (
     GlobalSubscribersOverTimeStats,
     GlobalLatestSubscribersStats,
     SubscriptionStatusFilter,
+    SubscriptionActivityType,
+    GlobalSubscriptionActivityStats,
     GlobalSubscriptionsRevenueStats,
     GlobalSubscriptionsChurnStats,
 )
@@ -102,7 +104,7 @@ async def get_chat_users_stats(
     dependencies=[Depends(require_staff)],
 )
 async def get_latest_subscribers(
-    limit: int = Query(20, ge=1, le=200, description="Number of most recent subscriptions to return"),
+    limit: int | None = Query(20, ge=1, description="Max rows to return; omit for all matching"),
     status: str | None = Query(
         None, description="Comma-separated subscription statuses; omitted = all except pending"
     ),
@@ -119,6 +121,30 @@ async def get_latest_subscribers(
         raise
     except Exception as e:
         logger.error(f"Error in latest subscribers route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/subscriptions/activity",
+    response_model=GlobalSubscriptionActivityStats,
+    dependencies=[Depends(require_staff)],
+)
+async def get_subscription_activity(
+    limit: int = Query(20, ge=1, le=200, description="Number of recent activity events to return"),
+    types: str | None = Query(None, description="Comma-separated activity types; omitted = all"),
+) -> GlobalSubscriptionActivityStats:
+    activity_types: list[SubscriptionActivityType] | None = None
+    if types:
+        try:
+            activity_types = [SubscriptionActivityType(t) for t in types.split(",") if t]
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid activity type: {types}")
+    try:
+        return await StatsService.get_subscription_activity(limit, activity_types)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in subscription activity route: {str(e)}", exc_info=True)
         raise
 
 

@@ -37,6 +37,9 @@ from src.interfaces.stats import (
     LatestSubscriber,
     GlobalLatestSubscribersStats,
     SubscriptionStatusFilter,
+    SubscriptionActivityType,
+    SubscriptionActivityEvent,
+    GlobalSubscriptionActivityStats,
     MrrByTier,
     MrrDay,
     GlobalSubscriptionsRevenueStats,
@@ -916,25 +919,37 @@ class StatsService:
 
     @staticmethod
     async def get_latest_subscribers(
-        limit: int = 20, statuses: list[SubscriptionStatusFilter] | None = None
+        limit: int | None = 20, statuses: list[SubscriptionStatusFilter] | None = None
     ) -> GlobalLatestSubscribersStats:
         """Most recent plan subscriptions (all providers), newest first, with a display label per user.
 
         ``statuses=None``/empty excludes ``pending`` rows (mostly abandoned checkouts); an ``all``
-        entry returns everything; otherwise filters to exactly the given statuses.
+        entry returns everything; otherwise filters to exactly the given statuses. ``limit=None``
+        returns every match; ``total`` always counts every match, ignoring ``limit``.
         """
         try:
             async with AsyncSessionLocal() as db:
+                if not statuses:
+                    condition = PlanSubscription.status != "pending"
+                elif SubscriptionStatusFilter.all in statuses:
+                    condition = None
+                else:
+                    condition = PlanSubscription.status.in_([s.value for s in statuses])
+
+                count_stmt = select(func.count()).select_from(PlanSubscription)
+                if condition is not None:
+                    count_stmt = count_stmt.where(condition)
+                total = (await db.execute(count_stmt)).scalar_one()
+
                 stmt = (
                     select(PlanSubscription, User)
                     .join(User, PlanSubscription.user_id == User.id)
                     .order_by(PlanSubscription.created_at.desc())
-                    .limit(limit)
                 )
-                if not statuses:
-                    stmt = stmt.where(PlanSubscription.status != "pending")
-                elif SubscriptionStatusFilter.all not in statuses:
-                    stmt = stmt.where(PlanSubscription.status.in_([s.value for s in statuses]))
+                if condition is not None:
+                    stmt = stmt.where(condition)
+                if limit is not None:
+                    stmt = stmt.limit(limit)
                 rows = (await db.execute(stmt)).all()
 
                 subscribers = []
@@ -954,9 +969,82 @@ class StatsService:
                             else None,
                         )
                     )
-                return GlobalLatestSubscribersStats(subscribers=subscribers)
+                return GlobalLatestSubscribersStats(subscribers=subscribers, total=total)
         except Exception as e:
             logger.error(f"Error retrieving latest subscribers: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    # Raw event_type -> human-facing activity type. ``created`` (checkout start) and
+    # ``cancelled_for_upgrade`` (the upgrade's bookkeeping) are dropped as noise; ``activated``
+    # is the real "Subscribed" moment (collapsing created+activated into one). ``expired``/
+    # ``finished`` are churn, but only for subs that actually activated (abandoned checkouts
+    # that expired never subscribed, so they're hidden).
+    _ACTIVITY_TYPE_MAP = {
+        "activated": SubscriptionActivityType.subscribed,
+        "upgrading": SubscriptionActivityType.upgraded,
+        "downgraded": SubscriptionActivityType.downgraded,
+        "cancelled": SubscriptionActivityType.cancelled,
+        "expired": SubscriptionActivityType.churned,
+        "finished": SubscriptionActivityType.churned,
+        "overdue": SubscriptionActivityType.payment_failed,
+    }
+    _ACTIVITY_CHURN_EVENTS = ("expired", "finished")
+    # How many raw events to scan before mapping/filtering; dropped/hidden rows mean the
+    # visible feed is shorter than this, so keep it well above any single-page ``limit``.
+    _ACTIVITY_FETCH_CAP = 500
+
+    @staticmethod
+    async def get_subscription_activity(
+        limit: int = 20, types: list[SubscriptionActivityType] | None = None
+    ) -> GlobalSubscriptionActivityStats:
+        """Recent subscription lifecycle events, newest first, mapped to human-facing types.
+
+        Abandoned checkouts (an ``expired``/``finished`` event on a sub that never ``activated``)
+        are hidden. ``types=None``/empty returns every mapped type.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = (
+                    select(PlanSubscriptionEvent, PlanSubscription, User)
+                    .join(PlanSubscription, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
+                    .join(User, PlanSubscription.user_id == User.id)
+                    .order_by(PlanSubscriptionEvent.created_at.desc())
+                    .limit(StatsService._ACTIVITY_FETCH_CAP)
+                )
+                rows = (await db.execute(stmt)).all()
+
+                # Subs that ever activated — churn events on any other sub are abandoned checkouts.
+                activated_stmt = select(distinct(PlanSubscriptionEvent.subscription_id)).where(
+                    PlanSubscriptionEvent.event_type == "activated"
+                )
+                activated_subs = set((await db.execute(activated_stmt)).scalars().all())
+
+                wanted = set(types) if types else None
+                events: list[SubscriptionActivityEvent] = []
+                for event, sub, user in rows:
+                    activity_type = StatsService._ACTIVITY_TYPE_MAP.get(event.event_type)
+                    if activity_type is None:
+                        continue
+                    if event.event_type in StatsService._ACTIVITY_CHURN_EVENTS and sub.id not in activated_subs:
+                        continue  # abandoned checkout, never a real subscription
+                    if wanted is not None and activity_type not in wanted:
+                        continue
+                    label = user.email or user.display_name or user.address or str(user.id)
+                    tier = (event.metadata_json or {}).get("tier") or sub.tier
+                    events.append(
+                        SubscriptionActivityEvent(
+                            created_at=event.created_at.isoformat(),
+                            type=activity_type,
+                            user_label=label,
+                            tier=tier,
+                            provider=sub.provider,
+                        )
+                    )
+                    if len(events) >= limit:
+                        break
+                return GlobalSubscriptionActivityStats(events=events)
+        except Exception as e:
+            logger.error(f"Error retrieving subscription activity: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     # Events that end a subscription's paying life. ``cancelled_for_upgrade`` ends the old row of
