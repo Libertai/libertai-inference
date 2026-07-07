@@ -974,23 +974,24 @@ class StatsService:
             logger.error(f"Error retrieving latest subscribers: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    # Raw event_type -> human-facing activity type. ``created`` (checkout start) and
-    # ``cancelled_for_upgrade`` (the upgrade's bookkeeping) are dropped as noise; ``activated``
-    # is the real "Subscribed" moment (collapsing created+activated into one). ``expired``/
-    # ``finished`` are churn, but only for subs that actually activated (abandoned checkouts
-    # that expired never subscribed, so they're hidden).
+    # Raw event_type -> human-facing activity type. Only completed, meaningful transitions are
+    # shown; intents (created/initiated/*_requested), bookkeeping (cancelled_for_upgrade,
+    # upgrade_remainder_credited), reverts, abandoned checkouts (expired_abandoned_checkout) and
+    # the redundant ``overdue`` (``payment_failed`` covers the same incident) are all dropped.
+    # ``upgraded`` (logged on the new sub at completion, metadata from/to) supersedes that sub's
+    # ``activated`` so an upgrade reads as a single "from -> to" row.
     _ACTIVITY_TYPE_MAP = {
         "activated": SubscriptionActivityType.subscribed,
-        "upgrading": SubscriptionActivityType.upgraded,
+        "upgraded": SubscriptionActivityType.upgraded,
         "downgraded": SubscriptionActivityType.downgraded,
         "cancelled": SubscriptionActivityType.cancelled,
         "expired": SubscriptionActivityType.churned,
         "finished": SubscriptionActivityType.churned,
-        "overdue": SubscriptionActivityType.payment_failed,
+        "payment_failed": SubscriptionActivityType.payment_failed,
     }
-    _ACTIVITY_CHURN_EVENTS = ("expired", "finished")
-    # How many raw events to scan before mapping/filtering; dropped/hidden rows mean the
-    # visible feed is shorter than this, so keep it well above any single-page ``limit``.
+    _ACTIVITY_TRANSITION_TYPES = (SubscriptionActivityType.upgraded, SubscriptionActivityType.downgraded)
+    # How many raw events to scan before mapping/filtering; dropped rows mean the visible feed is
+    # shorter than this, so keep it well above any single-page ``limit``.
     _ACTIVITY_FETCH_CAP = 500
 
     @staticmethod
@@ -999,8 +1000,9 @@ class StatsService:
     ) -> GlobalSubscriptionActivityStats:
         """Recent subscription lifecycle events, newest first, mapped to human-facing types.
 
-        Abandoned checkouts (an ``expired``/``finished`` event on a sub that never ``activated``)
-        are hidden. ``types=None``/empty returns every mapped type.
+        An upgrade completion logs an ``upgraded`` event (metadata from/to) on the new sub; that
+        sub's ``activated`` is suppressed so the pair reads as one row. ``types=None``/empty
+        returns every mapped type.
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -1013,11 +1015,8 @@ class StatsService:
                 )
                 rows = (await db.execute(stmt)).all()
 
-                # Subs that ever activated — churn events on any other sub are abandoned checkouts.
-                activated_stmt = select(distinct(PlanSubscriptionEvent.subscription_id)).where(
-                    PlanSubscriptionEvent.event_type == "activated"
-                )
-                activated_subs = set((await db.execute(activated_stmt)).scalars().all())
+                # Subs whose activation is really an upgrade completion -> hide their "Subscribed".
+                upgraded_subs = {e.subscription_id for e, _s, _u in rows if e.event_type == "upgraded"}
 
                 wanted = set(types) if types else None
                 events: list[SubscriptionActivityEvent] = []
@@ -1025,18 +1024,25 @@ class StatsService:
                     activity_type = StatsService._ACTIVITY_TYPE_MAP.get(event.event_type)
                     if activity_type is None:
                         continue
-                    if event.event_type in StatsService._ACTIVITY_CHURN_EVENTS and sub.id not in activated_subs:
-                        continue  # abandoned checkout, never a real subscription
+                    if event.event_type == "activated" and event.subscription_id in upgraded_subs:
+                        continue  # the paired "Upgraded" row already represents this activation
                     if wanted is not None and activity_type not in wanted:
                         continue
+                    meta = event.metadata_json or {}
+                    if activity_type in StatsService._ACTIVITY_TRANSITION_TYPES:
+                        from_tier = meta.get("from")
+                        tier = meta.get("to") or sub.tier
+                    else:
+                        from_tier = None
+                        tier = sub.tier
                     label = user.email or user.display_name or user.address or str(user.id)
-                    tier = (event.metadata_json or {}).get("tier") or sub.tier
                     events.append(
                         SubscriptionActivityEvent(
                             created_at=event.created_at.isoformat(),
                             type=activity_type,
                             user_label=label,
                             tier=tier,
+                            from_tier=from_tier,
                             provider=sub.provider,
                         )
                     )

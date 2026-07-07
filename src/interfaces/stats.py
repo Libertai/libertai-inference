@@ -288,12 +288,17 @@ class SubscriptionActivityType(str, Enum):
 
 
 class SubscriptionActivityEvent(BaseModel):
-    """One lifecycle event, mapped from the raw event log to a human-facing type."""
+    """One lifecycle event, mapped from the raw event log to a human-facing type.
+
+    ``tier`` is the resulting tier; for upgrades/downgrades ``from_tier`` is the prior tier
+    (render as "from_tier -> tier").
+    """
 
     created_at: str  # ISO date-time
     type: SubscriptionActivityType
     user_label: str
     tier: str
+    from_tier: str | None = None
     provider: str
 
 

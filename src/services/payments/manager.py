@@ -327,7 +327,12 @@ class PaymentManager:
         except Exception:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
 
-    async def _cancel_upgrading_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> None:
+    async def _cancel_upgrading_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> str | None:
+        """Cancel any parked ``upgrading`` subs superseded by ``exclude_sub_id``'s activation.
+
+        Returns the tier we upgraded FROM (the parked sub's tier), or ``None`` if this wasn't an
+        upgrade — lets the caller record a single ``upgraded`` event linking the two subs.
+        """
         result = await self.db.execute(
             select(PlanSubscription).where(
                 PlanSubscription.user_id == user_id,
@@ -335,11 +340,14 @@ class PaymentManager:
                 PlanSubscription.id != exclude_sub_id,
             )
         )
+        from_tier: str | None = None
         for old_sub in result.scalars().all():
+            from_tier = old_sub.tier
             await self._cancel_on_provider(old_sub)
             old_sub.status = "cancelled"
             await self._log_event(old_sub, "cancelled_for_upgrade")
             await self._credit_unused_remainder(old_sub)
+        return from_tier
 
     async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
         """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
@@ -432,7 +440,11 @@ class PaymentManager:
                 sub.pending_tier = None
             await self._refresh_cycle_dates(sub)
             await self._log_event(sub, "activated", event.provider_event_id, event.metadata)
-            await self._cancel_upgrading_subs(user.id, exclude_sub_id=sub.id)
+            # If this activation completes an upgrade, record it on the new sub so the two
+            # subscriptions read as a single "Go -> Plus" event downstream.
+            upgraded_from = await self._cancel_upgrading_subs(user.id, exclude_sub_id=sub.id)
+            if upgraded_from is not None and upgraded_from != sub.tier:
+                await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
         elif event.type == PaymentEventType.order_failed:
             sub.status = "overdue"
             await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
