@@ -15,7 +15,7 @@ from src.models.base import AsyncSessionLocal
 from src.routes.credits import router
 from src.services.auth import require_staff
 from src.services.credit import CreditService
-from src.services.users import get_or_create_user_by_email
+from src.services.users import get_or_create_user_by_email, get_user_by_email
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -53,19 +53,28 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
 
 @router.get(  # type: ignore
     "/vouchers",
-    description="[staff] Get all vouchers for a specific address",
+    description="[staff] Get all vouchers for a wallet address (with chain) or an email account",
     dependencies=[Depends(require_staff)],
 )
-async def get_vouchers(chain: LibertaiChain, address: str) -> list[VoucherCreditsResponse]:
-    # Validate input using Pydantic model
-    try:
-        params = GetVouchersRequest(chain=chain, address=address)
-    except ValueError as e:
-        # This explicitly raises the validation error to be handled by FastAPI
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Get all vouchers for the address
-    vouchers = await CreditService.get_vouchers(params.address)
+async def get_vouchers(
+    chain: LibertaiChain | None = None, address: str | None = None, email: str | None = None
+) -> list[VoucherCreditsResponse]:
+    if email:
+        # Resolve the email to an existing user (never create on lookup); email-granted vouchers
+        # carry a user_id but no address, so they're only found by user.
+        async with AsyncSessionLocal() as db:
+            user = await get_user_by_email(db, email.strip())
+        vouchers = await CreditService.get_vouchers_for_user(user.id) if user is not None else []
+    elif address:
+        if chain is None:
+            raise HTTPException(status_code=400, detail="A wallet address requires its chain")
+        try:
+            params = GetVouchersRequest(chain=chain, address=address)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        vouchers = await CreditService.get_vouchers(params.address)
+    else:
+        raise HTTPException(status_code=400, detail="Provide an email, or a wallet address with its chain")
 
     # Convert to response model
     return [

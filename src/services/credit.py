@@ -246,6 +246,24 @@ class CreditService:
             return []
 
     @staticmethod
+    async def get_vouchers_for_user(user_id: uuid.UUID) -> list[CreditTransaction]:
+        """Vouchers by user id — finds email-granted vouchers too (those carry no address)."""
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(CreditTransaction)
+                    .where(
+                        CreditTransaction.user_id == user_id,
+                        CreditTransaction.provider == CreditTransactionProvider.voucher,
+                    )
+                    .order_by(CreditTransaction.created_at.desc())
+                )
+                return list(result.scalars().all())
+        except Exception as e:
+            logger.error(f"Error getting vouchers for user {user_id}: {str(e)}", exc_info=True)
+            return []
+
+    @staticmethod
     async def change_voucher_expiration_date(voucher_id: str, new_expiration: datetime | None) -> bool:
         try:
             async with AsyncSessionLocal() as db:

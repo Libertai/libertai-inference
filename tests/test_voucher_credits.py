@@ -7,13 +7,14 @@ sessions), so each test cleans up its own rows.
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from src.interfaces.credits import VoucherAddCreditsRequest
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.models.user import User
-from src.routes.credits.voucher import add_voucher_credits
+from src.routes.credits.voucher import add_voucher_credits, get_vouchers
 from src.services.credit import CreditService
 from src.services.users import get_or_create_user_by_wallet
 
@@ -91,6 +92,48 @@ async def test_email_path_credits_existing_user():
         assert await _balance(user_id) == pytest.approx(3.0)
     finally:
         await _cleanup_user(user_id)
+
+
+# --- lookup ---
+
+
+async def test_lookup_by_email_finds_email_granted_voucher():
+    email = f"voucher-{uuid.uuid4().hex}@example.com"
+    ok = await add_voucher_credits(VoucherAddCreditsRequest(email=email, amount=9.0))
+    assert ok is True
+    user = await _user_by_email(email)
+    try:
+        found = await get_vouchers(email=email)
+        assert len(found) == 1
+        assert found[0].amount == pytest.approx(9.0)
+        assert found[0].address is None  # email-granted vouchers carry no address
+    finally:
+        await _cleanup_user(user.id)
+
+
+async def test_lookup_by_unknown_email_returns_empty():
+    found = await get_vouchers(email=f"missing-{uuid.uuid4().hex}@example.com")
+    assert found == []
+
+
+async def test_lookup_by_wallet_still_works():
+    ok = await add_voucher_credits(VoucherAddCreditsRequest(chain="base", address=ADDR, amount=4.0))
+    assert ok is True
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, ADDR)
+        await db.commit()
+    try:
+        found = await get_vouchers(chain="base", address=ADDR)
+        assert len(found) == 1
+        assert found[0].amount == pytest.approx(4.0)
+    finally:
+        await _cleanup_user(user.id)
+
+
+async def test_lookup_without_identifier_is_rejected():
+    with pytest.raises(HTTPException) as exc:
+        await get_vouchers()
+    assert exc.value.status_code == 400
 
 
 # --- validation: exactly one recipient ---
