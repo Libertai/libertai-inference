@@ -180,6 +180,26 @@ class GlobalSegmentMessagesStats(BaseModel):
     messages: list[SegmentMessageUsage]
 
 
+class SegmentCallUsage(BaseModel):
+    """Inference calls on a single day for one subscription segment."""
+
+    date: str
+    segment: str  # "free" | "go" | "plus" | "max"
+    call_count: int
+
+
+class GlobalSegmentCallsStats(BaseModel):
+    """Inference calls per subscription segment over a date range (api/cli key types).
+
+    Segment is the caller's CURRENT active paid tier (go/plus/max) or "free" — no anonymous
+    bucket, since api/cli use per-user keys. Historical tier at call time isn't recorded, so a
+    user's past calls are attributed to their tier today, mirroring the messages-by-segment caveat.
+    """
+
+    total_calls: int
+    calls: list[SegmentCallUsage]
+
+
 class CreditsConsumptionDay(BaseModel):
     """Credits consumed on a single day, split by what covered them."""
 

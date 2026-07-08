@@ -28,6 +28,8 @@ from src.interfaces.stats import (
     UsersWindow,
     GlobalSegmentMessagesStats,
     SegmentMessageUsage,
+    SegmentCallUsage,
+    GlobalSegmentCallsStats,
     GlobalCreditsConsumptionStats,
     CreditsConsumptionDay,
     GlobalSubscriptionsStats,
@@ -774,6 +776,70 @@ class StatsService:
                 return GlobalSegmentMessagesStats(total_messages=total, messages=messages)
         except Exception as e:
             logger.error(f"Error retrieving messages-by-segment stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_calls_by_segment(
+        key_type: ApiKeyType, start_date: date, end_date: date
+    ) -> GlobalSegmentCallsStats:
+        """Inference calls per subscription segment over time, from inference_calls.
+
+        Segment: a caller with an active paid subscription -> that tier (go/plus/max); otherwise
+        "free". No anonymous bucket (api/cli keys are per-user). Only api/cli are meaningfully
+        segmentable — liberclaw uses liberclaw_user_id (not user_id) and x402 has no identity, so
+        both would bucket everything as "free"; return empty for anything but api/cli.
+        """
+        if key_type not in (ApiKeyType.api, ApiKeyType.cli):
+            return GlobalSegmentCallsStats(total_calls=0, calls=[])
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                segment = case(
+                    (PlanSubscription.tier.isnot(None), PlanSubscription.tier),
+                    else_=literal("free"),
+                ).label("segment")
+
+                rows = (
+                    await db.execute(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            segment,
+                            func.count(InferenceCall.id).label("cnt"),
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        # At most one active subscription per user (unique constraint), so this
+                        # left join adds at most one paid-tier row per call.
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
+                        .where(
+                            ApiKey.type == key_type,
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                        )
+                        .group_by(cast(InferenceCall.used_at, Date), segment)
+                        .order_by(cast(InferenceCall.used_at, Date))
+                    )
+                ).all()
+
+                total = 0
+                calls = []
+                for r in rows:
+                    count = int(r.cnt or 0)
+                    total += count
+                    calls.append(
+                        SegmentCallUsage(date=r.date.strftime("%Y-%m-%d"), segment=r.segment, call_count=count)
+                    )
+                return GlobalSegmentCallsStats(total_calls=total, calls=calls)
+        except Exception as e:
+            logger.error(f"Error retrieving calls-by-segment stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod

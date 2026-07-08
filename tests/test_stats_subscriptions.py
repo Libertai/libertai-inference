@@ -203,3 +203,45 @@ async def test_subscriptions_snapshot_counts_segments(async_client):
             await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()
+
+
+async def test_calls_by_segment_splits_free_paid(async_client):
+    user_ids: list[uuid.UUID] = []
+    async with AsyncSessionLocal() as db:
+        free_user = await _mk_user(db)
+        free_key = await _mk_key(db, user_id=free_user, type_=ApiKeyType.api)
+
+        paid_user = await _mk_user(db)
+        paid_key = await _mk_key(db, user_id=paid_user, type_=ApiKeyType.api)
+        db.add(PlanSubscription(user_id=paid_user, tier="plus", provider="revolut", status="active"))
+        user_ids += [free_user, paid_user]
+
+        for key_id, n in ((free_key, 2), (paid_key, 4)):
+            for _ in range(n):
+                ic = InferenceCall(
+                    api_key_id=key_id, credits_used=0.0, tier_credits_used=0.0,
+                    input_tokens=1, output_tokens=1, model_name="m",
+                )
+                ic.used_at = _TS
+                db.add(ic)
+
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
+        await db.commit()
+
+    try:
+        resp = await async_client.get(
+            f"/stats/global/api/calls-by-segment?start_date={_DAY}&end_date={_DAY}", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        counts = {c["segment"]: c["call_count"] for c in body["calls"]}
+        assert counts == {"free": 2, "plus": 4}
+        assert body["total_calls"] == 6
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(InferenceCall).where(InferenceCall.used_at == _TS))
+            await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
+            await db.execute(delete(ApiKey).where(ApiKey.user_id.in_(user_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()

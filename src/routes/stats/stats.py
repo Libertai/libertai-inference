@@ -15,6 +15,7 @@ from src.interfaces.stats import (
     GlobalUsersStats,
     UsersWindow,
     GlobalSegmentMessagesStats,
+    GlobalSegmentCallsStats,
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
     GlobalSubscribersOverTimeStats,
@@ -272,6 +273,23 @@ async def get_messages_by_segment(
         return await StatsService.get_global_messages_by_segment(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in messages-by-segment stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/{key_type}/calls-by-segment",
+    response_model=GlobalSegmentCallsStats,
+    dependencies=[Depends(require_staff)],
+)
+async def get_calls_by_segment(
+    key_type: InferenceKeyType,
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalSegmentCallsStats:
+    try:
+        return await StatsService.get_global_calls_by_segment(ApiKeyType(key_type.value), start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in {key_type.value} calls-by-segment stats route: {str(e)}", exc_info=True)
         raise
 
 
