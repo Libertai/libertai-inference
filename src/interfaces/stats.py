@@ -272,7 +272,8 @@ class SubscriptionStatusFilter(str, Enum):
 class LatestSubscriber(BaseModel):
     """A single recent plan subscription with a human-friendly label for its user.
 
-    ``user_label`` resolution order: email > display_name > wallet address > user id.
+    ``user_label`` is ``display_name (contact)`` when the user set a name, else the bare
+    ``contact`` (contact resolves email > wallet address > user id).
     """
 
     user_label: str

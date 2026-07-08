@@ -169,3 +169,29 @@ async def test_subscription_activity_collapses_upgrade_into_one_row():
     assert mine[0].type is SubscriptionActivityType.upgraded
     assert mine[0].from_tier == "go"
     assert mine[0].tier == "plus"
+
+
+# Runs last and asserts membership only, so its committed rows can't perturb the order-dependent
+# assertions above (these tests share one session-scoped DB with no per-test rollback).
+async def test_latest_subscribers_label_prefers_display_name_with_contact_in_parens():
+    async with AsyncSessionLocal() as db:
+        named = User(email="named@example.com", display_name="Alice")
+        wallet = User(display_name="Bob", address="0xWALLET")
+        anon = User(email="anon@example.com")
+        db.add_all([named, wallet, anon])
+        await db.flush()
+        for i, u in enumerate([named, wallet, anon]):
+            sub = PlanSubscription(user_id=u.id, tier="go", status="active", provider="revolut")
+            sub.created_at = datetime(2099, 5, i + 1)
+            db.add(sub)
+        await db.commit()
+
+    labels = {
+        s.user_label
+        for s in (
+            await StatsService.get_latest_subscribers(limit=None, statuses=[SubscriptionStatusFilter.active])
+        ).subscribers
+    }
+    assert "Alice (named@example.com)" in labels  # display_name + email contact
+    assert "Bob (0xWALLET)" in labels  # no email -> wallet address as contact
+    assert "anon@example.com" in labels  # no display_name -> bare contact

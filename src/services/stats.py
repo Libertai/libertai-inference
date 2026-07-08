@@ -71,6 +71,13 @@ def _tier_price(tier: str) -> float:
         return 0.0
 
 
+def _user_label(user: User) -> str:
+    """Display label for a subscriber: ``display_name (contact)`` when a name is set, else the
+    bare contact. ``contact`` resolves email > wallet address > user id."""
+    contact = user.email or user.address or str(user.id)
+    return f"{user.display_name} ({contact})" if user.display_name else contact
+
+
 class StatsService:
     @staticmethod
     async def get_dashboard_stats(user_address: str) -> DashboardStats:
@@ -1020,7 +1027,7 @@ class StatsService:
 
                 subscribers = []
                 for sub, user in rows:
-                    label = user.email or user.display_name or user.address or str(user.id)
+                    label = _user_label(user)
                     subscribers.append(
                         LatestSubscriber(
                             user_label=label,
@@ -1101,7 +1108,7 @@ class StatsService:
                     else:
                         from_tier = None
                         tier = sub.tier
-                    label = user.email or user.display_name or user.address or str(user.id)
+                    label = _user_label(user)
                     events.append(
                         SubscriptionActivityEvent(
                             created_at=event.created_at.isoformat(),
