@@ -159,6 +159,7 @@ async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
         avatar_url=user.avatar_url,
         address=user.address,
         is_libertai_staff=user.is_libertai_staff,
+        monthly_extra_credit_cap=user.monthly_extra_credit_cap,
     )
 
 
@@ -166,9 +167,11 @@ async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
 async def update_me(
     request: UpdateProfileRequest, user: User = Depends(get_current_user)
 ) -> CurrentUserResponse:
-    """Update the authenticated user's editable profile (display name)."""
+    """Update the authenticated user's editable profile (display name, monthly extra-credit cap)."""
     async with AsyncSessionLocal() as db:
-        updated = await update_user_profile(db, user.id, request.display_name)
+        updated = await update_user_profile(
+            db, user.id, request.model_dump(exclude_unset=True, include={"display_name", "monthly_extra_credit_cap"})
+        )
         await db.commit()
         return CurrentUserResponse(
             id=str(updated.id),
@@ -177,6 +180,7 @@ async def update_me(
             avatar_url=updated.avatar_url,
             address=updated.address,
             is_libertai_staff=updated.is_libertai_staff,
+            monthly_extra_credit_cap=updated.monthly_extra_credit_cap,
         )
 
 

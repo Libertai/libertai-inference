@@ -18,7 +18,7 @@ async def test_update_display_name_persists():
     user_id = await _make_user("name-update@example.com")
 
     async with AsyncSessionLocal() as db:
-        updated = await update_user_profile(db, user_id, "Reza")
+        updated = await update_user_profile(db, user_id, {"display_name": "Reza"})
         await db.commit()
         assert updated.display_name == "Reza"
 

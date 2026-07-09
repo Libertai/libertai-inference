@@ -6,10 +6,12 @@ Runs against the committed DB with real ``datetime.now()``; each test cleans up 
 import uuid
 from datetime import datetime, timedelta
 
+import pydantic
 import pytest
 from sqlalchemy import delete
 
 from src.interfaces.api_keys import ApiKeyType
+from src.interfaces.auth import UpdateProfileRequest
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
@@ -25,6 +27,7 @@ from src.services.entitlement import (
     get_allowance_state,
     month_overflow_by_users,
 )
+from src.services.users import update_user_profile
 
 pytestmark = pytest.mark.asyncio
 
@@ -219,5 +222,46 @@ async def test_allowance_state_no_cap_unchanged():
             state = await get_allowance_state(db, user_id)
         assert state.source == "prepaid"
         assert state.monthly_extra_credit_cap is None
+    finally:
+        await _cleanup(user_id)
+
+
+def test_update_request_rejects_non_positive_cap():
+    with pytest.raises(pydantic.ValidationError):
+        UpdateProfileRequest(monthly_extra_credit_cap=0)
+    with pytest.raises(pydantic.ValidationError):
+        UpdateProfileRequest(monthly_extra_credit_cap=-5.0)
+    assert UpdateProfileRequest(monthly_extra_credit_cap=12.5).monthly_extra_credit_cap == 12.5
+    assert UpdateProfileRequest(monthly_extra_credit_cap=None).monthly_extra_credit_cap is None
+
+
+def test_update_request_partial_dump():
+    # exclude_unset is what keeps a cap-only PATCH from clobbering display_name (and vice versa).
+    req = UpdateProfileRequest.model_validate({"monthly_extra_credit_cap": 5.0})
+    assert req.model_dump(exclude_unset=True) == {"monthly_extra_credit_cap": 5.0}
+    req = UpdateProfileRequest.model_validate({"display_name": "Ada"})
+    assert req.model_dump(exclude_unset=True) == {"display_name": "Ada"}
+    req = UpdateProfileRequest.model_validate({"monthly_extra_credit_cap": None})
+    assert req.model_dump(exclude_unset=True) == {"monthly_extra_credit_cap": None}
+
+
+async def test_update_user_profile_partial():
+    user_id, _ = await _setup()
+    try:
+        async with AsyncSessionLocal() as db:
+            await update_user_profile(db, user_id, {"display_name": "Ada", "monthly_extra_credit_cap": 7.5})
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, user_id)
+            assert user.display_name == "Ada"
+            assert user.monthly_extra_credit_cap == 7.5
+        # Cap-only update leaves display_name alone.
+        async with AsyncSessionLocal() as db:
+            await update_user_profile(db, user_id, {"monthly_extra_credit_cap": None})
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, user_id)
+            assert user.display_name == "Ada"
+            assert user.monthly_extra_credit_cap is None
     finally:
         await _cleanup(user_id)

@@ -86,6 +86,7 @@ class CurrentUserResponse(BaseModel):
     avatar_url: str | None = None
     address: str | None = None
     is_libertai_staff: bool = False
+    monthly_extra_credit_cap: float | None = None
 
 
 class UpdateProfileRequest(BaseModel):
@@ -103,6 +104,16 @@ class UpdateProfileRequest(BaseModel):
         if len(trimmed) > 50:
             raise ValueError("display_name must be at most 50 characters")
         return trimmed
+
+    # Monthly cap (USD credits) on extra-credit overflow spend. Explicit null clears it
+    # (unlimited); omit the field to leave it untouched.
+    monthly_extra_credit_cap: float | None = None
+
+    @field_validator("monthly_extra_credit_cap")
+    def validate_cap(cls, value: float | None):
+        if value is not None and value <= 0:
+            raise ValueError("monthly_extra_credit_cap must be greater than 0")
+        return value
 
 
 class ExchangeRequest(BaseModel):
