@@ -30,8 +30,6 @@ from src.services.entitlement import (
 )
 from src.services.users import update_user_profile
 
-pytestmark = pytest.mark.asyncio
-
 
 def _last_month(now: datetime) -> datetime:
     # Explicit month arithmetic — timedelta(days=30) straddles boundaries on the 1st.
@@ -147,6 +145,24 @@ async def test_allowance_state_cap_reached_blocks_prepaid():
         assert state.monthly_extra_credit_cap == pytest.approx(2.0)
         # exhaust_windows seeds 10.0 tier-covered (0 overflow) + the explicit 3.0 overflow call
         assert state.extra_credits_used_this_month == pytest.approx(3.0)
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_allowance_state_include_cap_false_skips_cap():
+    # Billing-split callers only consume window fields; the cap must not run its queries there.
+    now = datetime.now()
+    user_id, _ = await _setup(
+        prepaid=50.0, cap=2.0, exhaust_windows=True,
+        overflow_calls=[(3.0, 0.0, now - timedelta(minutes=5))],
+    )
+    try:
+        async with AsyncSessionLocal() as db:
+            state = await get_allowance_state(db, user_id, include_cap=False)
+        assert state.monthly_extra_credit_cap is None
+        assert state.extra_credits_used_this_month == 0.0
+        assert state.source == "prepaid"  # cap ignored on this path
+        assert state.window_5h_used == pytest.approx(10.0)
     finally:
         await _cleanup(user_id)
 

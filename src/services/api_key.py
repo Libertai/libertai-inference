@@ -750,7 +750,8 @@ class ApiKeyService:
                 if chargeable_user_id is not None:
                     # Open/reset this user's fixed windows so usage accrues against them.
                     await open_windows(db, chargeable_user_id, now)
-                    state = await get_allowance_state(db, chargeable_user_id, now)
+                    # Billing split only needs the window fields — skip the cap queries.
+                    state = await get_allowance_state(db, chargeable_user_id, now, include_cap=False)
                     remaining_5h = max(0.0, state.window_5h_limit - state.window_5h_used)
                     remaining_weekly = max(0.0, state.weekly_limit - state.weekly_used)
                     tier_covered = min(credits_used, remaining_5h, remaining_weekly)
