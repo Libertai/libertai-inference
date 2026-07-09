@@ -26,7 +26,7 @@ from src.services.entitlement import WINDOW_5H
 pytestmark = pytest.mark.asyncio
 
 
-async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
+async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None, cap=None, overflow=0.0):
     """Create a user + api key with optional usage in an active/expired 5h window.
 
     ``window`` controls the 5h window state when ``usage`` is given:
@@ -37,6 +37,7 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
     now = datetime.now()
     async with AsyncSessionLocal() as db:
         user = User(email=f"enf-{uuid.uuid4().hex}@example.com")
+        user.monthly_extra_credit_cap = cap
         db.add(user)
         await db.flush()
         key = ApiKeyDB(key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api)
@@ -51,6 +52,10 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None):
             # Seeded usage simulates tier-covered calls (counts against the window).
             call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m", tier_credits_used=usage)
             call.used_at = used_at
+            db.add(call)
+        if overflow:
+            call = InferenceCall(api_key_id=key.id, credits_used=overflow, model_name="m", tier_credits_used=0.0)
+            call.used_at = now - timedelta(minutes=10)
             db.add(call)
         if prepaid:
             db.add(
@@ -213,6 +218,49 @@ async def test_liberclaw_usage_outside_window_ignored():
         assert key in await ApiKeyService.get_admin_all_api_keys()
     finally:
         await _cleanup_liberclaw(lc_id)
+
+
+async def test_cap_reached_excludes_key_when_window_exhausted():
+    # Free 5h window exhausted; prepaid exists but this month's overflow >= cap.
+    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
+    try:
+        assert key not in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_cap_not_reached_keeps_key():
+    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=10.0, overflow=3.0)
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_cap_reached_but_window_open_keeps_key():
+    # Windows have room -> "tier" source; the cap only governs the prepaid path.
+    user_id, key = await _setup(usage=0.1, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_no_cap_unlimited_overflow_keeps_key():
+    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=None, overflow=999.0)
+    try:
+        assert key in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_balance_still_binds_below_cap():
+    # Cap has room but prepaid < PREPAID_MIN -> still blocked.
+    user_id, key = await _setup(usage=0.5, window="active", prepaid=0.01, cap=100.0, overflow=1.0)
+    try:
+        assert key not in await ApiKeyService.get_admin_all_api_keys()
+    finally:
+        await _cleanup(user_id)
 
 
 async def _balance(user_id) -> float:

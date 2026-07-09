@@ -12,6 +12,7 @@ from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
+from src.models.user import User
 from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
@@ -21,7 +22,9 @@ from src.services.entitlement import (
     active_tiers_by_users,
     compute_source,
     current_month_bounds,
+    effective_prepaid,
     get_allowance_state,
+    month_overflow_by_users,
     open_windows,
     window_usage_by_users,
 )
@@ -559,6 +562,20 @@ class ApiKeyService:
                 weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
                 active_tiers = await active_tiers_by_users(db, user_ids)
 
+                caps: dict[uuid.UUID, float] = {}
+                cap_overflow: dict[uuid.UUID, float] = {}
+                if user_ids:
+                    cap_rows = (
+                        await db.execute(
+                            select(User.id, User.monthly_extra_credit_cap).where(
+                                User.id.in_(user_ids),
+                                User.monthly_extra_credit_cap.is_not(None),
+                            )
+                        )
+                    ).all()
+                    caps = {row[0]: float(row[1]) for row in cap_rows}
+                    cap_overflow = await month_overflow_by_users(db, set(caps), now)
+
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
                     k for k in api_keys if k.type in chargeable_api_types and k.monthly_limit is not None
@@ -653,7 +670,11 @@ class ApiKeyService:
                             tier,
                             window_5h_usage.get(key.user_id, 0.0),
                             weekly_usage.get(key.user_id, 0.0),
-                            balances.get(key.user_id, 0.0),
+                            effective_prepaid(
+                                balances.get(key.user_id, 0.0),
+                                caps.get(key.user_id),
+                                cap_overflow.get(key.user_id, 0.0),
+                            ),
                         )
                         if source == "blocked":
                             continue
