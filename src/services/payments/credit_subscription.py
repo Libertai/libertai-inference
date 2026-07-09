@@ -134,6 +134,8 @@ class CreditSubscriptionService:
 
         if not is_upgrade(sub.tier, new_tier):
             raise ValueError("Not an upgrade")
+        if sub.current_period_end is None or sub.current_period_start is None:
+            raise ValueError("Subscription has no active billing period")
         span = (sub.current_period_end - sub.current_period_start).total_seconds()
         remaining = max(0.0, (sub.current_period_end - now).total_seconds())
         frac = remaining / span if span > 0 else 1.0
@@ -263,7 +265,7 @@ class CreditSubscriptionService:
         # so cycles don't drift later by up to the cron interval on every renewal.
         # If the cron was down for more than a full cycle, re-anchor at now instead
         # of back-billing an already-elapsed period.
-        period_start = sub.current_period_end
+        period_start = sub.current_period_end or now
         period_end = period_start + relativedelta(months=1)
         if period_end <= now:
             period_start, period_end = now, now + relativedelta(months=1)

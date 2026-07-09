@@ -613,7 +613,10 @@ class ApiKeyService:
                     now = datetime.now()
                     key_ids_by_window: dict[int, list[uuid.UUID]] = {}
                     for k in liberclaw_keys:
-                        tier_config = LIBERCLAW_TIERS.get(k.liberclaw_user.tier, LIBERCLAW_TIERS["free"])
+                        lc_user = k.liberclaw_user
+                        if lc_user is None:
+                            continue
+                        tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
                         key_ids_by_window.setdefault(tier_config["rolling_window_days"], []).append(k.id)
                     for window_days, key_ids in key_ids_by_window.items():
                         cutoff = now - timedelta(days=window_days)
