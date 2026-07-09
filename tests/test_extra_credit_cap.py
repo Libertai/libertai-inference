@@ -13,6 +13,7 @@ from sqlalchemy import delete
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.auth import UpdateProfileRequest
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
+from src.interfaces.payments import SubscriptionResponse
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -265,3 +266,16 @@ async def test_update_user_profile_partial():
             assert user.monthly_extra_credit_cap is None
     finally:
         await _cleanup(user_id)
+
+
+def test_subscription_response_carries_cap_fields():
+    resp = SubscriptionResponse(
+        tier="free", has_subscription=False,
+        monthly_extra_credit_cap=20.0, extra_credits_used_this_month=3.5,
+    )
+    assert resp.monthly_extra_credit_cap == 20.0
+    assert resp.extra_credits_used_this_month == 3.5
+    # Defaults keep older clients working.
+    resp = SubscriptionResponse(tier="free", has_subscription=False)
+    assert resp.monthly_extra_credit_cap is None
+    assert resp.extra_credits_used_this_month == 0.0

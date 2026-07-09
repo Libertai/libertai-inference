@@ -419,6 +419,8 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         weekly_limit=allowance.weekly_limit,
         weekly_resets_at=allowance.weekly_resets_at,
         prepaid_balance=allowance.prepaid_balance,
+        monthly_extra_credit_cap=allowance.monthly_extra_credit_cap,
+        extra_credits_used_this_month=allowance.extra_credits_used_this_month,
     )
 
 

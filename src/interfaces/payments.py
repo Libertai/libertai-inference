@@ -95,6 +95,9 @@ class SubscriptionResponse(BaseModel):
     weekly_limit: float = 0.0
     weekly_resets_at: UtcDatetime | None = None
     prepaid_balance: float = 0.0
+    # Monthly extra-credit spend cap (None = unlimited) and attempted overflow this calendar month.
+    monthly_extra_credit_cap: float | None = None
+    extra_credits_used_this_month: float = 0.0
 
 
 class CancelResponse(BaseModel):
