@@ -20,6 +20,7 @@ from src.services.entitlement import (
     WINDOW_WEEKLY,
     active_tiers_by_users,
     compute_source,
+    current_month_bounds,
     get_allowance_state,
     open_windows,
     window_usage_by_users,
@@ -564,9 +565,7 @@ class ApiKeyService:
                 ]
                 monthly_usage: dict[uuid.UUID, float] = {}
                 if api_keys_with_limits:
-                    now = datetime.now()
-                    first_day = datetime(now.year, now.month, 1)
-                    next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+                    first_day, next_month = current_month_bounds(datetime.now())
                     limit_key_ids = [k.id for k in api_keys_with_limits]
 
                     usage_rows = (
