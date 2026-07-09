@@ -57,7 +57,7 @@ class X402Service:
                 }
             elif "image" in model.pricing:
                 image_price = model.pricing["image"]
-                if isinstance(image_price, (TextPricing, EmbeddingPricing)):
+                if not isinstance(image_price, (int, float)):
                     continue
                 prices[model.id] = {
                     "price_per_image": float(image_price),
