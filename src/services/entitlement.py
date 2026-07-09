@@ -268,8 +268,11 @@ async def active_tiers_by_users(db: AsyncSession, user_ids: set[uuid.UUID]) -> d
 
 
 async def get_allowance_state(
-    db: AsyncSession, user_id: uuid.UUID, now: datetime | None = None
+    db: AsyncSession, user_id: uuid.UUID, now: datetime | None = None, include_cap: bool = True
 ) -> AllowanceState:
+    """``include_cap=False`` skips the cap fetch + month-overflow aggregate for callers
+    that only need the window fields (the per-call billing split) — the cap then reads
+    as unlimited in the returned state."""
     now = now or datetime.now()
     tier = get_tier(await get_active_tier(db, user_id))
 
@@ -279,10 +282,14 @@ async def get_allowance_state(
     usage_weekly = await _usage_since(db, user_id, window_weekly.started_at) if window_weekly else 0.0
     prepaid = await _prepaid_balance(db, user_id)
 
-    user = await db.get(User, user_id)
-    cap = user.monthly_extra_credit_cap if user else None
-    # Skip the month aggregate for uncapped users: this runs per inference call.
-    month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0) if cap is not None else 0.0
+    cap: float | None = None
+    month_overflow = 0.0
+    if include_cap:
+        user = await db.get(User, user_id)
+        cap = user.monthly_extra_credit_cap if user else None
+        # Skip the month aggregate for uncapped users: this runs on request paths.
+        if cap is not None:
+            month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0)
 
     source = compute_source(tier, usage_5h, usage_weekly, effective_prepaid(prepaid, cap, month_overflow))
 
