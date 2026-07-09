@@ -582,7 +582,7 @@ class ApiKeyService:
                 ]
                 monthly_usage: dict[uuid.UUID, float] = {}
                 if api_keys_with_limits:
-                    first_day, next_month = current_month_bounds(datetime.now())
+                    first_day, next_month = current_month_bounds(now)
                     limit_key_ids = [k.id for k in api_keys_with_limits]
 
                     usage_rows = (
