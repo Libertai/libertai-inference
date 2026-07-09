@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
 
+from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionStatus
 from src.models.api_key import ApiKey as ApiKeyDB
@@ -32,6 +33,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
+from src.models.user import User
 from src.subscription_tiers import DEFAULT_TIER, TierConfig, get_tier
 
 # Minimum prepaid balance required to cover an inference call once tier windows
@@ -52,6 +54,20 @@ WINDOW_DURATIONS: dict[str, timedelta] = {
 CHARGEABLE_KEY_TYPES = (ApiKeyType.api, ApiKeyType.cli, ApiKeyType.chat)
 
 
+def current_month_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """[first day, first day of next month) — the boundary used by all monthly caps."""
+    first_day = datetime(now.year, now.month, 1)
+    next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+    return first_day, next_month
+
+
+def effective_prepaid(prepaid: float, cap: float | None, month_overflow: float) -> float:
+    """Prepaid balance usable this month given the user's extra-credit cap (None = uncapped)."""
+    if cap is None:
+        return prepaid
+    return min(prepaid, max(0.0, cap - month_overflow))
+
+
 @dataclass
 class AllowanceState:
     allowed: bool
@@ -65,6 +81,9 @@ class AllowanceState:
     # When each active window resets (None if no active window of that kind).
     window_5h_resets_at: datetime | None
     weekly_resets_at: datetime | None
+    # Monthly extra-credit cap (None = unlimited) and attempted overflow spend this calendar month.
+    monthly_extra_credit_cap: float | None = None
+    extra_credits_used_this_month: float = 0.0
 
 
 def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepaid: float) -> str:
@@ -200,6 +219,39 @@ async def window_usage_by_users(
     return {row[0]: float(row[1]) for row in rows}
 
 
+async def month_overflow_by_users(
+    db: AsyncSession, user_ids: set[uuid.UUID], now: datetime
+) -> dict[uuid.UUID, float]:
+    """Batched attempted-overflow spend (credits_used - tier_credits_used) per user this
+    calendar month, across chargeable keys. Rows record full overflow even when the partial
+    deduction captured less, so this is conservative. Absent users => 0.
+    """
+    if not user_ids:
+        return {}
+    first_day, next_month = current_month_bounds(now)
+    conditions = [
+        ApiKeyDB.user_id.in_(user_ids),
+        ApiKeyDB.type.in_(CHARGEABLE_KEY_TYPES),
+        InferenceCall.used_at >= first_day,
+        InferenceCall.used_at < next_month,
+    ]
+    # The shared anonymous chat key is chargeable-typed but never user-billed.
+    if config.LIBERTAI_CHAT_API_KEY:
+        conditions.append(ApiKeyDB.key != config.LIBERTAI_CHAT_API_KEY)
+    rows = (
+        await db.execute(
+            select(
+                ApiKeyDB.user_id,
+                sql_func.coalesce(sql_func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0),
+            )
+            .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
+            .where(*conditions)
+            .group_by(ApiKeyDB.user_id)
+        )
+    ).all()
+    return {row[0]: float(row[1]) for row in rows}
+
+
 async def active_tiers_by_users(db: AsyncSession, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
     """Batched active-subscription tier per user (absent => free)."""
     if not user_ids:
@@ -227,7 +279,11 @@ async def get_allowance_state(
     usage_weekly = await _usage_since(db, user_id, window_weekly.started_at) if window_weekly else 0.0
     prepaid = await _prepaid_balance(db, user_id)
 
-    source = compute_source(tier, usage_5h, usage_weekly, prepaid)
+    user = await db.get(User, user_id)
+    cap = user.monthly_extra_credit_cap if user else None
+    month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0)
+
+    source = compute_source(tier, usage_5h, usage_weekly, effective_prepaid(prepaid, cap, month_overflow))
 
     return AllowanceState(
         allowed=source != "blocked",
@@ -240,4 +296,6 @@ async def get_allowance_state(
         source=source,
         window_5h_resets_at=window_5h.expires_at if window_5h else None,
         weekly_resets_at=window_weekly.expires_at if window_weekly else None,
+        monthly_extra_credit_cap=cap,
+        extra_credits_used_this_month=month_overflow,
     )
