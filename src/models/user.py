@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, String, func, select
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Float, String, func, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, AsyncSessionLocal
@@ -26,6 +26,8 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
     # Grants access to the staff backoffice (analytics + admin actions). Set manually via SQL.
     is_libertai_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Monthly cap (USD credits) on overflow spend beyond entitlement windows. NULL = unlimited.
+    monthly_extra_credit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Legacy wallet address. Identity moved to wallet_connections; kept (nullable, unique) for one
     # release as a rollback hatch and so existing address-based FKs resolve until the FK swap.
