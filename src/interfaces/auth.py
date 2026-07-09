@@ -1,3 +1,5 @@
+import math
+
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel, ValidationInfo, field_validator
@@ -111,8 +113,8 @@ class UpdateProfileRequest(BaseModel):
 
     @field_validator("monthly_extra_credit_cap")
     def validate_cap(cls, value: float | None):
-        if value is not None and value <= 0:
-            raise ValueError("monthly_extra_credit_cap must be greater than 0")
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ValueError("monthly_extra_credit_cap must be a finite number greater than 0")
         return value
 
 

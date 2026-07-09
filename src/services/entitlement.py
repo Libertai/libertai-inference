@@ -281,7 +281,8 @@ async def get_allowance_state(
 
     user = await db.get(User, user_id)
     cap = user.monthly_extra_credit_cap if user else None
-    month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0)
+    # Skip the month aggregate for uncapped users: this runs per inference call.
+    month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0) if cap is not None else 0.0
 
     source = compute_source(tier, usage_5h, usage_weekly, effective_prepaid(prepaid, cap, month_overflow))
 

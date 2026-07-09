@@ -232,6 +232,10 @@ def test_update_request_rejects_non_positive_cap():
         UpdateProfileRequest(monthly_extra_credit_cap=0)
     with pytest.raises(pydantic.ValidationError):
         UpdateProfileRequest(monthly_extra_credit_cap=-5.0)
+    with pytest.raises(pydantic.ValidationError):
+        UpdateProfileRequest(monthly_extra_credit_cap=float("nan"))
+    with pytest.raises(pydantic.ValidationError):
+        UpdateProfileRequest(monthly_extra_credit_cap=float("inf"))
     assert UpdateProfileRequest(monthly_extra_credit_cap=12.5).monthly_extra_credit_cap == 12.5
     assert UpdateProfileRequest(monthly_extra_credit_cap=None).monthly_extra_credit_cap is None
 
