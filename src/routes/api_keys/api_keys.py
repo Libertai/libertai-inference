@@ -221,7 +221,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         credits_used = await aleph_service.calculate_price(
                             model_id=usage_log.model_name,
                             input_tokens=usage_log.input_tokens,
-                            output_tokens=usage_log.output_tokens - usage_log.cached_tokens,
+                            output_tokens=usage_log.output_tokens,
+                            cached_tokens=usage_log.cached_tokens,
                         )
                         success = await ApiKeyService.register_inference_call(
                             key=usage_log.key,

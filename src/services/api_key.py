@@ -711,7 +711,7 @@ class ApiKeyService:
             credits_used: Number of credits used
             input_tokens: Number of input tokens processed
             output_tokens: Number of output tokens generated
-            cached_tokens: Number of output tokens cached
+            cached_tokens: Number of input tokens served from the prefix cache (subset of input_tokens)
             model_name: Name of the model used
             image_count: Number of images processed
 

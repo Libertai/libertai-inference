@@ -158,6 +158,55 @@ async def test_per_user_chat_key_text_metered_after_window_exhausted(monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# (a2) Per-user chat key: cached tokens are input-side, never subtracted from output
+# ---------------------------------------------------------------------------
+
+
+async def test_per_user_chat_key_cached_tokens_priced_as_input(monkeypatch, async_client):
+    """Regression: cached_tokens is a subset of *input* tokens. Subtracting it from
+    output_tokens made calculate_price return a negative price when cached > output,
+    which the ``check_credits_used_non_negative`` constraint rejected on insert.
+    """
+    import src.routes.api_keys.api_keys as route_module
+
+    captured: dict = {}
+
+    async def _spy_calculate_price(**kwargs) -> float:
+        captured.update(kwargs)
+        return _FIXED_PRICE
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _spy_calculate_price)
+
+    email = "chat-cached-tokens@example.com"
+    user_id, chat_key = await _seed_user_with_chat_key(email, prepaid=10.0)
+    key_id = chat_key.id
+
+    try:
+        ic_before = await _inference_call_count(key_id)
+
+        resp = await async_client.post(
+            "/api-keys/admin/usage",
+            json={
+                "key": chat_key.full_key,
+                "model_name": "test-text-model",
+                "input_tokens": 6320,
+                "output_tokens": 257,
+                "cached_tokens": 6208,
+            },
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        assert captured["input_tokens"] == 6320
+        assert captured["output_tokens"] == 257, "output_tokens must not have cached_tokens subtracted"
+        assert captured["cached_tokens"] == 6208, "cached_tokens must be forwarded for the cached-input rate"
+
+        assert await _inference_call_count(key_id) == ic_before + 1
+
+    finally:
+        await _cleanup(user_id)
+
+
+# ---------------------------------------------------------------------------
 # (b) Shared key: ChatRequest written, no InferenceCall, no balance change
 # ---------------------------------------------------------------------------
 
