@@ -446,8 +446,18 @@ class PaymentManager:
             if upgraded_from is not None and upgraded_from != sub.tier:
                 await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
         elif event.type == PaymentEventType.order_failed:
-            sub.status = "overdue"
-            await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
+            if sub.status == "pending":
+                # A card declined on the hosted checkout, not a failed subscription payment:
+                # the sub was never active (nothing to be overdue about) and the user usually
+                # retries on the same order, which then completes.
+                await self._log_event(sub, "checkout_declined", event.provider_event_id, event.metadata)
+            elif await self._order_completed(sub, event.order_id):
+                # Out-of-order delivery: a declined attempt on an order that has since been
+                # paid. Applying it would revoke a live, paid-for subscription.
+                logger.info(f"Ignoring failure for already-completed order {event.order_id} on sub {sub.id}")
+            else:
+                sub.status = "overdue"
+                await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
         elif event.type == PaymentEventType.subscription_overdue:
             sub.status = "overdue"
             await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
@@ -461,6 +471,21 @@ class PaymentManager:
             await self._log_event(sub, "finished", event.provider_event_id, event.metadata)
 
         await self.db.flush()
+
+    async def _order_completed(self, sub: PlanSubscription, order_id: str | None) -> bool:
+        """Has this subscription already been activated by ``order_id``?"""
+        if not order_id:
+            return False
+        existing = (
+            await self.db.execute(
+                select(PlanSubscriptionEvent.id).where(
+                    PlanSubscriptionEvent.subscription_id == sub.id,
+                    PlanSubscriptionEvent.event_type == "activated",
+                    PlanSubscriptionEvent.metadata_json["order_id"].as_string() == order_id,
+                )
+            )
+        ).scalar_one_or_none()
+        return existing is not None
 
     async def _resolve_subscription(self, event: PaymentEvent) -> PlanSubscription | None:
         if event.provider_subscription_id:

@@ -246,6 +246,104 @@ async def test_subscription_event_dedup(db):
     assert activated == 1
 
 
+async def _event_types(db, sub_id) -> list[str]:
+    return list(
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type)
+                .where(PlanSubscriptionEvent.subscription_id == sub_id)
+                .order_by(PlanSubscriptionEvent.created_at)
+            )
+        ).scalars()
+    )
+
+
+@pytest.mark.asyncio
+async def test_declined_card_at_checkout_keeps_sub_pending(db):
+    """A card declined on the hosted checkout is not a subscription payment failure.
+
+    The sub was never active, so there is nothing to be overdue about — and the user
+    typically retries on the same order, which then completes.
+    """
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "pending"
+    assert await _event_types(db, sub.id) == ["created", "checkout_declined"]
+
+    # Retry on the same order succeeds -> normal activation.
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"
+    assert await mgr.current_tier(user.id) == "plus"
+
+
+@pytest.mark.asyncio
+async def test_late_failure_for_completed_order_does_not_revoke_sub(db):
+    """Webhooks are not ordered: a declined attempt can land after the order completed."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+    # The earlier declined attempt on the SAME order arrives late.
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"
+    assert await mgr.current_tier(user.id) == "plus"
+    assert "payment_failed" not in await _event_types(db, sub.id)
+
+
+@pytest.mark.asyncio
+async def test_renewal_failure_marks_overdue(db):
+    """A failed renewal (a NEW order on an active sub) still goes overdue and loses the tier."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_FAILED:renew_1",
+                     provider_subscription_id="psub_1", order_id="renew_1",
+                     metadata={"order_id": "renew_1"})
+    )
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "overdue"
+    assert "payment_failed" in await _event_types(db, sub.id)
+    assert await mgr.current_tier(user.id) == "free"
+
+
 @pytest.mark.asyncio
 async def test_upgrade_parks_then_cancels_old(db):
     user = await _make_user(db)

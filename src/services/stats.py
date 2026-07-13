@@ -1049,8 +1049,10 @@ class StatsService:
 
     # Raw event_type -> human-facing activity type. Only completed, meaningful transitions are
     # shown; intents (created/initiated/*_requested), bookkeeping (cancelled_for_upgrade,
-    # upgrade_remainder_credited), reverts, abandoned checkouts (expired_abandoned_checkout) and
-    # the redundant ``overdue`` (``payment_failed`` covers the same incident) are all dropped.
+    # upgrade_remainder_credited), reverts, abandoned checkouts (expired_abandoned_checkout),
+    # declined cards on a checkout the user then retries (checkout_declined) and the redundant
+    # ``overdue`` (``payment_failed`` covers the same incident) are all dropped. ``payment_failed``
+    # therefore means a *live* sub failed to bill, never a fumbled card at signup.
     # ``upgraded`` (logged on the new sub at completion, metadata from/to) supersedes that sub's
     # ``activated`` so an upgrade reads as a single "from -> to" row.
     _ACTIVITY_TYPE_MAP = {
