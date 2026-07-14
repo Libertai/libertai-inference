@@ -339,12 +339,26 @@ class MrrDay(BaseModel):
     mrr: float
 
 
+class TopupDay(BaseModel):
+    """Completed Revolut credit purchases on a single day."""
+
+    date: str
+    amount: float
+
+
 class GlobalSubscriptionsRevenueStats(BaseModel):
-    """Revolut (fiat) MRR, nominal and currency-blind; trials excluded. Event-replayed history."""
+    """Revolut (fiat) MRR, nominal and currency-blind; trials excluded. Event-replayed history.
+
+    ``topups_daily`` covers completed Revolut credit purchases, excluding ``upgrade_remainder``
+    grants and pending checkouts. Its window is widened back to the first day of ``start_date``'s
+    calendar month so the client can draw a correct month-to-date line for a mid-month range.
+    """
 
     current_mrr: float
     mrr_by_tier: list[MrrByTier]
     daily: list[MrrDay]
+    topups_daily: list[TopupDay]
+    total_topups: float
 
 
 class ChurnWeek(BaseModel):

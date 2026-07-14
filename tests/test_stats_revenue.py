@@ -129,3 +129,9 @@ def test_mrr_downgrade_dollar_amounts():
         ("2026-01-31", 20.0),
         ("2026-02-01", 8.0),
     ]
+
+
+def test_topups_window_starts_at_first_of_month():
+    assert StatsService._topups_window_start(date(2026, 7, 5)) == date(2026, 7, 1)
+    assert StatsService._topups_window_start(date(2026, 7, 1)) == date(2026, 7, 1)
+    assert StatsService._topups_window_start(date(2026, 12, 31)) == date(2026, 12, 1)

@@ -46,6 +46,7 @@ from src.interfaces.stats import (
     GlobalSubscriptionActivityStats,
     MrrByTier,
     MrrDay,
+    TopupDay,
     GlobalSubscriptionsRevenueStats,
     ChurnWeek,
     GlobalSubscriptionsChurnStats,
@@ -1345,6 +1346,15 @@ class StatsService:
         return [(r.date, round(float(r.amount or 0.0), 2)) for r in rows]
 
     @staticmethod
+    def _topups_window_start(start_date: date) -> date:
+        """First day of ``start_date``'s calendar month.
+
+        A month-to-date topups line for a range starting 5 July must still include 1-4 July,
+        so the topups query reaches back further than the requested range.
+        """
+        return start_date.replace(day=1)
+
+    @staticmethod
     def _mrr_daily(timelines: list[dict], start_date: date, end_date: date) -> list[MrrDay]:
         daily: list[MrrDay] = []
         day = start_date
@@ -1394,6 +1404,16 @@ class StatsService:
                 timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
                 daily = StatsService._mrr_daily(timelines, start_date, end_date)
 
+                topup_rows = await StatsService._revolut_topups_by_day(
+                    db, StatsService._topups_window_start(start_date), end_date
+                )
+                topups_daily = [
+                    TopupDay(date=d.strftime("%Y-%m-%d"), amount=amount) for d, amount in topup_rows
+                ]
+                total_topups = round(
+                    sum(amount for d, amount in topup_rows if start_date <= d <= end_date), 2
+                )
+
                 today = datetime.now(timezone.utc).date()
                 by_tier: dict[str, float] = {}
                 for t in timelines:
@@ -1405,6 +1425,8 @@ class StatsService:
                     current_mrr=current_mrr,
                     mrr_by_tier=[MrrByTier(tier=k, mrr=round(v, 2)) for k, v in sorted(by_tier.items())],
                     daily=daily,
+                    topups_daily=topups_daily,
+                    total_topups=total_topups,
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions revenue: {str(e)}", exc_info=True)
