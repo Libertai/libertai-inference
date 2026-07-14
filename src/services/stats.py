@@ -7,6 +7,7 @@ from sqlalchemy import func, cast, Date, Integer, select, distinct, case, litera
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.interfaces.stats import (
     DashboardStats,
     TokenStats,
@@ -53,6 +54,7 @@ from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
+from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
@@ -1249,6 +1251,98 @@ class StatsService:
                 counts[(day, tier)] = len(users)
             day += timedelta(days=1)
         return counts
+
+    @staticmethod
+    async def _credits_by_user_day(
+        db, start_date: date, end_date: date
+    ) -> list[tuple[date, uuid.UUID, float, float]]:
+        """(day, user_id, credits_used, tier_credits_used) for chargeable keys with an owner.
+
+        Aggregated in SQL so the caller maps a few hundred user-days to tiers, not ~1M rows.
+        """
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        chargeable = (ApiKeyType.api, ApiKeyType.chat, ApiKeyType.cli)
+
+        rows = (
+            await db.execute(
+                select(
+                    cast(InferenceCall.used_at, Date).label("date"),
+                    ApiKey.user_id.label("user_id"),
+                    func.coalesce(func.sum(InferenceCall.credits_used), 0.0).label("credits"),
+                    func.coalesce(func.sum(InferenceCall.tier_credits_used), 0.0).label("tier_credits"),
+                )
+                .select_from(InferenceCall)
+                .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                .where(
+                    InferenceCall.used_at >= start_datetime,
+                    InferenceCall.used_at <= end_datetime,
+                    ApiKey.type.in_(chargeable),
+                    ApiKey.user_id.isnot(None),
+                )
+                .group_by(cast(InferenceCall.used_at, Date), ApiKey.user_id)
+            )
+        ).all()
+        return [(r.date, r.user_id, float(r.credits or 0.0), float(r.tier_credits or 0.0)) for r in rows]
+
+    @staticmethod
+    async def _all_subscription_timelines(db) -> list[dict]:
+        """Replayed timelines for every subscription, ALL providers (trials excluded).
+
+        The MRR path is Revolut-only because it measures cash; tier attribution is not — a
+        credits-rail subscriber still holds a tier and burns credits against it.
+        """
+        subs = (
+            (await db.execute(select(PlanSubscription).where(PlanSubscription.is_trial.is_(False))))
+            .scalars()
+            .all()
+        )
+        sub_ids = [s.id for s in subs]
+        events = (
+            (
+                await db.execute(
+                    select(PlanSubscriptionEvent).where(PlanSubscriptionEvent.subscription_id.in_(sub_ids))
+                )
+            )
+            .scalars()
+            .all()
+            if sub_ids
+            else []
+        )
+        events_by_sub: dict = {}
+        for e in events:
+            events_by_sub.setdefault(e.subscription_id, []).append(e)
+        return StatsService._replay_subscription_timelines(subs, events_by_sub)
+
+    @staticmethod
+    async def _revolut_topups_by_day(db, start_date: date, end_date: date) -> list[tuple[date, float]]:
+        """Completed Revolut credit purchases per day.
+
+        ``upgrade_remainder:*`` rows are excluded: they are leftover subscription value refunded
+        as credits on a tier upgrade, never a card payment. ``pending`` rows are excluded too —
+        abandoned or stuck checkouts, money that was never collected.
+        """
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+
+        rows = (
+            await db.execute(
+                select(
+                    cast(CreditTransaction.created_at, Date).label("date"),
+                    func.coalesce(func.sum(CreditTransaction.amount), 0.0).label("amount"),
+                )
+                .where(
+                    CreditTransaction.provider == CreditTransactionProvider.revolut,
+                    CreditTransaction.status == CreditTransactionStatus.completed,
+                    CreditTransaction.created_at >= start_datetime,
+                    CreditTransaction.created_at <= end_datetime,
+                    func.coalesce(CreditTransaction.external_reference, "").not_like("upgrade_remainder:%"),
+                )
+                .group_by(cast(CreditTransaction.created_at, Date))
+                .order_by(cast(CreditTransaction.created_at, Date))
+            )
+        ).all()
+        return [(r.date, round(float(r.amount or 0.0), 2)) for r in rows]
 
     @staticmethod
     def _mrr_daily(timelines: list[dict], start_date: date, end_date: date) -> list[MrrDay]:
