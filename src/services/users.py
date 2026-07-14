@@ -83,6 +83,7 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
     if existing is not None:
         user = await db.get(User, existing.user_id)
         if user is not None:
+            _refresh_avatar(user, info)
             return user, False
 
     user = None
@@ -99,9 +100,22 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
         db.add(user)
         await db.flush()
         created = True
+    else:
+        _refresh_avatar(user, info)
 
     await link_oauth(db, user, info)
     return user, created
+
+
+def _refresh_avatar(user: User, info: "OAuthUserInfo") -> None:
+    """Keep the avatar in step with the provider on every login.
+
+    Only the avatar: ``display_name`` is user-editable, so re-applying the provider's name
+    would silently overwrite one the user chose. A provider sending no avatar leaves the
+    stored one alone rather than clearing it.
+    """
+    if info.avatar_url and user.avatar_url != info.avatar_url:
+        user.avatar_url = info.avatar_url
 
 
 async def link_oauth(db: AsyncSession, user: User, info: "OAuthUserInfo") -> None:
