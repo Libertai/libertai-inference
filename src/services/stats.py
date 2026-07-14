@@ -1,3 +1,4 @@
+import uuid
 from calendar import month_abbr
 from datetime import datetime, timedelta, date, timezone
 
@@ -1194,6 +1195,60 @@ class StatsService:
             if change_day <= day:
                 tier = change_tier
         return tier
+
+    @staticmethod
+    def _tier_by_user_day(timelines: list[dict], day: date) -> dict[uuid.UUID, str]:
+        """user_id -> paid tier on ``day``. Users with no active sub that day are absent."""
+        by_user: dict[uuid.UUID, str] = {}
+        for t in timelines:
+            tier = StatsService._tier_at(t, day)
+            if tier:
+                by_user[t["user_id"]] = tier
+        return by_user
+
+    @staticmethod
+    def _aggregate_credits_by_tier(
+        user_day_credits: list[tuple[date, uuid.UUID, float]],
+        timelines: list[dict],
+        start_date: date,
+        end_date: date,
+    ) -> dict[tuple[date, str], float]:
+        """(day, tier) -> credits, attributed to the tier the user held THAT day.
+
+        Users with no paid subscription on a day bucket into "free".
+        """
+        tier_by_day: dict[date, dict[uuid.UUID, str]] = {}
+        day = start_date
+        while day <= end_date:
+            tier_by_day[day] = StatsService._tier_by_user_day(timelines, day)
+            day += timedelta(days=1)
+
+        totals: dict[tuple[date, str], float] = {}
+        for used_on, user_id, credits in user_day_credits:
+            if used_on not in tier_by_day:
+                continue
+            tier = tier_by_day[used_on].get(user_id, "free")
+            key = (used_on, tier)
+            totals[key] = totals.get(key, 0.0) + float(credits)
+        return totals
+
+    @staticmethod
+    def _subscribers_by_tier_day(
+        timelines: list[dict], start_date: date, end_date: date
+    ) -> dict[tuple[date, str], int]:
+        """(day, tier) -> distinct paid subscribers. Tiers with nobody that day are absent."""
+        counts: dict[tuple[date, str], int] = {}
+        day = start_date
+        while day <= end_date:
+            per_tier: dict[str, set[uuid.UUID]] = {}
+            for t in timelines:
+                tier = StatsService._tier_at(t, day)
+                if tier:
+                    per_tier.setdefault(tier, set()).add(t["user_id"])
+            for tier, users in per_tier.items():
+                counts[(day, tier)] = len(users)
+            day += timedelta(days=1)
+        return counts
 
     @staticmethod
     def _mrr_daily(timelines: list[dict], start_date: date, end_date: date) -> list[MrrDay]:
