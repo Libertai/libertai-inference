@@ -34,6 +34,7 @@ from src.interfaces.stats import (
     GlobalSegmentCallsStats,
     GlobalCreditsConsumptionStats,
     CreditsConsumptionDay,
+    TierCreditsDay,
     GlobalSubscriptionsStats,
     TierSubscribers,
     GlobalSubscribersOverTimeStats,
@@ -895,11 +896,26 @@ class StatsService:
                     daily.append(
                         CreditsConsumptionDay(date=r.date.strftime("%Y-%m-%d"), tier_credits=tier, prepaid_credits=prepaid)
                     )
+
+                timelines = await StatsService._all_subscription_timelines(db)
+                user_day = await StatsService._credits_by_user_day(db, start_date, end_date)
+                by_tier = StatsService._aggregate_credits_by_tier(
+                    [(d, uid, credits) for d, uid, credits, _tier_credits in user_day],
+                    timelines,
+                    start_date,
+                    end_date,
+                )
+                daily_by_tier = [
+                    TierCreditsDay(date=d.strftime("%Y-%m-%d"), tier=tier, credits=round(credits, 6))
+                    for (d, tier), credits in sorted(by_tier.items())
+                ]
+
                 return GlobalCreditsConsumptionStats(
                     total_credits=round(total_tier + total_prepaid, 6),
                     total_tier_credits=round(total_tier, 6),
                     total_prepaid_credits=round(total_prepaid, 6),
                     daily=daily,
+                    daily_by_tier=daily_by_tier,
                 )
         except Exception as e:
             logger.error(f"Error retrieving credits-consumption stats: {str(e)}", exc_info=True)
