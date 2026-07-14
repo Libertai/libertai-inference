@@ -1036,7 +1036,9 @@ class StatsService:
                 return GlobalTierEconomicsStats(
                     daily=daily,
                     tier_prices=[
-                        TierPrice(tier=t, monthly_price=_tier_price(t))
+                        TierPrice(
+                            tier=t, monthly_price=_tier_price(t), weekly_credits=get_tier(t).weekly_credits
+                        )
                         for t in sorted(PAID_TIERS, key=_tier_price)
                     ],
                 )
