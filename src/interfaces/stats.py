@@ -270,6 +270,38 @@ class GlobalSubscribersOverTimeStats(BaseModel):
     daily: list[TierSubscribersDay]
 
 
+class TierPrice(BaseModel):
+    tier: str
+    monthly_price: float
+
+
+class TierEconomicsDay(BaseModel):
+    """One tier's subscriber count and plan-covered credit draw on a single day."""
+
+    date: str
+    tier: str  # "go" | "plus" | "max"
+    active_subscribers: int
+    credits: float  # tier_credits_used: the portion the entitlement window covered
+
+
+class GlobalTierEconomicsStats(BaseModel):
+    """Per-tier subscribers and plan-covered credit draw per day, for value-for-price analysis.
+
+    ``credits`` is ``tier_credits_used`` — the value a subscriber pulled out of their PLAN.
+    Prepaid overflow is excluded: the user paid for that separately, so charging it against the
+    subscription would double-count it.
+
+    Spans ALL providers (Revolut and the credits rail), unlike the Revolut-only MRR series: this
+    measures value-for-price, and a credits-rail subscriber pays the same tier price.
+
+    Ratios and cumulative sums are deliberately NOT computed here — the client derives them, so
+    new chart lenses need no API change.
+    """
+
+    daily: list[TierEconomicsDay]
+    tier_prices: list[TierPrice]
+
+
 class SubscriptionStatusFilter(str, Enum):
     """Status filter for the latest-subscribers list. ``all`` includes every status;
     omitting the filter defaults to everything EXCEPT ``pending`` (abandoned checkouts)."""

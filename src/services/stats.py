@@ -39,6 +39,9 @@ from src.interfaces.stats import (
     TierSubscribers,
     GlobalSubscribersOverTimeStats,
     TierSubscribersDay,
+    GlobalTierEconomicsStats,
+    TierEconomicsDay,
+    TierPrice,
     LatestSubscriber,
     GlobalLatestSubscribersStats,
     SubscriptionStatusFilter,
@@ -61,7 +64,7 @@ from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from src.subscription_tiers import get_tier
+from src.subscription_tiers import get_tier, PAID_TIERS
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -1008,6 +1011,50 @@ class StatsService:
                 return GlobalSubscribersOverTimeStats(daily=daily)
         except Exception as e:
             logger.error(f"Error retrieving subscribers-over-time stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_tier_economics(start_date: date, end_date: date) -> GlobalTierEconomicsStats:
+        """Per-tier subscribers and plan-covered credits per day, plus the tier price list."""
+        try:
+            async with AsyncSessionLocal() as db:
+                timelines = await StatsService._all_subscription_timelines(db)
+                user_day = await StatsService._credits_by_user_day(db, start_date, end_date)
+
+                credits_by_tier = StatsService._aggregate_credits_by_tier(
+                    [(d, uid, tier_credits) for d, uid, _credits, tier_credits in user_day],
+                    timelines,
+                    start_date,
+                    end_date,
+                )
+                subs_by_tier = StatsService._subscribers_by_tier_day(timelines, start_date, end_date)
+
+                daily: list[TierEconomicsDay] = []
+                day = start_date
+                while day <= end_date:
+                    for tier in sorted(PAID_TIERS):
+                        subscribers = subs_by_tier.get((day, tier), 0)
+                        credits = credits_by_tier.get((day, tier), 0.0)
+                        if subscribers == 0 and credits == 0.0:
+                            continue
+                        daily.append(
+                            TierEconomicsDay(
+                                date=day.strftime("%Y-%m-%d"),
+                                tier=tier,
+                                active_subscribers=subscribers,
+                                credits=round(credits, 6),
+                            )
+                        )
+                    day += timedelta(days=1)
+
+                return GlobalTierEconomicsStats(
+                    daily=daily,
+                    tier_prices=[
+                        TierPrice(tier=t, monthly_price=_tier_price(t)) for t in sorted(PAID_TIERS)
+                    ],
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving tier economics: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod

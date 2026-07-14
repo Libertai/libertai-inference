@@ -19,6 +19,7 @@ from src.interfaces.stats import (
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
     GlobalSubscribersOverTimeStats,
+    GlobalTierEconomicsStats,
     GlobalLatestSubscribersStats,
     SubscriptionStatusFilter,
     SubscriptionActivityType,
@@ -333,4 +334,20 @@ async def get_subscribers_over_time(
         return await StatsService.get_global_subscribers_over_time(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in subscribers-over-time stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/subscriptions/tier-economics",
+    response_model=GlobalTierEconomicsStats,
+    dependencies=[Depends(require_staff)],
+)
+async def get_tier_economics(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalTierEconomicsStats:
+    try:
+        return await StatsService.get_global_tier_economics(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in tier-economics stats route: {str(e)}", exc_info=True)
         raise
