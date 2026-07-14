@@ -109,3 +109,43 @@ async def test_oauth_exchange_one_time_code(async_client, monkeypatch):
     # Single-use: the code is gone.
     reused = await async_client.post("/auth/exchange", json={"code": code})
     assert reused.status_code == 400
+
+
+async def test_auth_status_returns_wallet_address_not_user_id(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    tokens = (
+        await async_client.post(
+            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+        )
+    ).json()
+
+    status = await async_client.get(
+        "/auth/status", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert status.status_code == 200
+    body = status.json()
+    assert body["authenticated"] is True
+    assert body["address"] == account.address.lower()
+
+
+async def test_auth_status_for_oauth_user_has_no_wallet_address(async_client):
+    """An email/OAuth account holds no wallet, so it must report a null address rather than a UUID."""
+    from src.services.auth_tokens import create_access_token
+
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, "status-oauth@example.com")
+        await db.commit()
+
+    token = create_access_token(user.id)
+    status = await async_client.get("/auth/status", headers={"Authorization": f"Bearer {token}"})
+    assert status.status_code == 200
+    body = status.json()
+    assert body["authenticated"] is True
+    assert body["address"] is None
+
+
+async def test_auth_status_unauthenticated(async_client):
+    status = await async_client.get("/auth/status")
+    assert status.status_code == 200
+    assert status.json()["authenticated"] is False

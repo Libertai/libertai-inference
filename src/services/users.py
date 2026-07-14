@@ -108,12 +108,7 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
 
 
 def _refresh_avatar(user: User, info: "OAuthUserInfo") -> None:
-    """Keep the avatar in step with the provider on every login.
-
-    Only the avatar: ``display_name`` is user-editable, so re-applying the provider's name
-    would silently overwrite one the user chose. A provider sending no avatar leaves the
-    stored one alone rather than clearing it.
-    """
+    """Sync the avatar from the provider. Not display_name — that one is user-editable."""
     if info.avatar_url and user.avatar_url != info.avatar_url:
         user.avatar_url = info.avatar_url
 

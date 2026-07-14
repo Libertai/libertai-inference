@@ -271,14 +271,7 @@ class GlobalSubscribersOverTimeStats(BaseModel):
 
 
 class TierPrice(BaseModel):
-    """A tier's price and the credit allowance it grants.
-
-    ``weekly_credits`` is the entitlement ceiling: a subscriber consuming all of it draws far
-    more than ``monthly_price`` in PAYG-equivalent value (that gap IS the subscription's
-    discount), and each tier's gap differs. The client uses it to express consumption as a
-    fraction of what the tier actually entitles a subscriber to, which is comparable across
-    tiers in a way the raw PAYG ratio is not.
-    """
+    """A tier's price and the weekly credit allowance it grants."""
 
     tier: str
     monthly_price: float

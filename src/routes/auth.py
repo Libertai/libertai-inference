@@ -38,7 +38,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.session import Session
 from src.models.user import User
 from src.services import magic_link, oauth, wallet_auth
-from src.services.auth import create_access_token, get_current_user, verify_token
+from src.services.auth import create_access_token, get_current_user, get_optional_user
 from src.services.auth_tokens import REFRESH, create_access_token as create_user_access_token, create_refresh_token, decode_token
 from src.services.users import (
     get_or_create_user_by_email,
@@ -136,17 +136,11 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
 
 
 @router.get("/status")
-async def check_auth_status(libertai_auth: str = Cookie(default=None)) -> AuthStatusResponse:
-    """Check if the user is authenticated with a valid token."""
-    if not libertai_auth:
+async def check_auth_status(user: User | None = Depends(get_optional_user)) -> AuthStatusResponse:
+    """Whether the caller is authenticated, and which wallet (if any) their account holds."""
+    if user is None:
         return AuthStatusResponse(authenticated=False)
-
-    try:
-        token_data = verify_token(libertai_auth)
-        return AuthStatusResponse(authenticated=True, address=token_data.address)
-    except HTTPException:
-        # If token verification fails, return not authenticated
-        return AuthStatusResponse(authenticated=False)
+    return AuthStatusResponse(authenticated=True, address=user.address)
 
 
 @router.get("/me")
