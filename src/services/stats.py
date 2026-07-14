@@ -860,48 +860,34 @@ class StatsService:
     @staticmethod
     async def get_global_credits_consumption(start_date: date, end_date: date) -> GlobalCreditsConsumptionStats:
         """Credits consumed per day across api/cli/chat keys, split into the tier-covered portion
-        (entitlement window) and the prepaid overflow (credits_used - tier_credits_used)."""
+        (entitlement window) and the prepaid overflow (credits_used - tier_credits_used).
+
+        Totals are rolled up from ``_credits_by_user_day`` (already grouped per user-day) instead
+        of a second per-day scan over inference_calls — same table, same join, same filters.
+        """
         try:
             async with AsyncSessionLocal() as db:
-                start_datetime = datetime.combine(start_date, datetime.min.time())
-                end_datetime = datetime.combine(end_date, datetime.max.time())
+                timelines = await StatsService._all_subscription_timelines(db)
+                user_day = await StatsService._credits_by_user_day(db, start_date, end_date)
 
-                chargeable = (ApiKeyType.api, ApiKeyType.chat, ApiKeyType.cli)
-                rows = (
-                    await db.execute(
-                        select(
-                            cast(InferenceCall.used_at, Date).label("date"),
-                            func.coalesce(func.sum(InferenceCall.tier_credits_used), 0.0).label("tier"),
-                            func.coalesce(
-                                func.sum(InferenceCall.credits_used - InferenceCall.tier_credits_used), 0.0
-                            ).label("prepaid"),
-                        )
-                        .select_from(InferenceCall)
-                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                        .where(
-                            InferenceCall.used_at >= start_datetime,
-                            InferenceCall.used_at <= end_datetime,
-                            ApiKey.type.in_(chargeable),
-                        )
-                        .group_by(cast(InferenceCall.used_at, Date))
-                        .order_by(cast(InferenceCall.used_at, Date))
-                    )
-                ).all()
+                daily_totals: dict[date, list[float]] = {}
+                for d, _uid, credits, tier_credits in user_day:
+                    acc = daily_totals.setdefault(d, [0.0, 0.0])
+                    acc[0] += tier_credits
+                    acc[1] += credits - tier_credits
 
                 total_tier = 0.0
                 total_prepaid = 0.0
                 daily = []
-                for r in rows:
-                    tier = round(float(r.tier or 0.0), 6)
-                    prepaid = round(float(r.prepaid or 0.0), 6)
+                for d, (tier_sum, prepaid_sum) in sorted(daily_totals.items()):
+                    tier = round(tier_sum, 6)
+                    prepaid = round(prepaid_sum, 6)
                     total_tier += tier
                     total_prepaid += prepaid
                     daily.append(
-                        CreditsConsumptionDay(date=r.date.strftime("%Y-%m-%d"), tier_credits=tier, prepaid_credits=prepaid)
+                        CreditsConsumptionDay(date=d.strftime("%Y-%m-%d"), tier_credits=tier, prepaid_credits=prepaid)
                     )
 
-                timelines = await StatsService._all_subscription_timelines(db)
-                user_day = await StatsService._credits_by_user_day(db, start_date, end_date)
                 by_tier = StatsService._aggregate_credits_by_tier(
                     [(d, uid, credits) for d, uid, credits, _tier_credits in user_day],
                     timelines,
@@ -1050,7 +1036,8 @@ class StatsService:
                 return GlobalTierEconomicsStats(
                     daily=daily,
                     tier_prices=[
-                        TierPrice(tier=t, monthly_price=_tier_price(t)) for t in sorted(PAID_TIERS)
+                        TierPrice(tier=t, monthly_price=_tier_price(t))
+                        for t in sorted(PAID_TIERS, key=_tier_price)
                     ],
                 )
         except Exception as e:
@@ -1274,14 +1261,15 @@ class StatsService:
 
     @staticmethod
     def _aggregate_credits_by_tier(
-        user_day_credits: list[tuple[date, uuid.UUID, float]],
+        user_day_credits: list[tuple[date, uuid.UUID | None, float]],
         timelines: list[dict],
         start_date: date,
         end_date: date,
     ) -> dict[tuple[date, str], float]:
         """(day, tier) -> credits, attributed to the tier the user held THAT day.
 
-        Users with no paid subscription on a day bucket into "free".
+        Users with no paid subscription on a day, and ownerless keys (no subscription by
+        definition), bucket into "free".
         """
         tier_by_day: dict[date, dict[uuid.UUID, str]] = {}
         day = start_date
@@ -1293,7 +1281,7 @@ class StatsService:
         for used_on, user_id, credits in user_day_credits:
             if used_on not in tier_by_day:
                 continue
-            tier = tier_by_day[used_on].get(user_id, "free")
+            tier = tier_by_day[used_on].get(user_id, "free") if user_id is not None else "free"
             key = (used_on, tier)
             totals[key] = totals.get(key, 0.0) + float(credits)
         return totals
@@ -1319,10 +1307,12 @@ class StatsService:
     @staticmethod
     async def _credits_by_user_day(
         db, start_date: date, end_date: date
-    ) -> list[tuple[date, uuid.UUID, float, float]]:
-        """(day, user_id, credits_used, tier_credits_used) for chargeable keys with an owner.
+    ) -> list[tuple[date, uuid.UUID | None, float, float]]:
+        """(day, user_id, credits_used, tier_credits_used) for chargeable keys.
 
-        Aggregated in SQL so the caller maps a few hundred user-days to tiers, not ~1M rows.
+        ``user_id`` is None for ownerless keys — callers bucket those into "free" (they have no
+        subscription by definition). Aggregated in SQL so the caller maps a few hundred
+        user-days to tiers, not ~1M rows.
         """
         start_datetime = datetime.combine(start_date, datetime.min.time())
         end_datetime = datetime.combine(end_date, datetime.max.time())
@@ -1342,7 +1332,6 @@ class StatsService:
                     InferenceCall.used_at >= start_datetime,
                     InferenceCall.used_at <= end_datetime,
                     ApiKey.type.in_(chargeable),
-                    ApiKey.user_id.isnot(None),
                 )
                 .group_by(cast(InferenceCall.used_at, Date), ApiKey.user_id)
             )
