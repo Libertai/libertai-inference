@@ -17,6 +17,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.auth_tokens import create_access_token
 
@@ -126,6 +127,64 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
     finally:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(InferenceCall).where(InferenceCall.used_at == _TS))
+            await db.execute(delete(ApiKey).where(ApiKey.user_id.in_(user_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()
+
+
+async def test_credits_consumption_and_tier_economics_use_different_columns(async_client):
+    """daily_by_tier (credits-consumption) is attributed by credits_used; tier-economics'
+    per-tier credits is attributed by tier_credits_used. Adjacent tuple positions in the
+    service layer -- a swap between them must turn this test red."""
+    day = "2099-08-10"
+    ts = datetime(2099, 8, 10, 12, 0, 0)
+    event_ts = datetime(2099, 8, 1)
+    user_ids: list[uuid.UUID] = []
+    async with AsyncSessionLocal() as db:
+        user = await _mk_user(db)
+        user_ids.append(user)
+        sub = PlanSubscription(user_id=user, tier="plus", provider="revolut", status="active")
+        db.add(sub)
+        await db.flush()
+        created_event = PlanSubscriptionEvent(
+            subscription_id=sub.id, event_type="created", metadata_json={"tier": "plus"}
+        )
+        created_event.created_at = event_ts
+        activated_event = PlanSubscriptionEvent(subscription_id=sub.id, event_type="activated")
+        activated_event.created_at = event_ts
+        db.add(created_event)
+        db.add(activated_event)
+
+        key_id = await _mk_key(db, user_id=user, type_=ApiKeyType.api)
+        ic = InferenceCall(
+            api_key_id=key_id, credits_used=5.0, tier_credits_used=2.0,
+            input_tokens=1, output_tokens=1, model_name="m",
+        )
+        ic.used_at = ts
+        db.add(ic)
+
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
+        await db.commit()
+
+    try:
+        resp = await async_client.get(
+            f"/stats/global/credits-consumption?start_date={day}&end_date={day}", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        by_tier = {d["tier"]: d["credits"] for d in resp.json()["daily_by_tier"]}
+        assert by_tier["plus"] == pytest.approx(5.0)  # credits_used
+
+        resp2 = await async_client.get(
+            f"/stats/global/subscriptions/tier-economics?start_date={day}&end_date={day}", headers=headers
+        )
+        assert resp2.status_code == 200, resp2.text
+        tier_credits = {d["tier"]: d["credits"] for d in resp2.json()["daily"]}
+        assert tier_credits["plus"] == pytest.approx(2.0)  # tier_credits_used
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(InferenceCall).where(InferenceCall.used_at == ts))
+            await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
             await db.execute(delete(ApiKey).where(ApiKey.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()

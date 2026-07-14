@@ -1,6 +1,14 @@
 import uuid
 from datetime import date, datetime
 
+import pytest
+from sqlalchemy import delete
+
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
+from src.models.base import AsyncSessionLocal
+from src.models.credit_transaction import CreditTransaction
+from src.models.user import User
+from src.services.auth_tokens import create_access_token
 from src.services.stats import StatsService
 
 
@@ -135,3 +143,57 @@ def test_topups_window_starts_at_first_of_month():
     assert StatsService._topups_window_start(date(2026, 7, 5)) == date(2026, 7, 1)
     assert StatsService._topups_window_start(date(2026, 7, 1)) == date(2026, 7, 1)
     assert StatsService._topups_window_start(date(2026, 12, 31)) == date(2026, 12, 1)
+
+
+async def _mk_staff_headers(db) -> dict:
+    u = User(email=f"revenue-staff-{uuid.uuid4().hex}@example.com")
+    u.is_libertai_staff = True
+    db.add(u)
+    await db.flush()
+    return {"Authorization": f"Bearer {create_access_token(u.id)}"}
+
+
+@pytest.mark.asyncio
+async def test_topups_daily_widens_but_total_topups_stays_in_range(async_client):
+    """topups_daily reaches back to the 1st of start_date's month (MTD line needs it); total_topups
+    must only sum days inside [start_date, end_date]. A single query feeds both -- narrowing the
+    fetch or widening the sum would silently break one of the two."""
+    before_range = date(2099, 9, 5)  # same month, before start_date: in topups_daily, NOT in total
+    in_range = date(2099, 9, 10)
+    start_date, end_date = date(2099, 9, 8), date(2099, 9, 10)
+    txn_ids: list[uuid.UUID] = []
+    user_ids: list[uuid.UUID] = []
+    async with AsyncSessionLocal() as db:
+        user = User(email=f"revenue-{uuid.uuid4().hex}@example.com")
+        db.add(user)
+        await db.flush()
+        user_ids.append(user.id)
+
+        for day, amount in ((before_range, 15.0), (in_range, 25.0)):
+            txn = CreditTransaction(
+                user_id=user.id, amount=amount, amount_left=amount,
+                provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+            )
+            txn.created_at = datetime.combine(day, datetime.min.time().replace(hour=12))
+            db.add(txn)
+            await db.flush()
+            txn_ids.append(txn.id)
+
+        headers = await _mk_staff_headers(db)
+        await db.commit()
+
+    try:
+        resp = await async_client.get(
+            f"/stats/global/subscriptions/revenue?start_date={start_date}&end_date={end_date}", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        amounts_by_date = {d["date"]: d["amount"] for d in body["topups_daily"]}
+        assert amounts_by_date.get(before_range.strftime("%Y-%m-%d")) == pytest.approx(15.0)
+        assert amounts_by_date.get(in_range.strftime("%Y-%m-%d")) == pytest.approx(25.0)
+        assert body["total_topups"] == pytest.approx(25.0)  # excludes the pre-range day
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(CreditTransaction).where(CreditTransaction.id.in_(txn_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()
