@@ -1,5 +1,4 @@
 import uuid
-from calendar import month_abbr
 from datetime import datetime, timedelta, date, timezone
 
 from fastapi import HTTPException, status
@@ -125,6 +124,7 @@ class StatsService:
                             InferenceCall.used_at >= six_months_start,
                         )
                         .group_by("yr", "mo")
+                        .order_by("yr", "mo")
                     )
                 ).all()
 
@@ -137,7 +137,7 @@ class StatsService:
                 for row in monthly_rows:
                     mo = row.mo
                     yr = row.yr
-                    monthly_usage[month_abbr[mo]] = float(row.credits or 0)
+                    monthly_usage[f"{yr}-{mo:02d}"] = float(row.credits or 0)
                     if mo == now.month and yr == now.year:
                         current_calls = row.calls or 0
                         current_credits = float(row.credits or 0)
