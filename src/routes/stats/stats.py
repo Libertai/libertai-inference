@@ -134,6 +134,7 @@ async def get_latest_subscribers(
 async def get_subscription_activity(
     limit: int = Query(20, ge=1, le=200, description="Number of recent activity events to return"),
     types: str | None = Query(None, description="Comma-separated activity types; omitted = all"),
+    offset: int = Query(0, ge=0, description="Number of matching events to skip (pagination)"),
 ) -> GlobalSubscriptionActivityStats:
     activity_types: list[SubscriptionActivityType] | None = None
     if types:
@@ -142,7 +143,7 @@ async def get_subscription_activity(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid activity type: {types}")
     try:
-        return await StatsService.get_subscription_activity(limit, activity_types)
+        return await StatsService.get_subscription_activity(limit, activity_types, offset)
     except HTTPException:
         raise
     except Exception as e:

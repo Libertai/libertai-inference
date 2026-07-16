@@ -373,9 +373,14 @@ class SubscriptionActivityEvent(BaseModel):
 
 
 class GlobalSubscriptionActivityStats(BaseModel):
-    """Recent subscription lifecycle events across all providers, newest first."""
+    """Recent subscription lifecycle events across all providers, newest first.
+
+    ``events`` is one offset/limit page of the mapped stream; ``total`` counts every mapped
+    event matching the type filter, so clients can render page controls.
+    """
 
     events: list[SubscriptionActivityEvent]
+    total: int
 
 
 class MrrByTier(BaseModel):

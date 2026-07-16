@@ -1121,19 +1121,21 @@ class StatsService:
         "payment_failed": SubscriptionActivityType.payment_failed,
     }
     _ACTIVITY_TRANSITION_TYPES = (SubscriptionActivityType.upgraded, SubscriptionActivityType.downgraded)
-    # How many raw events to scan before mapping/filtering; dropped rows mean the visible feed is
-    # shorter than this, so keep it well above any single-page ``limit``.
-    _ACTIVITY_FETCH_CAP = 500
+    # Safety bound on raw events scanned per request. Lifecycle events grow slowly (a handful per
+    # subscriber), so scanning them all keeps offset pagination and ``total`` exact; the cap only
+    # guards against pathological growth.
+    _ACTIVITY_SCAN_CAP = 10_000
 
     @staticmethod
     async def get_subscription_activity(
-        limit: int = 20, types: list[SubscriptionActivityType] | None = None
+        limit: int = 20, types: list[SubscriptionActivityType] | None = None, offset: int = 0
     ) -> GlobalSubscriptionActivityStats:
         """Recent subscription lifecycle events, newest first, mapped to human-facing types.
 
         An upgrade completion logs an ``upgraded`` event (metadata from/to) on the new sub; that
         sub's ``activated`` is suppressed so the pair reads as one row. ``types=None``/empty
-        returns every mapped type.
+        returns every mapped type. ``offset``/``limit`` paginate the mapped stream; ``total`` is
+        the full mapped count for the requested types.
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -1142,7 +1144,7 @@ class StatsService:
                     .join(PlanSubscription, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
                     .join(User, PlanSubscription.user_id == User.id)
                     .order_by(PlanSubscriptionEvent.created_at.desc())
-                    .limit(StatsService._ACTIVITY_FETCH_CAP)
+                    .limit(StatsService._ACTIVITY_SCAN_CAP)
                 )
                 rows = (await db.execute(stmt)).all()
 
@@ -1177,9 +1179,7 @@ class StatsService:
                             provider=sub.provider,
                         )
                     )
-                    if len(events) >= limit:
-                        break
-                return GlobalSubscriptionActivityStats(events=events)
+                return GlobalSubscriptionActivityStats(events=events[offset : offset + limit], total=len(events))
         except Exception as e:
             logger.error(f"Error retrieving subscription activity: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

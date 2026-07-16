@@ -171,6 +171,20 @@ async def test_subscription_activity_collapses_upgrade_into_one_row():
     assert mine[0].tier == "plus"
 
 
+async def test_subscription_activity_offset_paginates_mapped_stream():
+    full = await StatsService.get_subscription_activity(limit=200)
+    assert full.total == len(full.events)
+    assert full.total >= 2  # earlier tests committed several mapped events
+
+    page1 = await StatsService.get_subscription_activity(limit=1, offset=0)
+    page2 = await StatsService.get_subscription_activity(limit=1, offset=1)
+    assert page1.total == page2.total == full.total  # total ignores the page window
+    assert [*page1.events, *page2.events] == full.events[:2]
+
+    past_end = await StatsService.get_subscription_activity(limit=1, offset=full.total)
+    assert past_end.events == []
+
+
 # Runs last and asserts membership only, so its committed rows can't perturb the order-dependent
 # assertions above (these tests share one session-scoped DB with no per-test rollback).
 async def test_latest_subscribers_label_prefers_display_name_with_contact_in_parens():
