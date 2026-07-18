@@ -183,11 +183,11 @@ async def test_chat_key_whitelisted_at_gateway_with_zero_balance():
 
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
-    whitelist = await ApiKeyService.get_admin_all_api_keys()
+    whitelist = (await ApiKeyService.get_admin_all_api_keys()).valid
     assert chat_key.full_key in whitelist  # present: zero usage is within free tier window
 
     await ApiKeyService.delete_api_key(chat_key.id)
-    whitelist_after = await ApiKeyService.get_admin_all_api_keys()
+    whitelist_after = (await ApiKeyService.get_admin_all_api_keys()).valid
     assert chat_key.full_key not in whitelist_after  # soft-deleted keys drop off
 
 
@@ -219,7 +219,7 @@ async def test_blocked_chat_key_drops_from_whitelist():
     await ApiKeyService.register_inference_call(
         key=chat_key.full_key, credits_used=2.5, model_name="m"
     )
-    whitelist = await ApiKeyService.get_admin_all_api_keys()
+    whitelist = (await ApiKeyService.get_admin_all_api_keys()).valid
     assert chat_key.full_key not in whitelist
 
 
@@ -234,5 +234,5 @@ async def test_shared_free_chat_key_always_whitelisted(monkeypatch):
     # Even with usage that would block a normal user:
     await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=5.0, model_name="m")
 
-    whitelist = await ApiKeyService.get_admin_all_api_keys()
+    whitelist = (await ApiKeyService.get_admin_all_api_keys()).valid
     assert chat_key.full_key in whitelist

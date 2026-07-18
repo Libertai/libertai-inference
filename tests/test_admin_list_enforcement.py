@@ -26,6 +26,10 @@ from src.services.entitlement import WINDOW_5H
 pytestmark = pytest.mark.asyncio
 
 
+async def _valid_keys() -> list[str]:
+    return (await ApiKeyService.get_admin_all_api_keys()).valid
+
+
 async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None, cap=None, overflow=0.0):
     """Create a user + api key with optional usage in an active/expired 5h window.
 
@@ -86,7 +90,7 @@ async def _cleanup(user_id):
 async def test_free_key_included_within_window():
     user_id, key = await _setup()
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -94,7 +98,7 @@ async def test_free_key_included_within_window():
 async def test_free_key_excluded_when_window_exhausted_no_prepaid():
     user_id, key = await _setup(usage=0.5, window="active")  # free 5h limit is 0.5
     try:
-        assert key not in await ApiKeyService.get_admin_all_api_keys()
+        assert key not in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -102,7 +106,7 @@ async def test_free_key_excluded_when_window_exhausted_no_prepaid():
 async def test_key_returns_after_window_resets():
     user_id, key = await _setup(usage=0.5, window="expired")  # window ended -> usage reset to 0
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -110,7 +114,7 @@ async def test_key_returns_after_window_resets():
 async def test_paid_tier_gets_larger_window():
     user_id, key = await _setup(usage=0.5, window="active", tier="plus")  # exhausts free, fine for plus
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -118,7 +122,7 @@ async def test_paid_tier_gets_larger_window():
 async def test_prepaid_overflow_keeps_key_included():
     user_id, key = await _setup(usage=0.5, window="active", prepaid=5.0)
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -150,7 +154,7 @@ async def test_pool_keys_are_included_in_whitelist_unconditionally():
         db.add(row)
         await db.commit()
     try:
-        assert pool_key in await ApiKeyService.get_admin_all_api_keys()
+        assert pool_key in await _valid_keys()
     finally:
         async with AsyncSessionLocal() as db:
             from sqlalchemy import delete
@@ -196,7 +200,7 @@ async def test_liberclaw_key_included_within_tier_limit():
     limit = LIBERCLAW_TIERS["free"]["credits_limit"]
     lc_id, key = await _setup_liberclaw(usage=limit / 2)  # half the rolling-window allowance
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup_liberclaw(lc_id)
 
@@ -205,7 +209,7 @@ async def test_liberclaw_key_excluded_over_tier_limit():
     limit = LIBERCLAW_TIERS["free"]["credits_limit"]
     lc_id, key = await _setup_liberclaw(usage=limit + 1)  # exhausted the rolling window
     try:
-        assert key not in await ApiKeyService.get_admin_all_api_keys()
+        assert key not in await _valid_keys()
     finally:
         await _cleanup_liberclaw(lc_id)
 
@@ -215,7 +219,7 @@ async def test_liberclaw_usage_outside_window_ignored():
     free = LIBERCLAW_TIERS["free"]
     lc_id, key = await _setup_liberclaw(usage=free["credits_limit"] + 1, used_days_ago=free["rolling_window_days"] + 5)
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup_liberclaw(lc_id)
 
@@ -224,7 +228,7 @@ async def test_cap_reached_excludes_key_when_window_exhausted():
     # Free 5h window exhausted; prepaid exists but this month's overflow >= cap.
     user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
     try:
-        assert key not in await ApiKeyService.get_admin_all_api_keys()
+        assert key not in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -232,7 +236,7 @@ async def test_cap_reached_excludes_key_when_window_exhausted():
 async def test_cap_not_reached_keeps_key():
     user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=10.0, overflow=3.0)
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -241,7 +245,7 @@ async def test_cap_reached_but_window_open_keeps_key():
     # Windows have room -> "tier" source; the cap only governs the prepaid path.
     user_id, key = await _setup(usage=0.1, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -249,7 +253,7 @@ async def test_cap_reached_but_window_open_keeps_key():
 async def test_no_cap_unlimited_overflow_keeps_key():
     user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=None, overflow=999.0)
     try:
-        assert key in await ApiKeyService.get_admin_all_api_keys()
+        assert key in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
@@ -258,7 +262,7 @@ async def test_balance_still_binds_below_cap():
     # Cap has room but prepaid < PREPAID_MIN -> still blocked.
     user_id, key = await _setup(usage=0.5, window="active", prepaid=0.01, cap=100.0, overflow=1.0)
     try:
-        assert key not in await ApiKeyService.get_admin_all_api_keys()
+        assert key not in await _valid_keys()
     finally:
         await _cleanup(user_id)
 
