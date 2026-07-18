@@ -195,9 +195,9 @@ async def test_disabled_x402_key_in_neither_list():
         await _delete_key(key_str)
 
 
-async def test_disabled_pool_key_reported_invalid():
-    # Pool keys aren't ownership- or x402-exempt, so a disabled one is reported like any
-    # other disabled key (reason=disabled) rather than silently dropped.
+async def test_disabled_pool_key_in_neither_list():
+    # Pool keys are internal (no owner, never sent by users) -> a disabled one is
+    # silently dropped, never surfaced with a user-facing reason.
     key_str = ApiKeyDB.generate_key()
     async with AsyncSessionLocal() as db:
         row = ApiKeyDB(key=key_str, name=POOL_SENTINEL_NAME, type=ApiKeyType.pool)
@@ -207,6 +207,35 @@ async def test_disabled_pool_key_reported_invalid():
     try:
         res = await _admin()
         assert key_str not in res.valid
-        assert res.invalid[key_str].reason == InvalidKeyReason.disabled
+        assert key_str not in res.invalid
     finally:
         await _delete_key(key_str)
+
+
+async def test_expired_x402_key_in_neither_list():
+    # Expired x402 keys are silently dropped, same as disabled ones.
+    key_str = ApiKeyDB.generate_key()
+    async with AsyncSessionLocal() as db:
+        row = ApiKeyDB(key=key_str, name="expired-x402", type=ApiKeyType.x402)
+        row.expires_at = datetime.now() - timedelta(days=1)
+        db.add(row)
+        await db.commit()
+    try:
+        res = await _admin()
+        assert key_str not in res.valid
+        assert key_str not in res.invalid
+    finally:
+        await _delete_key(key_str)
+
+
+async def test_key_expired_just_under_30_days_still_reported():
+    # Pins the pruning window from the inside (31d prune case is covered above);
+    # the exact 30d edge isn't testable deterministically against wall-clock now().
+    user_id, key = await _setup()
+    await _mutate_key(key, expires_at=datetime.now() - timedelta(days=29, hours=23))
+    try:
+        res = await _admin()
+        assert key not in res.valid
+        assert res.invalid[key].reason == InvalidKeyReason.expired
+    finally:
+        await _cleanup(user_id)
