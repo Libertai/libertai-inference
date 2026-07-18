@@ -124,3 +124,19 @@ async def test_valid_key_not_in_invalid_map():
         assert key not in res.invalid
     finally:
         await _cleanup(user_id)
+
+
+async def test_admin_route_serializes_invalid_map():
+    from src.interfaces.api_keys import ApiKeyAdminListResponse
+
+    user_id, key = await _setup()
+    await _mutate_key(key, is_active=False)
+    try:
+        res = await _admin()
+        payload = ApiKeyAdminListResponse(keys=res.valid, invalid_keys=res.invalid).model_dump()
+        assert payload["invalid_keys"][key] == {
+            "reason": "disabled",
+            "message": "This API key has been disabled.",
+        }
+    finally:
+        await _cleanup(user_id)
