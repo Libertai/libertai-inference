@@ -561,6 +561,13 @@ class ApiKeyService:
                         if key.is_active:
                             valid.append(key.key)
                         continue
+                    if key.type == ApiKeyType.pool:
+                        # Unclaimed pool keys are internal (no owner, never sent by users):
+                        # usable ones ride the whitelist so they're warm when claimed,
+                        # dead ones get no user-facing reason.
+                        if key.is_active and not (key.expires_at is not None and key.expires_at < now):
+                            valid.append(key.key)
+                        continue
                     # Ownership-broken keys are unusable but not user-explainable -> generic 401.
                     if key.type == ApiKeyType.liberclaw and (key.liberclaw_user_id is None or key.liberclaw_user is None):
                         continue
@@ -650,7 +657,6 @@ class ApiKeyService:
                 ]
                 liberclaw_usage: dict[uuid.UUID, float] = {}
                 if liberclaw_keys:
-                    now = datetime.now()
                     key_ids_by_window: dict[int, list[uuid.UUID]] = {}
                     for k in liberclaw_keys:
                         lc_user = k.liberclaw_user
