@@ -15,6 +15,29 @@ class ApiKeyType(str, Enum):
     pool = "pool"
 
 
+class InvalidKeyReason(str, Enum):
+    """Why a real, non-deleted key is currently unusable (distributed with the whitelist)."""
+
+    disabled = "disabled"
+    expired = "expired"
+    key_monthly_limit = "key_monthly_limit"
+    no_credits = "no_credits"
+    extra_credit_cap = "extra_credit_cap"
+    liberclaw_limit = "liberclaw_limit"
+
+
+# Static strings on purpose: the map is re-distributed every refresh cycle,
+# dynamic content (timestamps) would churn the payload.
+INVALID_KEY_MESSAGES: dict[InvalidKeyReason, str] = {
+    InvalidKeyReason.disabled: "This API key has been disabled.",
+    InvalidKeyReason.expired: "This API key has expired.",
+    InvalidKeyReason.key_monthly_limit: "This API key reached its monthly usage limit.",
+    InvalidKeyReason.no_credits: "Usage window limit reached and no extra credits available.",
+    InvalidKeyReason.extra_credit_cap: "Monthly extra-credits cap reached.",
+    InvalidKeyReason.liberclaw_limit: "Usage limit for your plan reached.",
+}
+
+
 class InferenceKeyType(str, Enum):
     """Key types whose usage is recorded in ``inference_calls`` (everything but chat).
 
@@ -32,6 +55,15 @@ class InferenceCallType(str, Enum):
     text = "text"
     image = "image"
     audio = "audio"
+
+
+class InvalidKeyInfo(BaseModel):
+    reason: InvalidKeyReason
+    message: str
+
+
+def invalid_key_info(reason: InvalidKeyReason) -> InvalidKeyInfo:
+    return InvalidKeyInfo(reason=reason, message=INVALID_KEY_MESSAGES[reason])
 
 
 class ApiKeyCreate(BaseModel):
@@ -113,6 +145,7 @@ class ApiKeyListResponse(BaseModel):
 
 class ApiKeyAdminListResponse(BaseModel):
     keys: list[str]
+    invalid_keys: dict[str, InvalidKeyInfo] = {}
 
 
 class ChatApiKeyResponse(BaseModel):
