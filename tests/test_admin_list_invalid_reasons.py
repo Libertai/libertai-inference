@@ -7,11 +7,12 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from src.interfaces.api_keys import InvalidKeyReason
+from src.interfaces.api_keys import ApiKeyType, InvalidKeyReason
 from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.services.api_key import ApiKeyService
+from src.services.api_key_pool import POOL_SENTINEL_NAME
 from tests.test_admin_list_enforcement import _cleanup, _cleanup_liberclaw, _setup, _setup_liberclaw
 
 pytestmark = pytest.mark.asyncio
@@ -140,3 +141,72 @@ async def test_admin_route_serializes_invalid_map():
         }
     finally:
         await _cleanup(user_id)
+
+
+async def _delete_key(key_str):
+    from sqlalchemy import delete
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(ApiKeyDB).where(ApiKeyDB.key == key_str))
+        await db.commit()
+
+
+async def test_ownerless_liberclaw_key_in_neither_list():
+    # liberclaw_user_id=None: ownership-broken, not user-explainable -> generic 401, not surfaced.
+    key_str = ApiKeyDB.generate_key()
+    async with AsyncSessionLocal() as db:
+        db.add(ApiKeyDB(key=key_str, name="ownerless-liberclaw", type=ApiKeyType.liberclaw, liberclaw_user_id=None))
+        await db.commit()
+    try:
+        res = await _admin()
+        assert key_str not in res.valid
+        assert key_str not in res.invalid
+    finally:
+        await _delete_key(key_str)
+
+
+async def test_ownerless_api_key_in_neither_list():
+    # user_id=None: ownership-broken, not user-explainable -> generic 401, not surfaced.
+    key_str = ApiKeyDB.generate_key()
+    async with AsyncSessionLocal() as db:
+        db.add(ApiKeyDB(key=key_str, name="ownerless-api", type=ApiKeyType.api, user_id=None))
+        await db.commit()
+    try:
+        res = await _admin()
+        assert key_str not in res.valid
+        assert key_str not in res.invalid
+    finally:
+        await _delete_key(key_str)
+
+
+async def test_disabled_x402_key_in_neither_list():
+    # x402 keys are internal (own payment auth) -> never surfaced with a user-facing reason.
+    key_str = ApiKeyDB.generate_key()
+    async with AsyncSessionLocal() as db:
+        row = ApiKeyDB(key=key_str, name="disabled-x402", type=ApiKeyType.x402)
+        row.is_active = False
+        db.add(row)
+        await db.commit()
+    try:
+        res = await _admin()
+        assert key_str not in res.valid
+        assert key_str not in res.invalid
+    finally:
+        await _delete_key(key_str)
+
+
+async def test_disabled_pool_key_reported_invalid():
+    # Pool keys aren't ownership- or x402-exempt, so a disabled one is reported like any
+    # other disabled key (reason=disabled) rather than silently dropped.
+    key_str = ApiKeyDB.generate_key()
+    async with AsyncSessionLocal() as db:
+        row = ApiKeyDB(key=key_str, name=POOL_SENTINEL_NAME, type=ApiKeyType.pool)
+        row.is_active = False
+        db.add(row)
+        await db.commit()
+    try:
+        res = await _admin()
+        assert key_str not in res.valid
+        assert res.invalid[key_str].reason == InvalidKeyReason.disabled
+    finally:
+        await _delete_key(key_str)
