@@ -1,6 +1,7 @@
 import uuid
 
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -8,7 +9,7 @@ from sqlalchemy.sql import func as sql_func
 
 from src.config import config
 from src.liberclaw_tiers import LIBERCLAW_TIERS
-from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType
+from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType, InvalidKeyInfo, InvalidKeyReason, invalid_key_info
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
@@ -17,6 +18,7 @@ from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
     CHARGEABLE_KEY_TYPES,
+    PREPAID_MIN,
     WINDOW_5H,
     WINDOW_WEEKLY,
     active_tiers_by_users,
@@ -35,6 +37,11 @@ logger = setup_logger(__name__)
 
 # CLI API keys expire and must be re-minted via `libertai login`.
 CLI_KEY_TTL_DAYS = 90
+
+
+class AdminApiKeys(NamedTuple):
+    valid: list[str]
+    invalid: dict[str, InvalidKeyInfo]
 
 
 class ApiKeyService:
@@ -503,13 +510,14 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    async def get_admin_all_api_keys() -> list[str]:
-        """
-        Get all API keys across all addresses that have at least 0.02 credits available.
-        This method is intended for admin use only.
+    async def get_admin_all_api_keys() -> AdminApiKeys:
+        """All non-deleted API keys, split into a usable whitelist and an
+        invalid map (key -> reason + message) for the gateway to surface.
 
-        Returns:
-            List of API key strings (unmasked) that meet the requirements
+        Never in the invalid map: deleted keys, ownership-broken keys, x402
+        keys, the shared chat service key, keys expired >30 days (map must
+        not grow unboundedly; disabled keys are kept — rare manual action,
+        no deactivation timestamp to prune on).
         """
 
         try:
@@ -518,7 +526,7 @@ class ApiKeyService:
                     (
                         await db.execute(
                             select(ApiKeyDB)
-                            .where(ApiKeyDB.is_active, ApiKeyDB.deleted_at.is_(None))
+                            .where(ApiKeyDB.deleted_at.is_(None))
                             .options(selectinload(ApiKeyDB.liberclaw_user))
                         )
                     )
@@ -532,8 +540,43 @@ class ApiKeyService:
                 # chat keys are created with monthly_limit=None.)
                 chargeable_api_types = CHARGEABLE_KEY_TYPES
 
+                valid: list[str] = []
+                invalid: dict[str, InvalidKeyInfo] = {}
+                now = datetime.now()
+                expired_keep_cutoff = now - timedelta(days=30)
+
+                # First pass: everything decidable without usage aggregates. Survivors
+                # (candidates) are the only keys whose users feed the batch pre-fetches.
+                candidates: list[ApiKeyDB] = []
+                for key in api_keys:
+                    if config.LIBERTAI_CHAT_API_KEY and key.key == config.LIBERTAI_CHAT_API_KEY:
+                        # Shared anonymous chat service key: always allowed, never gated.
+                        valid.append(key.key)
+                        continue
+                    if key.type == ApiKeyType.x402:
+                        # x402 requests carry their own payment auth; the key is internal
+                        # and must never surface user-facing reasons.
+                        if key.expires_at is not None and key.expires_at < now:
+                            continue
+                        if key.is_active:
+                            valid.append(key.key)
+                        continue
+                    # Ownership-broken keys are unusable but not user-explainable -> generic 401.
+                    if key.type == ApiKeyType.liberclaw and (key.liberclaw_user_id is None or key.liberclaw_user is None):
+                        continue
+                    if key.type in chargeable_api_types and not key.user_id:
+                        continue
+                    if not key.is_active:
+                        invalid[key.key] = invalid_key_info(InvalidKeyReason.disabled)
+                        continue
+                    if key.expires_at is not None and key.expires_at < now:
+                        if key.expires_at >= expired_keep_cutoff:
+                            invalid[key.key] = invalid_key_info(InvalidKeyReason.expired)
+                        continue
+                    candidates.append(key)
+
                 # Pre-fetch balances for all users to avoid N+1 queries
-                user_ids = {k.user_id for k in api_keys if k.user_id and k.type in chargeable_api_types}
+                user_ids = {k.user_id for k in candidates if k.user_id and k.type in chargeable_api_types}
                 balances: dict[uuid.UUID, float] = {}
                 if user_ids:
                     from src.models.credit_transaction import CreditTransaction
@@ -557,7 +600,6 @@ class ApiKeyService:
 
                 # Pre-fetch dual fixed-window entitlement inputs (usage within each user's
                 # active 5h + weekly window, active tier) so the per-key loop is pure computation.
-                now = datetime.now()
                 window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
                 weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
                 active_tiers = await active_tiers_by_users(db, user_ids)
@@ -578,7 +620,7 @@ class ApiKeyService:
 
                 # Pre-fetch current month usage for API keys with monthly limits
                 api_keys_with_limits = [
-                    k for k in api_keys if k.type in chargeable_api_types and k.monthly_limit is not None
+                    k for k in candidates if k.type in chargeable_api_types and k.monthly_limit is not None
                 ]
                 monthly_usage: dict[uuid.UUID, float] = {}
                 if api_keys_with_limits:
@@ -604,9 +646,7 @@ class ApiKeyService:
                 # Pre-fetch liberclaw rolling-window usage, grouped per distinct window, to avoid
                 # an N+1 SUM over inference_calls for every liberclaw key.
                 liberclaw_keys = [
-                    k
-                    for k in api_keys
-                    if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
+                    k for k in candidates if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
                 ]
                 liberclaw_usage: dict[uuid.UUID, float] = {}
                 if liberclaw_keys:
@@ -636,56 +676,50 @@ class ApiKeyService:
                         for row in rows:
                             liberclaw_usage[row[0]] = float(row[1])
 
-                # Filter keys with sufficient credits available
-                expiry_now = datetime.now()
-                result = []
-                for key in api_keys:
-                    # Expired keys (CLI keys past their TTL) drop off the whitelist -> 401 at the gateway.
-                    if key.expires_at is not None and key.expires_at < expiry_now:
-                        continue
+                # Second pass: limit checks over pre-fetched aggregates.
+                for key in candidates:
                     if key.type == ApiKeyType.liberclaw:
-                        # Rolling-window usage vs tier limit (usage pre-fetched above).
-                        if key.liberclaw_user_id is None:
-                            continue
+                        # First pass already dropped liberclaw keys with no liberclaw_user.
                         lc_user = key.liberclaw_user
                         if lc_user is None:
                             continue
                         tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
-                        usage = liberclaw_usage.get(key.id, 0.0)
-                        if usage >= tier_config["credits_limit"]:
+                        if liberclaw_usage.get(key.id, 0.0) >= tier_config["credits_limit"]:
+                            invalid[key.key] = invalid_key_info(InvalidKeyReason.liberclaw_limit)
                             continue
                     elif key.type in chargeable_api_types:
-                        if config.LIBERTAI_CHAT_API_KEY and key.key == config.LIBERTAI_CHAT_API_KEY:
-                            # Shared anonymous chat service key: always allowed, never gated.
-                            result.append(key.key)
-                            continue
-                        if not key.user_id:
+                        # First pass already dropped chargeable keys with no owner.
+                        user_id = key.user_id
+                        if user_id is None:
                             continue
                         # Per-key monthly limit is an extra cap (if the user set one).
-                        if key.monthly_limit is not None:
-                            key_usage = monthly_usage.get(key.id, 0.0)
-                            if key_usage >= key.monthly_limit:
-                                continue
+                        if key.monthly_limit is not None and monthly_usage.get(key.id, 0.0) >= key.monthly_limit:
+                            invalid[key.key] = invalid_key_info(InvalidKeyReason.key_monthly_limit)
+                            continue
                         # Dual-window entitlement: free tier (or larger paid windows) by
                         # default, prepaid balance as the overflow path.
-                        tier = get_tier(active_tiers.get(key.user_id, DEFAULT_TIER))
+                        tier = get_tier(active_tiers.get(user_id, DEFAULT_TIER))
+                        prepaid = balances.get(user_id, 0.0)
                         source = compute_source(
                             tier,
-                            window_5h_usage.get(key.user_id, 0.0),
-                            weekly_usage.get(key.user_id, 0.0),
-                            effective_prepaid(
-                                balances.get(key.user_id, 0.0),
-                                caps.get(key.user_id),
-                                cap_overflow.get(key.user_id, 0.0),
-                            ),
+                            window_5h_usage.get(user_id, 0.0),
+                            weekly_usage.get(user_id, 0.0),
+                            effective_prepaid(prepaid, caps.get(user_id), cap_overflow.get(user_id, 0.0)),
                         )
                         if source == "blocked":
+                            # Cap-blocked vs genuinely broke: raw prepaid distinguishes them.
+                            reason = (
+                                InvalidKeyReason.extra_credit_cap
+                                if prepaid >= PREPAID_MIN
+                                else InvalidKeyReason.no_credits
+                            )
+                            invalid[key.key] = invalid_key_info(reason)
                             continue
 
-                    # valid liberclaw/api/cli/chat keys pass through
-                    result.append(key.key)
+                    # valid liberclaw/api/cli/chat/pool keys pass through
+                    valid.append(key.key)
 
-                return result
+                return AdminApiKeys(valid=valid, invalid=invalid)
 
         except Exception as e:
             logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)

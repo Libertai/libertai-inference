@@ -142,13 +142,13 @@ async def test_expired_cli_key_excluded_from_gateway(async_client):
     try:
         created = await ApiKeyService.rotate_or_create_cli_api_key(uid, host="box")
         # Live CLI key is on the gateway whitelist.
-        assert created.full_key in await ApiKeyService.get_admin_all_api_keys()
+        assert created.full_key in (await ApiKeyService.get_admin_all_api_keys()).valid
 
         # Force-expire it -> drops off the whitelist.
         async with AsyncSessionLocal() as db:
             row = await db.get(ApiKeyDB, created.id)
             row.expires_at = datetime.now() - timedelta(seconds=1)
             await db.commit()
-        assert created.full_key not in await ApiKeyService.get_admin_all_api_keys()
+        assert created.full_key not in (await ApiKeyService.get_admin_all_api_keys()).valid
     finally:
         await _cleanup(uid)

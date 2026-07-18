@@ -71,7 +71,7 @@ async def test_soft_delete_hides_key_but_keeps_usage():
         # Excluded from the inference gateway.
         async with AsyncSessionLocal() as db:
             key_str = (await db.get(ApiKeyDB, key_id)).key
-        assert key_str not in await ApiKeyService.get_admin_all_api_keys()
+        assert key_str not in (await ApiKeyService.get_admin_all_api_keys()).valid
     finally:
         await _cleanup(user_id)
 
