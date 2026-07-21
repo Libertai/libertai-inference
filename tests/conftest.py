@@ -70,6 +70,7 @@ import src.models.chat_request  # noqa: E402,F401
 import src.models.credit_transaction  # noqa: E402,F401
 import src.models.inference_call  # noqa: E402,F401
 import src.models.liberclaw_user  # noqa: E402,F401
+import src.models.liberclaw_credit_grant  # noqa: E402,F401
 import src.models.magic_link  # noqa: E402,F401
 import src.models.oauth_connection  # noqa: E402,F401
 import src.models.entitlement_window  # noqa: E402,F401

@@ -10,6 +10,7 @@ from src.models.base import Base
 
 if TYPE_CHECKING:
     from src.models.api_key import ApiKey
+    from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 
 
 class LiberclawUser(Base):
@@ -22,6 +23,9 @@ class LiberclawUser(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
 
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="liberclaw_user")
+    credit_grants: Mapped[list["LiberclawCreditGrant"]] = relationship(
+        "LiberclawCreditGrant", back_populates="liberclaw_user"
+    )
 
     __table_args__ = (UniqueConstraint("user_id", "user_type", name="unique_liberclaw_user"),)
 

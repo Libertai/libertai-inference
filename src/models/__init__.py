@@ -26,6 +26,10 @@ from src.models.plan_subscription_event import PlanSubscriptionEvent
 # Entitlement
 from src.models.entitlement_window import EntitlementWindow
 
+# Liberclaw
+from src.models.liberclaw_user import LiberclawUser
+from src.models.liberclaw_credit_grant import LiberclawCreditGrant
+
 # This ensures all models are loaded and SQLAlchemy can properly establish relationships
 __all__ = [
     "Base",
@@ -44,4 +48,6 @@ __all__ = [
     "PlanSubscription",
     "PlanSubscriptionEvent",
     "EntitlementWindow",
+    "LiberclawUser",
+    "LiberclawCreditGrant",
 ]

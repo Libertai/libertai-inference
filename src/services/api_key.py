@@ -656,6 +656,7 @@ class ApiKeyService:
                     k for k in candidates if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
                 ]
                 liberclaw_usage: dict[uuid.UUID, float] = {}
+                liberclaw_extra: dict[uuid.UUID, float] = {}
                 if liberclaw_keys:
                     key_ids_by_window: dict[int, list[uuid.UUID]] = {}
                     for k in liberclaw_keys:
@@ -670,7 +671,15 @@ class ApiKeyService:
                             await db.execute(
                                 select(
                                     InferenceCall.api_key_id,
-                                    sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
+                                    # Net of grant-paid overflow: extra-credit spend must not
+                                    # drain the rolling allowance.
+                                    sql_func.coalesce(
+                                        sql_func.sum(
+                                            InferenceCall.credits_used
+                                            - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
+                                        ),
+                                        0.0,
+                                    ),
                                 )
                                 .where(
                                     InferenceCall.api_key_id.in_(key_ids),
@@ -682,6 +691,27 @@ class ApiKeyService:
                         for row in rows:
                             liberclaw_usage[row[0]] = float(row[1])
 
+                    # Pre-fetch unconsumed granted extra credits per liberclaw user
+                    # (upgrade-remainder grants) — they extend the tier cap.
+                    from src.models.liberclaw_credit_grant import LiberclawCreditGrant
+
+                    extra_rows = (
+                        await db.execute(
+                            select(
+                                LiberclawCreditGrant.liberclaw_user_id,
+                                sql_func.coalesce(sql_func.sum(LiberclawCreditGrant.amount_left), 0.0),
+                            )
+                            .where(
+                                LiberclawCreditGrant.liberclaw_user_id.in_(
+                                    {k.liberclaw_user_id for k in liberclaw_keys if k.liberclaw_user_id}
+                                ),
+                                LiberclawCreditGrant.amount_left > 0,
+                            )
+                            .group_by(LiberclawCreditGrant.liberclaw_user_id)
+                        )
+                    ).all()
+                    liberclaw_extra = {row[0]: float(row[1]) for row in extra_rows}
+
                 # Second pass: limit checks over pre-fetched aggregates.
                 for key in candidates:
                     if key.type == ApiKeyType.liberclaw:
@@ -690,7 +720,10 @@ class ApiKeyService:
                         if lc_user is None:
                             continue
                         tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
-                        if liberclaw_usage.get(key.id, 0.0) >= tier_config["credits_limit"]:
+                        effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(
+                            key.liberclaw_user_id, 0.0
+                        )
+                        if liberclaw_usage.get(key.id, 0.0) >= effective_limit:
                             invalid[key.key] = invalid_key_info(InvalidKeyReason.liberclaw_limit)
                             continue
                     elif key.type in chargeable_api_types:
@@ -799,6 +832,51 @@ class ApiKeyService:
                     remaining_weekly = max(0.0, state.weekly_limit - state.weekly_used)
                     tier_covered = min(credits_used, remaining_5h, remaining_weekly)
 
+                # Liberclaw keys: usage overflowing the tier's rolling-window cap is paid
+                # from granted extra credits (upgrade remainders), consumed in this same
+                # transaction. The grant-paid portion is persisted on the row so window
+                # sums stay net of it; grants short of the overflow cover what they can
+                # (post-hoc billing — the call already happened).
+                liberclaw_extra_used: float | None = None
+                if api_key.type == ApiKeyType.liberclaw and api_key.liberclaw_user_id is not None:
+                    from src.models.liberclaw_user import LiberclawUser
+                    from src.services.liberclaw import LiberclawService
+
+                    lc_user = await db.get(LiberclawUser, api_key.liberclaw_user_id)
+                    if lc_user is not None:
+                        # Lock grants BEFORE reading the window sum: concurrent
+                        # overflowing calls would otherwise split against the same
+                        # stale base and under-consume. No grants -> nothing to
+                        # consume, skip the window query entirely.
+                        grants = await LiberclawService.lock_grants(db, api_key.liberclaw_user_id)
+                        if grants:
+                            tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+                            cutoff = now - timedelta(days=tier_config["rolling_window_days"])
+                            window_usage = (
+                                await db.execute(
+                                    select(
+                                        sql_func.coalesce(
+                                            sql_func.sum(
+                                                InferenceCall.credits_used
+                                                - sql_func.coalesce(
+                                                    InferenceCall.liberclaw_extra_credits_used, 0.0
+                                                )
+                                            ),
+                                            0.0,
+                                        )
+                                    ).where(
+                                        InferenceCall.api_key_id == api_key.id,
+                                        InferenceCall.used_at >= cutoff,
+                                    )
+                                )
+                            ).scalar()
+                            remaining_cap = max(0.0, tier_config["credits_limit"] - float(window_usage or 0.0))
+                            overflow = max(0.0, credits_used - remaining_cap)
+                            if overflow > 0:
+                                consumed = LiberclawService.decrement_grants(grants, overflow)
+                                if consumed > 0:
+                                    liberclaw_extra_used = consumed
+
                 usage = InferenceCall(
                     api_key_id=api_key.id,
                     credits_used=credits_used,
@@ -808,6 +886,7 @@ class ApiKeyService:
                     cached_tokens=cached_tokens,
                     image_count=image_count,
                     tier_credits_used=tier_covered,
+                    liberclaw_extra_credits_used=liberclaw_extra_used,
                 )
                 usage.used_at = now
                 db.add(usage)

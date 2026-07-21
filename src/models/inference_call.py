@@ -30,6 +30,12 @@ class InferenceCall(Base):
     # paid from prepaid balance. Window usage sums this column, so prepaid-paid usage
     # never drains the allowance.
     tier_credits_used: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    # Liberclaw keys only: portion of credits_used paid from granted extra credits
+    # (liberclaw_credit_grants) after the tier's rolling-window cap was exhausted.
+    # NULL on every other key type and on within-cap liberclaw calls; liberclaw
+    # window usage sums credits_used minus this, so grant-paid overflow never
+    # drains the rolling allowance.
+    liberclaw_extra_credits_used: Mapped[float | None] = mapped_column(Float, nullable=True)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -44,6 +50,10 @@ class InferenceCall(Base):
     __table_args__ = (
         CheckConstraint("credits_used >= 0", name="check_credits_used_non_negative"),
         CheckConstraint("tier_credits_used >= 0", name="check_tier_credits_used_non_negative"),
+        CheckConstraint(
+            "liberclaw_extra_credits_used IS NULL OR liberclaw_extra_credits_used >= 0",
+            name="check_liberclaw_extra_credits_used_non_negative",
+        ),
         Index("ix_inference_calls_api_key_id_used_at", "api_key_id", "used_at"),
     )
 
@@ -57,6 +67,7 @@ class InferenceCall(Base):
         cached_tokens: int = 0,
         image_count: int = 0,
         tier_credits_used: float = 0.0,
+        liberclaw_extra_credits_used: float | None = None,
     ):
         self.api_key_id = api_key_id
         self.credits_used = credits_used
@@ -66,3 +77,4 @@ class InferenceCall(Base):
         self.cached_tokens = cached_tokens
         self.image_count = image_count
         self.tier_credits_used = tier_credits_used
+        self.liberclaw_extra_credits_used = liberclaw_extra_credits_used
