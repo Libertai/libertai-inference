@@ -240,7 +240,7 @@ async def test_subscriptions_snapshot_counts_segments(async_client):
         db.add(PlanSubscription(user_id=paid, tier="max", provider="revolut", status="active"))
         free = await _mk_user(db)  # registered, no paid sub
         user_ids += [paid, free]
-        db.add(AnonChatUsage(ip=anon_ip, window_started_at=_TS, count=3))
+        db.add(AnonChatUsage(ip=anon_ip, window_started_at=_TS, count=3, week_started_at=_TS, week_count=3))
 
         headers, staff_id = await _mk_staff_headers(db)
         user_ids.append(staff_id)

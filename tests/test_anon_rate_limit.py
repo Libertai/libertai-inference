@@ -8,7 +8,12 @@ from sqlalchemy import delete
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.base import AsyncSessionLocal
 from src.services import anon_rate_limit
-from src.services.anon_rate_limit import ANON_MESSAGE_LIMIT, ANON_WINDOW
+from src.services.anon_rate_limit import (
+    ANON_MESSAGE_LIMIT,
+    ANON_WEEK_MESSAGE_LIMIT,
+    ANON_WEEK_WINDOW,
+    ANON_WINDOW,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -47,6 +52,54 @@ async def test_window_resets_after_expiry():
             after = await anon_rate_limit.consume(db, ip, now=t0 + ANON_WINDOW + timedelta(minutes=1))
             assert after.allowed is True
             assert after.used == 1
+    finally:
+        await _cleanup(ip)
+
+
+async def test_weekly_cap_blocks_across_daily_windows():
+    ip = "203.0.113.13"
+    t0 = datetime(2026, 6, 16, 12, 0, 0)
+    try:
+        async with AsyncSessionLocal() as db:
+            # Burn the daily limit on consecutive days until the weekly cap is hit.
+            days_to_cap = ANON_WEEK_MESSAGE_LIMIT // ANON_MESSAGE_LIMIT
+            for day in range(days_to_cap):
+                for _ in range(ANON_MESSAGE_LIMIT):
+                    state = await anon_rate_limit.consume(db, ip, now=t0 + timedelta(days=day))
+                    assert state.allowed is True
+            # Next day: daily window is fresh but the weekly cap now blocks.
+            blocked = await anon_rate_limit.consume(db, ip, now=t0 + timedelta(days=days_to_cap))
+            assert blocked.allowed is False
+            assert blocked.limit == ANON_WEEK_MESSAGE_LIMIT
+            assert blocked.used == ANON_WEEK_MESSAGE_LIMIT
+            # Once the weekly window expires, messages flow again.
+            after = await anon_rate_limit.consume(db, ip, now=t0 + ANON_WEEK_WINDOW + timedelta(minutes=1))
+            assert after.allowed is True
+            assert after.used == 1 and after.limit == ANON_MESSAGE_LIMIT
+    finally:
+        await _cleanup(ip)
+
+
+async def test_state_reports_weekly_window_when_binding():
+    ip = "203.0.113.14"
+    t0 = datetime(2026, 6, 16, 12, 0, 0)
+    try:
+        async with AsyncSessionLocal() as db:
+            # 2 messages on day 0, then 3 full days: weekly total is 2 + 3*limit.
+            for _ in range(2):
+                await anon_rate_limit.consume(db, ip, now=t0)
+            for day in range(1, 4):
+                for _ in range(ANON_MESSAGE_LIMIT):
+                    await anon_rate_limit.consume(db, ip, now=t0 + timedelta(days=day))
+            # On day 4 the weekly remainder is strictly tighter than the fresh daily window.
+            used_week = 2 + 3 * ANON_MESSAGE_LIMIT + 1
+            state = await anon_rate_limit.consume(db, ip, now=t0 + timedelta(days=4))
+            assert state.limit == ANON_WEEK_MESSAGE_LIMIT
+            assert state.used == used_week
+        async with AsyncSessionLocal() as db:
+            read = await anon_rate_limit.get_state(db, ip, now=t0 + timedelta(days=4))
+            assert read.limit == ANON_WEEK_MESSAGE_LIMIT
+            assert read.used == used_week
     finally:
         await _cleanup(ip)
 

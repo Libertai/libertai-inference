@@ -22,3 +22,6 @@ class AnonChatUsage(Base):
     ip: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     window_started_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Second, longer fixed window (weekly cap) running independently of the daily one.
+    week_started_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
+    week_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
