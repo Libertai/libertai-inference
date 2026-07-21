@@ -149,3 +149,64 @@ async def test_auth_status_unauthenticated(async_client):
     status = await async_client.get("/auth/status")
     assert status.status_code == 200
     assert status.json()["authenticated"] is False
+
+
+async def test_login_sets_session_and_refresh_cookies(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    verify = await async_client.post(
+        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+    )
+    assert verify.status_code == 200
+    cookies = verify.headers.get_list("set-cookie")
+    auth_cookie = next(c for c in cookies if c.startswith("libertai_auth="))
+    refresh_cookie = next(c for c in cookies if c.startswith("libertai_refresh="))
+    assert "HttpOnly" in auth_cookie and "HttpOnly" in refresh_cookie
+    assert "Path=/auth" in refresh_cookie  # refresh token only rides /auth requests
+
+
+async def test_refresh_from_cookie_rotates_and_resets_cookies(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    pair = (
+        await async_client.post(
+            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+        )
+    ).json()
+
+    # No body: the refresh token rides the httpOnly cookie (web client behavior).
+    rotated = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
+    assert rotated.status_code == 200
+    body = rotated.json()
+    assert body["refresh_token"] != pair["refresh_token"]
+    cookies = rotated.headers.get_list("set-cookie")
+    assert any(c.startswith("libertai_auth=") for c in cookies)
+    assert any(c.startswith("libertai_refresh=") for c in cookies)
+
+    # Rotation revoked the old token even when carried by cookie.
+    reused = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
+    assert reused.status_code == 401
+
+
+async def test_refresh_without_token_is_401(async_client):
+    response = await async_client.post("/auth/refresh")
+    assert response.status_code == 401
+
+
+async def test_logout_revokes_session_from_cookie(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    pair = (
+        await async_client.post(
+            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+        )
+    ).json()
+
+    logout = await async_client.post("/auth/logout", cookies={"libertai_refresh": pair["refresh_token"]})
+    assert logout.status_code == 204
+    cleared = {c.split("=")[0] for c in logout.headers.get_list("set-cookie")}
+    assert {"libertai_auth", "libertai_refresh"} <= cleared
+
+    # Session revoked → the refresh token is dead.
+    refreshed = await async_client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]})
+    assert refreshed.status_code == 401

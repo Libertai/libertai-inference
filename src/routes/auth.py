@@ -71,6 +71,29 @@ def _set_session_cookie(response: fastapi.Response, access_token: str) -> None:
     )
 
 
+REFRESH_COOKIE = "libertai_refresh"
+
+
+def _set_refresh_cookie(response: fastapi.Response, refresh_token: str) -> None:
+    """Long-lived refresh cookie, path-scoped to /auth so it only rides refresh/logout
+    requests. HttpOnly like the session cookie — tokens never reach frontend JS; web
+    apps renew the 24h session cookie via POST /auth/refresh with no stored state."""
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=config.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path="/auth",
+    )
+
+
+def _set_auth_cookies(response: fastapi.Response, pair: TokenPairResponse) -> None:
+    _set_session_cookie(response, pair.access_token)
+    _set_refresh_cookie(response, pair.refresh_token)
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -199,7 +222,7 @@ async def wallet_verify(request: WalletVerifyRequest, response: fastapi.Response
         user = await get_or_create_user_by_wallet(db, format_eth_address(request.address), "base")
         pair = await _issue_token_pair(db, user)
         await db.commit()
-    _set_session_cookie(response, pair.access_token)
+    _set_auth_cookies(response, pair)
     return pair
 
 
@@ -233,7 +256,7 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
         user, _ = await get_or_create_user_by_email(db, email)
         pair = await _issue_token_pair(db, user)
         await db.commit()
-    _set_session_cookie(response, pair.access_token)
+    _set_auth_cookies(response, pair)
     return pair
 
 
@@ -320,7 +343,7 @@ async def exchange_code(request: ExchangeRequest, response: fastapi.Response) ->
         )
         await db.delete(auth_code)
         await db.commit()
-    _set_session_cookie(response, pair.access_token)
+    _set_auth_cookies(response, pair)
     return pair
 
 
@@ -355,10 +378,21 @@ async def cli_code(request: CliCodeRequest, user: User = Depends(get_current_use
 
 
 @router.post("/refresh")
-async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
-    """Rotate a refresh token (one-time use per token) and return a fresh pair."""
+async def refresh_tokens(
+    response: fastapi.Response,
+    request: RefreshRequest = fastapi.Body(default=RefreshRequest()),
+    libertai_refresh: str | None = Cookie(default=None),
+) -> TokenPairResponse:
+    """Rotate a refresh token (one-time use per token) and return a fresh pair.
+
+    Web clients send no body — the token rides the httpOnly libertai_refresh
+    cookie, and the rotated pair is set back as cookies so the 24h session
+    cookie renews without tokens ever reaching frontend JS."""
+    refresh_token = request.refresh_token or libertai_refresh
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
     try:
-        payload = decode_token(request.refresh_token, REFRESH)
+        payload = decode_token(refresh_token, REFRESH)
     except jwt.PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
@@ -367,7 +401,7 @@ async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
         session = await db.get(Session, uuid.UUID(sid)) if sid else None
         if session is None or session.revoked_at is not None or session.expires_at < datetime.now():
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
-        if not secrets.compare_digest(session.refresh_token_hash, _hash(request.refresh_token)):
+        if not secrets.compare_digest(session.refresh_token_hash, _hash(refresh_token)):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
         user = await db.get(User, session.user_id)
         if user is None:
@@ -377,17 +411,25 @@ async def refresh_tokens(request: RefreshRequest) -> TokenPairResponse:
         await db.flush()
         access = create_user_access_token(user.id)
         await db.commit()
-    return TokenPairResponse(access_token=access, refresh_token=new_refresh)
+    pair = TokenPairResponse(access_token=access, refresh_token=new_refresh)
+    _set_auth_cookies(response, pair)
+    return pair
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(response: fastapi.Response, request: LogoutRequest = fastapi.Body(default=LogoutRequest())) -> None:
-    """Clear the session cookie; optionally revoke the session if a refresh token is given."""
+async def logout(
+    response: fastapi.Response,
+    request: LogoutRequest = fastapi.Body(default=LogoutRequest()),
+    libertai_refresh: str | None = Cookie(default=None),
+) -> None:
+    """Clear the auth cookies; revoke the session if a refresh token is available."""
     response.delete_cookie("libertai_auth", path="/")
-    if not request.refresh_token:
+    response.delete_cookie(REFRESH_COOKIE, path="/auth")
+    refresh_token = request.refresh_token or libertai_refresh
+    if not refresh_token:
         return
     try:
-        payload = decode_token(request.refresh_token, REFRESH)
+        payload = decode_token(refresh_token, REFRESH)
     except jwt.PyJWTError:
         return
     sid = payload.get("sid")

@@ -135,7 +135,9 @@ class CliCodeResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: cookie-based web clients carry the refresh token in the httpOnly
+    # libertai_refresh cookie and send no body; token-based clients pass it here.
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
