@@ -572,12 +572,20 @@ class StatsService:
         several of api/cli/chat is therefore counted once. x402 keys have no identity and
         are excluded. Aggregation runs in Python over distinct (day, identity) rows — fine
         at DAU scale; revisit if the active-user volume grows large.
+
+        Each identity also gets a subscription segment (current active tier, else "free";
+        liberclaw identities are their own "liberclaw" segment) powering daily_active_users_by_tier.
         """
         try:
             async with AsyncSessionLocal() as db:
                 fetch_start = start_date - timedelta(days=window.days - 1)
                 start_datetime = datetime.combine(fetch_start, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                segment = case(
+                    (PlanSubscription.tier.isnot(None), PlanSubscription.tier),
+                    else_=literal("free"),
+                ).label("segment")
 
                 inference_rows = (
                     await db.execute(
@@ -586,9 +594,19 @@ class StatsService:
                             ApiKey.type.label("type"),
                             ApiKey.user_id.label("user_id"),
                             ApiKey.liberclaw_user_id.label("liberclaw_user_id"),
+                            segment,
                         )
                         .select_from(InferenceCall)
                         .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        # At most one active subscription per user (unique constraint), so this
+                        # left join adds at most one paid-tier row per call.
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
                         .where(
                             ApiKey.type.in_([ApiKeyType.api, ApiKeyType.cli, ApiKeyType.liberclaw]),
                             InferenceCall.used_at >= start_datetime,
@@ -603,9 +621,17 @@ class StatsService:
                         select(
                             cast(ChatRequest.created_at, Date).label("date"),
                             ApiKey.user_id.label("user_id"),
+                            segment,
                         )
                         .select_from(ChatRequest)
                         .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
                         .where(
                             ApiKey.user_id.isnot(None),
                             ChatRequest.created_at >= start_datetime,
@@ -616,16 +642,25 @@ class StatsService:
                 ).all()
 
                 rows: list[tuple[date, str]] = []
+                # Liberclaw identities can't hold a subscription; they get their own segment
+                # rather than polluting "free".
+                segment_by_ident: dict[str, str] = {}
                 for r in inference_rows:
                     if r.type == ApiKeyType.liberclaw:
                         if r.liberclaw_user_id:
-                            rows.append((r.date, f"l:{r.liberclaw_user_id}"))
+                            ident = f"l:{r.liberclaw_user_id}"
+                            rows.append((r.date, ident))
+                            segment_by_ident[ident] = "liberclaw"
                     elif r.user_id:
-                        rows.append((r.date, f"u:{r.user_id}"))
+                        ident = f"u:{r.user_id}"
+                        rows.append((r.date, ident))
+                        segment_by_ident[ident] = r.segment
                 for cr in chat_rows:
                     if cr.user_id:
-                        rows.append((cr.date, f"u:{cr.user_id}"))
-                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days)
+                        ident = f"u:{cr.user_id}"
+                        rows.append((cr.date, ident))
+                        segment_by_ident[ident] = cr.segment
+                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days, segment_by_ident)
         except Exception as e:
             logger.error(f"Error retrieving aggregate users stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

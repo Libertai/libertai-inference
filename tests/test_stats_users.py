@@ -8,12 +8,15 @@ tests (stamped "now") never fall in range and can't pollute the counts.
 
 from datetime import date, datetime
 
+from sqlalchemy import select
+
 from src.interfaces.api_keys import ApiKeyType
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.liberclaw_user import LiberclawUser
+from src.models.plan_subscription import PlanSubscription
 from src.services.stats import StatsService
 from src.services.users import get_or_create_user_by_wallet
 
@@ -44,9 +47,17 @@ async def _seed() -> None:
         user2 = await get_or_create_user_by_wallet(db, U2)
         await db.flush()
 
-        liberclaw_user = LiberclawUser(user_id="dau-lc-user", user_type="telegram")
-        db.add(liberclaw_user)
-        await db.flush()
+        liberclaw_user = (
+            await db.execute(
+                select(LiberclawUser).where(
+                    LiberclawUser.user_id == "dau-lc-user", LiberclawUser.user_type == "telegram"
+                )
+            )
+        ).scalar_one_or_none()
+        if liberclaw_user is None:
+            liberclaw_user = LiberclawUser(user_id="dau-lc-user", user_type="telegram")
+            db.add(liberclaw_user)
+            await db.flush()
 
         u1_api = ApiKey(key=ApiKey.generate_key(), name="dau-u1-api", user_id=user1.id, type=ApiKeyType.api)
         u2_api = ApiKey(key=ApiKey.generate_key(), name="dau-u2-api", user_id=user2.id, type=ApiKeyType.api)
@@ -60,6 +71,12 @@ async def _seed() -> None:
         )
         db.add_all([u1_api, u2_api, u1_cli, u1_chat, lc_key])
         await db.flush()
+
+        existing_sub = (
+            await db.execute(select(PlanSubscription).where(PlanSubscription.user_id == user1.id))
+        ).scalar_one_or_none()
+        if existing_sub is None:
+            db.add(PlanSubscription(user_id=user1.id, tier="plus", provider="revolut", status="active"))
 
         db.add_all(
             [
@@ -110,3 +127,21 @@ async def test_dau_per_section_and_aggregate():
     x402 = await StatsService._get_inference_users_stats(ApiKeyType.x402, START, END)
     assert x402.total_unique_users == 0
     assert x402.daily_active_users == []
+
+
+async def test_aggregate_users_by_tier():
+    await _seed()
+
+    agg = await StatsService.get_global_users_stats(START, END)
+    by_tier = {(d.date, d.tier): d.active_users for d in agg.daily_active_users_by_tier}
+    # Day 1: u1 (active plus sub), u2 (no sub -> free), liberclaw user. Day 2: u1 only.
+    assert by_tier == {
+        ("2020-01-01", "free"): 1,
+        ("2020-01-01", "liberclaw"): 1,
+        ("2020-01-01", "plus"): 1,
+        ("2020-01-02", "plus"): 1,
+    }
+    # Per-tier counts sum to the combined series day by day.
+    combined = {d.date: d.active_users for d in agg.daily_active_users}
+    for day, total in combined.items():
+        assert sum(n for (d, _t), n in by_tier.items() if d == day) == total
