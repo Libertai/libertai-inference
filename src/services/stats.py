@@ -25,6 +25,7 @@ from src.interfaces.stats import (
     ChatTokenUsage,
     GlobalSummaryStats,
     DailyActiveUsers,
+    DailyTierActiveUsers,
     GlobalUsersStats,
     UsersWindow,
     GlobalSegmentMessagesStats,
@@ -434,7 +435,11 @@ class StatsService:
 
     @staticmethod
     def _rolling_users_stats(
-        rows: list[tuple[date, str]], start_date: date, end_date: date, window_days: int
+        rows: list[tuple[date, str]],
+        start_date: date,
+        end_date: date,
+        window_days: int,
+        segment_by_ident: dict[str, str] | None = None,
     ) -> GlobalUsersStats:
         """Rolling distinct-user counts from (day, identity) activity rows.
 
@@ -442,6 +447,11 @@ class StatsService:
         ``window_days`` days (inclusive). ``rows`` may (and for window > 1 must) include
         activity from before start_date. Days with a 0 count are omitted (sparse, matching
         the plain-DAU output). total_unique_users only counts activity inside the range.
+
+        ``segment_by_ident`` maps identity -> subscription segment; when given, per-day
+        per-segment counts are emitted too (identities absent from the map count as
+        "free"). Segments partition identities, so per-segment counts sum to the
+        combined count for every window.
         """
         by_day: dict[date, set[str]] = {}
         for day, ident in rows:
@@ -453,6 +463,7 @@ class StatsService:
                 overall_in_range |= idents
 
         daily: list[DailyActiveUsers] = []
+        by_tier: list[DailyTierActiveUsers] = []
         current = start_date
         while current <= end_date:
             window_start = current - timedelta(days=window_days - 1)
@@ -461,10 +472,22 @@ class StatsService:
                 if window_start <= day <= current:
                     active |= idents
             if active:
-                daily.append(DailyActiveUsers(date=current.strftime("%Y-%m-%d"), active_users=len(active)))
+                day_str = current.strftime("%Y-%m-%d")
+                daily.append(DailyActiveUsers(date=day_str, active_users=len(active)))
+                if segment_by_ident is not None:
+                    seg_counts: dict[str, int] = {}
+                    for ident in active:
+                        seg = segment_by_ident.get(ident, "free")
+                        seg_counts[seg] = seg_counts.get(seg, 0) + 1
+                    for seg in sorted(seg_counts):
+                        by_tier.append(DailyTierActiveUsers(date=day_str, tier=seg, active_users=seg_counts[seg]))
             current += timedelta(days=1)
 
-        return GlobalUsersStats(total_unique_users=len(overall_in_range), daily_active_users=daily)
+        return GlobalUsersStats(
+            total_unique_users=len(overall_in_range),
+            daily_active_users=daily,
+            daily_active_users_by_tier=by_tier,
+        )
 
     @staticmethod
     async def _get_inference_users_stats(

@@ -136,6 +136,14 @@ class DailyActiveUsers(BaseModel):
     active_users: int
 
 
+class DailyTierActiveUsers(BaseModel):
+    """Distinct users active on a single day within one subscription segment."""
+
+    date: str
+    tier: str
+    active_users: int
+
+
 class GlobalUsersStats(BaseModel):
     """Distinct-user (DAU) statistics for a date range.
 
@@ -145,6 +153,7 @@ class GlobalUsersStats(BaseModel):
 
     total_unique_users: int
     daily_active_users: list[DailyActiveUsers]
+    daily_active_users_by_tier: list[DailyTierActiveUsers] = []
 
 
 class UsersWindow(str, Enum):

@@ -97,3 +97,31 @@ def test_users_window_enum_days():
     assert UsersWindow.day.days == 1
     assert UsersWindow.week.days == 7
     assert UsersWindow.month.days == 30
+
+
+def test_rolling_users_stats_by_tier():
+    # u1 (plus) active Jan 1, u2 (no sub -> free) and l1 (liberclaw) active Jan 3.
+    rows = [
+        (date(2026, 1, 1), "u:u1"),
+        (date(2026, 1, 3), "u:u2"),
+        (date(2026, 1, 3), "l:l1"),
+    ]
+    segments = {"u:u1": "plus", "l:l1": "liberclaw"}  # u:u2 missing -> "free"
+    stats = StatsService._rolling_users_stats(
+        rows, start_date=date(2026, 1, 3), end_date=date(2026, 1, 3), window_days=7, segment_by_ident=segments
+    )
+    by_tier = {(d.date, d.tier): d.active_users for d in stats.daily_active_users_by_tier}
+    assert by_tier == {
+        ("2026-01-03", "free"): 1,
+        ("2026-01-03", "liberclaw"): 1,
+        ("2026-01-03", "plus"): 1,
+    }
+    # Per-tier counts sum to the combined count (disjoint segments).
+    assert sum(by_tier.values()) == stats.daily_active_users[0].active_users
+
+
+def test_rolling_users_stats_without_segments_returns_empty_by_tier():
+    stats = StatsService._rolling_users_stats(
+        [(date(2026, 1, 1), "u1")], start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), window_days=1
+    )
+    assert stats.daily_active_users_by_tier == []
