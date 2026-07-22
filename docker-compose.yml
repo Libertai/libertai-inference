@@ -13,7 +13,7 @@ services:
       - postgres
     env_file:
       - .env
-    command: [ "poetry", "run", "alembic", "upgrade", "head" ]
+    command: [ "poetry", "run", "python", "-m", "scripts.migrate" ]
 
   # Keeps the MaxMind GeoLite2-Country DB fresh in a shared volume for IP->currency
   # detection. Account id + license key come from a free MaxMind account (Dokploy env).

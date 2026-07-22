@@ -10,6 +10,7 @@ from src.interfaces.api_keys import ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.utils.logger import setup_logger
+from src.utils.pg_locks import POOL_RECONCILE_LOCK_ID, single_runner
 
 logger = setup_logger(__name__)
 
@@ -27,8 +28,12 @@ _pending_refills: set[asyncio.Task] = set()
 
 class ApiKeyPoolService:
     @staticmethod
+    @single_runner(POOL_RECONCILE_LOCK_ID, skip_result=0)
     async def ensure_pool() -> int:
-        """Top the pool back up to config.POOL_SIZE. Idempotent. Returns how many were created."""
+        """Top the pool back up to config.POOL_SIZE. Idempotent. Returns how many were created.
+
+        Skips (returns 0) when another replica is already refilling — the count-then-create
+        below would overshoot the pool if two processes ran it concurrently."""
         try:
             async with _refill_lock:
                 async with AsyncSessionLocal() as db:

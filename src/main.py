@@ -14,6 +14,12 @@ from src.utils.cron import lifespan
 
 app = FastAPI(title="LibertAI inference", lifespan=lifespan)
 
+
+@app.get("/health", include_in_schema=False)
+async def health() -> dict[str, str]:
+    """Liveness probe for the orchestrator's healthcheck (deploy gating + rollback)."""
+    return {"status": "ok"}
+
 # Add security scheme to OpenAPI documentation
 app.openapi_components = {  # type: ignore
     "securitySchemes": {"CookieAuth": {"type": "apiKey", "in": "cookie", "name": "libertai_auth"}}

@@ -16,6 +16,7 @@ from src.routes.credits import router
 from src.services.credit import CreditService
 from src.services.solana import SolanaService
 from src.utils.cron import scheduler, ltai_base_payments_lock, ltai_solana_payments_lock
+from src.utils.pg_locks import LTAI_BASE_LOCK_ID, LTAI_SOLANA_LOCK_ID, single_runner
 from src.utils.logger import setup_logger
 from src.utils.token import get_token_price
 
@@ -32,6 +33,7 @@ with open(os.path.join(code_dir, "../../abis/LTAIPaymentProcessor.json"), "r") a
 
 @scheduler.scheduled_job("interval", seconds=60)
 @router.post("/ltai/base/process", description="Process credit purchase with $LTAI transactions in Base")  # type: ignore
+@single_runner(LTAI_BASE_LOCK_ID, skip_result=[])
 async def process_base_ltai_transactions() -> list[str]:
     try:
         async with AsyncSessionLocal() as db:
@@ -77,6 +79,7 @@ async def process_base_ltai_transactions() -> list[str]:
 
 @scheduler.scheduled_job("interval", seconds=100)
 @router.post("/ltai/solana/process", description="Process credit purchase with $LTAI in solana blockchain")  # type: ignore
+@single_runner(LTAI_SOLANA_LOCK_ID, skip_result=[])
 async def process_solana_ltai_transactions() -> list[str]:
     processed_transactions: list[str] = []
 

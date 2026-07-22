@@ -10,4 +10,4 @@ RUN poetry install
 
 COPY . .
 
-CMD ["poetry", "run", "fastapi", "run", "src/main.py", "--host", "0.0.0.0"]
+CMD ["./docker-entrypoint.sh"]
