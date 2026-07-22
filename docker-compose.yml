@@ -6,6 +6,12 @@ services:
       - .env
     volumes:
       - libertai_inference_pg_data:/var/lib/postgresql/data
+    networks:
+      default:
+      dokploy-network:
+        # Stable DNS name for the inference Dokploy Application (POSTGRES_HOST=inference-postgres).
+        aliases:
+          - inference-postgres
 
   migrations-postgres:
     build: .
