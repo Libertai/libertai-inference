@@ -1,4 +1,5 @@
 services:
+  # Infra only — the inference app is a separate Dokploy Application on dokploy-network.
   postgres:
     image: postgres:17.4-alpine3.21
     restart: always
@@ -12,14 +13,6 @@ services:
         # Stable DNS name for the inference Dokploy Application (POSTGRES_HOST=inference-postgres).
         aliases:
           - inference-postgres
-
-  migrations-postgres:
-    build: .
-    depends_on:
-      - postgres
-    env_file:
-      - .env
-    command: [ "poetry", "run", "python", "-m", "scripts.migrate" ]
 
   # Keeps the MaxMind GeoLite2-Country DB fresh in a shared volume for IP->currency
   # detection. Account id + license key come from a free MaxMind account (Dokploy env).
@@ -35,20 +28,6 @@ services:
       - GEOIPUPDATE_FREQUENCY=72 # hours between refreshes
     volumes:
       - geoip_data:/usr/share/GeoIP
-
-  inference:
-    build:
-      dockerfile: ./Dockerfile
-    restart: always
-    env_file:
-      - .env
-    # geoipupdate writes GeoLite2-Country.mmdb to the volume root -> /data/GeoLite2-Country.mmdb,
-    # matching GEOIP_DB_PATH's default. Read-only: only the sidecar writes it.
-    volumes:
-      - geoip_data:/data:ro
-    networks:
-      - dokploy-network
-      - default
 
 networks:
   dokploy-network:
