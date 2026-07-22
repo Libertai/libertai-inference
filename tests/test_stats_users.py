@@ -145,3 +145,28 @@ async def test_aggregate_users_by_tier():
     combined = {d.date: d.active_users for d in agg.daily_active_users}
     for day, total in combined.items():
         assert sum(n for (d, _t), n in by_tier.items() if d == day) == total
+
+
+async def test_per_type_users_by_tier():
+    await _seed()
+
+    api = await StatsService._get_inference_users_stats(ApiKeyType.api, START, END)
+    assert {(d.date, d.tier): d.active_users for d in api.daily_active_users_by_tier} == {
+        ("2020-01-01", "free"): 1,  # u2
+        ("2020-01-01", "plus"): 1,  # u1
+        ("2020-01-02", "plus"): 1,  # u1
+    }
+
+    cli = await StatsService._get_inference_users_stats(ApiKeyType.cli, START, END)
+    assert {(d.date, d.tier): d.active_users for d in cli.daily_active_users_by_tier} == {
+        ("2020-01-01", "plus"): 1,  # u1
+    }
+
+    chat = await StatsService.get_global_chat_users_stats(START, END)
+    assert {(d.date, d.tier): d.active_users for d in chat.daily_active_users_by_tier} == {
+        ("2020-01-01", "plus"): 1,  # u1
+    }
+
+    # Liberclaw identities can't hold subscriptions -> no by-tier breakdown.
+    liberclaw = await StatsService._get_inference_users_stats(ApiKeyType.liberclaw, START, END)
+    assert liberclaw.daily_active_users_by_tier == []

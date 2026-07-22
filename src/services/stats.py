@@ -498,6 +498,9 @@ class StatsService:
         Identity is the owning user: ``api_keys.user_id`` for api/cli, ``api_keys.liberclaw_user_id``
         for liberclaw. NULL identities (legacy keys) are excluded. x402 has no identity at all, so
         it returns empty rather than relying on its NULL ``user_id`` to coincidentally count nothing.
+        For api/cli, each identity also carries the owner's current subscription segment (active
+        tier, else "free"), powering ``daily_active_users_by_tier``; liberclaw identities can't hold
+        subscriptions so their by-tier list stays empty.
         """
         if key_type == ApiKeyType.x402:
             return GlobalUsersStats(total_unique_users=0, daily_active_users=[])
@@ -508,6 +511,42 @@ class StatsService:
             end_datetime = datetime.combine(end_date, datetime.max.time())
 
             identity = ApiKey.liberclaw_user_id if key_type == ApiKeyType.liberclaw else ApiKey.user_id
+            if key_type in (ApiKeyType.api, ApiKeyType.cli):
+                segment = case(
+                    (PlanSubscription.tier.isnot(None), PlanSubscription.tier),
+                    else_=literal("free"),
+                ).label("segment")
+                raw = (
+                    await db.execute(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            identity.label("ident"),
+                            segment,
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        # At most one active subscription per user (unique constraint), so this
+                        # left join adds at most one paid-tier row per call.
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
+                        .where(
+                            ApiKey.type == key_type,
+                            identity.isnot(None),
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                        )
+                        .distinct()
+                    )
+                ).all()
+                rows = [(r.date, str(r.ident)) for r in raw]
+                segment_by_ident = {str(r.ident): r.segment for r in raw}
+                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days, segment_by_ident)
+
             raw = (
                 await db.execute(
                     select(
@@ -532,21 +571,38 @@ class StatsService:
     async def get_global_chat_users_stats(
         start_date: date, end_date: date, window: UsersWindow = UsersWindow.day
     ) -> GlobalUsersStats:
-        """Daily active users + range-wide unique users for chat (separate chat_requests table)."""
+        """Daily active users + range-wide unique users for chat (separate chat_requests table).
+
+        Identities carry the owner's current subscription segment (active tier, else "free")
+        for ``daily_active_users_by_tier``.
+        """
         try:
             async with AsyncSessionLocal() as db:
                 fetch_start = start_date - timedelta(days=window.days - 1)
                 start_datetime = datetime.combine(fetch_start, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
+                segment = case(
+                    (PlanSubscription.tier.isnot(None), PlanSubscription.tier),
+                    else_=literal("free"),
+                ).label("segment")
+
                 raw = (
                     await db.execute(
                         select(
                             cast(ChatRequest.created_at, Date).label("date"),
                             ApiKey.user_id.label("ident"),
+                            segment,
                         )
                         .select_from(ChatRequest)
                         .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .outerjoin(
+                            PlanSubscription,
+                            and_(
+                                PlanSubscription.user_id == ApiKey.user_id,
+                                PlanSubscription.status == "active",
+                            ),
+                        )
                         .where(
                             ApiKey.user_id.isnot(None),
                             ChatRequest.created_at >= start_datetime,
@@ -556,7 +612,8 @@ class StatsService:
                     )
                 ).all()
                 rows = [(r.date, str(r.ident)) for r in raw]
-                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days)
+                segment_by_ident = {str(r.ident): r.segment for r in raw}
+                return StatsService._rolling_users_stats(rows, start_date, end_date, window.days, segment_by_ident)
         except Exception as e:
             logger.error(f"Error retrieving chat users stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
