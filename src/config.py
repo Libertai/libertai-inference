@@ -157,7 +157,7 @@ class _Config:
             "https://chat.libertai.io",
         ] + (["http://localhost:5173", "http://localhost:3000"] if self.ALLOW_LOCALHOST_FRONTENDS else [])
         self.API_URL = os.getenv("API_URL", "")
-        self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+        self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "90"))
 
         # Warm API-key pool
         self.POOL_SIZE = int(os.getenv("POOL_SIZE", "5"))
