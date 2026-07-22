@@ -1,3 +1,5 @@
+import json
+
 import httpx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -35,6 +37,26 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="allow")  # allow extra fields
 
 
+# Anonymous traffic rides a shared key, so a runaway completion budget is on us. Sized from
+# the anon traffic distribution: p95 output ≈ 2.9k tokens, only ~2% of calls exceed 4k —
+# normal chat never notices, the 100k+-token bot generations get clipped.
+ANON_MAX_OUTPUT_TOKENS = 4_000
+
+
+def cap_output_tokens(payload: dict) -> dict:
+    """Force the completion budget to at most ANON_MAX_OUTPUT_TOKENS (both field spellings)."""
+    valid_budget = False
+    for field in ("max_tokens", "max_completion_tokens"):
+        value = payload.get(field)
+        if isinstance(value, int) and value > 0:
+            payload[field] = min(value, ANON_MAX_OUTPUT_TOKENS)
+            valid_budget = True
+    if not valid_budget:
+        payload.pop("max_completion_tokens", None)
+        payload["max_tokens"] = ANON_MAX_OUTPUT_TOKENS
+    return payload
+
+
 async def shutdown_event():
     await client.aclose()
 
@@ -68,7 +90,7 @@ async def proxy_chat_request(
 
     # Get the original request body & headers
     headers = dict(request.headers)
-    body = await request.body()
+    body = json.dumps(cap_output_tokens(json.loads(await request.body()))).encode()
 
     api_key = config.LIBERTAI_CHAT_API_KEY
     if not api_key:
