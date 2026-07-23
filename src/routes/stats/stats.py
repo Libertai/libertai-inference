@@ -27,6 +27,7 @@ from src.interfaces.stats import (
     GlobalSubscriptionActivityStats,
     GlobalSubscriptionsRevenueStats,
     GlobalSubscriptionsChurnStats,
+    GlobalTopupsStats,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -165,6 +166,22 @@ async def get_subscriptions_revenue(
         return await StatsService.get_global_subscriptions_revenue(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in subscriptions revenue route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/revenue/topups", response_model=GlobalTopupsStats, dependencies=[Depends(require_staff)]
+)
+async def get_revenue_topups(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    limit: int = Query(20, ge=1, le=200, description="Rows per page"),
+    offset: int = Query(0, ge=0, description="Rows to skip (pagination)"),
+) -> GlobalTopupsStats:
+    try:
+        return await StatsService.get_global_revenue_topups(start_date, end_date, limit, offset)
+    except Exception as e:
+        logger.error(f"Error in revenue topups route: {str(e)}", exc_info=True)
         raise
 
 

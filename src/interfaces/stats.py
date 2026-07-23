@@ -436,6 +436,21 @@ class GlobalSubscriptionsRevenueStats(BaseModel):
     total_topups: float
 
 
+class TopupRow(BaseModel):
+    """One completed Revolut credit purchase."""
+
+    created_at: str
+    user_label: str
+    amount: float
+
+
+class GlobalTopupsStats(BaseModel):
+    """One page of completed Revolut topups in a range; ``total`` counts all matching rows."""
+
+    total: int
+    topups: list[TopupRow]
+
+
 class ChurnWeek(BaseModel):
     week_start: str  # Monday, YYYY-MM-DD
     new: int

@@ -53,6 +53,8 @@ from src.interfaces.stats import (
     MrrDay,
     TopupDay,
     GlobalSubscriptionsRevenueStats,
+    TopupRow,
+    GlobalTopupsStats,
     ChurnWeek,
     GlobalSubscriptionsChurnStats,
 )
@@ -1675,6 +1677,51 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions revenue: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_revenue_topups(
+        start_date: date, end_date: date, limit: int = 20, offset: int = 0
+    ) -> GlobalTopupsStats:
+        """Completed Revolut credit purchases in the range, newest first, paginated.
+
+        Same filters as the topups revenue line: ``pending`` rows (money never collected) and
+        ``upgrade_remainder:*`` rows (subscription value refunded as credits on upgrade, not a
+        card payment) are excluded, so the table reconciles with the chart.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                conditions = (
+                    CreditTransaction.provider == CreditTransactionProvider.revolut,
+                    CreditTransaction.status == CreditTransactionStatus.completed,
+                    CreditTransaction.created_at >= start_datetime,
+                    CreditTransaction.created_at <= end_datetime,
+                    func.coalesce(CreditTransaction.external_reference, "").not_like("upgrade_remainder:%"),
+                )
+                total = (await db.execute(select(func.count(CreditTransaction.id)).where(*conditions))).scalar() or 0
+                rows = (
+                    await db.execute(
+                        select(CreditTransaction, User)
+                        .join(User, CreditTransaction.user_id == User.id)
+                        .where(*conditions)
+                        .order_by(CreditTransaction.created_at.desc())
+                        .limit(limit)
+                        .offset(offset)
+                    )
+                ).all()
+                topups = [
+                    TopupRow(
+                        created_at=tx.created_at.isoformat(),
+                        user_label=_user_label(user),
+                        amount=round(float(tx.amount), 2),
+                    )
+                    for tx, user in rows
+                ]
+                return GlobalTopupsStats(total=int(total), topups=topups)
+        except Exception as e:
+            logger.error(f"Error retrieving revenue topups: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod

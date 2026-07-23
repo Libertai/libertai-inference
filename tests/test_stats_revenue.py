@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
@@ -197,3 +197,58 @@ async def test_topups_daily_widens_but_total_topups_stays_in_range(async_client)
             await db.execute(delete(CreditTransaction).where(CreditTransaction.id.in_(txn_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()
+
+
+TOPUPS_START, TOPUPS_END = date(2020, 2, 1), date(2020, 2, 28)
+
+
+async def _seed_topups():
+    """Idempotent: unique external_reference per row, skip if already seeded."""
+    async with AsyncSessionLocal() as db:
+        existing = (
+            await db.execute(
+                select(CreditTransaction).where(CreditTransaction.external_reference == "revolut:test-table-1")
+            )
+        ).scalar_one_or_none()
+        if existing:
+            return
+
+        user = User(email=f"revenue-topups-{uuid.uuid4().hex}@example.com")
+        db.add(user)
+        await db.flush()
+
+        rows = [
+            (10.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+             "revolut:test-table-1", date(2020, 2, 1)),
+            (20.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+             "revolut:test-table-2", date(2020, 2, 2)),
+            (99.0, CreditTransactionProvider.revolut, CreditTransactionStatus.pending,
+             "revolut:test-table-3", date(2020, 2, 3)),
+            (50.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+             "upgrade_remainder:test-x", date(2020, 2, 4)),
+            (30.0, CreditTransactionProvider.voucher, CreditTransactionStatus.completed,
+             "voucher:test-table-5", date(2020, 2, 5)),
+        ]
+        for amount, provider, status, ref, day in rows:
+            txn = CreditTransaction(
+                user_id=user.id, amount=amount, amount_left=amount,
+                provider=provider, status=status, external_reference=ref,
+            )
+            txn.created_at = datetime.combine(day, datetime.min.time().replace(hour=12))
+            db.add(txn)
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_revenue_topups_table():
+    await _seed_topups()
+
+    stats = await StatsService.get_global_revenue_topups(TOPUPS_START, TOPUPS_END)
+    assert stats.total == 2
+    # Newest first; excluded: pending, upgrade_remainder, non-revolut.
+    assert [t.amount for t in stats.topups] == [20.0, 10.0]
+    assert all(t.user_label for t in stats.topups)
+
+    page2 = await StatsService.get_global_revenue_topups(TOPUPS_START, TOPUPS_END, limit=1, offset=1)
+    assert page2.total == 2
+    assert [t.amount for t in page2.topups] == [10.0]
