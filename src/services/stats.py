@@ -1144,50 +1144,22 @@ class StatsService:
     async def get_global_subscribers_over_time(start_date: date, end_date: date) -> GlobalSubscribersOverTimeStats:
         """Distinct paid subscribers per tier for each day in the range.
 
-        Each subscription is paid over a span: from ``current_period_start`` until it ends (today for
-        active/overdue, ``updated_at`` for cancelled/expired). Rows that never reached a paid period
-        (``current_period_start IS NULL`` — abandoned checkouts, parked ``upgrading``/``pending``
-        rows) are excluded. Each day counts DISTINCT users per tier, so a user who re-subscribes the
-        same day (a churned span + a fresh one) is counted once. Counts use the CURRENT tier.
+        Event-replayed (same timelines as MRR/tier economics): a subscription spans its first
+        ``activated`` event until its first terminal event, so a renewal advancing
+        ``current_period_start`` neither erases history nor shows up as a new subscriber.
+        Trials and never-activated rows (abandoned checkouts) are excluded; a user with several
+        same-tier spans on one day counts once. Tier follows the event log (downgrades tracked).
+        Days with no subscribers for a tier are omitted (sparse).
         """
         try:
             async with AsyncSessionLocal() as db:
-                # Statuses that mean the subscription was (or still is) a real paid one.
-                counted_statuses = ("active", "overdue", "cancelled", "expired")
-                live_statuses = ("active", "overdue")
-                rows = (
-                    await db.execute(
-                        select(
-                            PlanSubscription.user_id,
-                            PlanSubscription.tier,
-                            PlanSubscription.status,
-                            cast(PlanSubscription.current_period_start, Date).label("start"),
-                            cast(PlanSubscription.updated_at, Date).label("updated"),
-                        ).where(
-                            PlanSubscription.status.in_(counted_statuses),
-                            PlanSubscription.current_period_start.isnot(None),
-                        )
-                    )
-                ).all()
-
-                tiers = sorted({r.tier for r in rows})
-                daily: list[TierSubscribersDay] = []
-                day = start_date
-                while day <= end_date:
-                    per_tier: dict[str, set] = {t: set() for t in tiers}
-                    for r in rows:
-                        # Live subs run through today; ended subs stop on their last update.
-                        end = end_date if r.status in live_statuses else r.updated
-                        if r.start <= day <= max(end, r.start):
-                            per_tier[r.tier].add(r.user_id)
-                    for t in tiers:
-                        daily.append(
-                            TierSubscribersDay(
-                                date=day.strftime("%Y-%m-%d"), tier=t, active_subscribers=len(per_tier[t])
-                            )
-                        )
-                    day += timedelta(days=1)
-                return GlobalSubscribersOverTimeStats(daily=daily)
+                timelines = await StatsService._all_subscription_timelines(db)
+            counts = StatsService._subscribers_by_tier_day(timelines, start_date, end_date)
+            daily = [
+                TierSubscribersDay(date=day.strftime("%Y-%m-%d"), tier=tier, active_subscribers=n)
+                for (day, tier), n in sorted(counts.items())
+            ]
+            return GlobalSubscribersOverTimeStats(daily=daily)
         except Exception as e:
             logger.error(f"Error retrieving subscribers-over-time stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

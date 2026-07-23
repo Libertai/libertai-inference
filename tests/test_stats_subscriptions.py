@@ -190,9 +190,17 @@ async def test_credits_consumption_and_tier_economics_use_different_columns(asyn
             await db.commit()
 
 
+def _sub_event(sub_id, event_type: str, when: datetime, tier: str | None = None) -> PlanSubscriptionEvent:
+    evt = PlanSubscriptionEvent(
+        subscription_id=sub_id, event_type=event_type, metadata_json={"tier": tier} if tier else None
+    )
+    evt.created_at = when
+    return evt
+
+
 async def test_subscribers_over_time_dedups_resubscribe_and_skips_abandoned(async_client):
     """A same-day re-subscribe (churned span + fresh span) counts once; an abandoned checkout
-    (no current_period_start) is never counted."""
+    (never activated) is never counted."""
     day = "2099-07-20"
     ts = datetime(2099, 7, 20, 12, 0, 0)
     user_ids: list[uuid.UUID] = []
@@ -203,26 +211,84 @@ async def test_subscribers_over_time_dedups_resubscribe_and_skips_abandoned(asyn
             user_id=resub, tier="plus", provider="revolut", status="expired", current_period_start=ts
         )
         churned.updated_at = ts
-        db.add(churned)
-        db.add(PlanSubscription(user_id=resub, tier="plus", provider="revolut", status="active", current_period_start=ts))
+        fresh = PlanSubscription(
+            user_id=resub, tier="plus", provider="revolut", status="active", current_period_start=ts
+        )
+        db.add_all([churned, fresh])
 
-        # User who abandoned checkout: expired, never reached a paid period.
+        # User who abandoned checkout: expired, never activated.
         abandoned = await _mk_user(db)
-        db.add(PlanSubscription(user_id=abandoned, tier="plus", provider="revolut", status="expired"))
+        abandoned_sub = PlanSubscription(user_id=abandoned, tier="plus", provider="revolut", status="expired")
+        db.add(abandoned_sub)
         user_ids += [resub, abandoned]
+        await db.flush()
+
+        db.add_all(
+            [
+                _sub_event(churned.id, "created", ts, tier="plus"),
+                _sub_event(churned.id, "activated", ts),
+                _sub_event(churned.id, "expired", ts),
+                _sub_event(fresh.id, "created", ts, tier="plus"),
+                _sub_event(fresh.id, "activated", ts),
+                _sub_event(abandoned_sub.id, "created", ts, tier="plus"),
+            ]
+        )
 
         headers, staff_id = await _mk_staff_headers(db)
         user_ids.append(staff_id)
         await db.commit()
 
     try:
+        # Delta vs the day before our seed: live subs from other tests count on both days
+        # (event-replayed spans have no end), so only the difference is ours.
         resp = await async_client.get(
-            f"/stats/global/subscribers-over-time?start_date={day}&end_date={day}", headers=headers
+            f"/stats/global/subscribers-over-time?start_date=2099-07-19&end_date={day}", headers=headers
         )
         assert resp.status_code == 200, resp.text
         plus = {d["date"]: d["active_subscribers"] for d in resp.json()["daily"] if d["tier"] == "plus"}
-        # Only the re-subscriber counts, and only once despite two rows; abandoned is excluded.
-        assert plus.get(day) == 1
+        # The re-subscriber adds exactly one despite two rows; abandoned adds nothing.
+        assert plus.get(day, 0) == plus.get("2099-07-19", 0) + 1
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()
+
+
+async def test_subscribers_over_time_survives_renewal(async_client):
+    """A renewal advances ``current_period_start``; the chart must keep counting the subscriber
+    from their first activation instead of showing them as new on the renewal date."""
+    activated = datetime(2099, 8, 1, 12, 0, 0)
+    renewed = datetime(2099, 9, 1, 12, 0, 0)
+    user_ids: list[uuid.UUID] = []
+    async with AsyncSessionLocal() as db:
+        u = await _mk_user(db)
+        sub = PlanSubscription(
+            user_id=u, tier="max", provider="revolut", status="active", current_period_start=renewed
+        )
+        db.add(sub)
+        user_ids.append(u)
+        await db.flush()
+        db.add_all(
+            [
+                _sub_event(sub.id, "created", activated, tier="max"),
+                _sub_event(sub.id, "activated", activated),
+            ]
+        )
+        headers, staff_id = await _mk_staff_headers(db)
+        user_ids.append(staff_id)
+        await db.commit()
+
+    try:
+        resp = await async_client.get(
+            "/stats/global/subscribers-over-time?start_date=2099-08-01&end_date=2099-09-02", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        max_by_day = {d["date"]: d["active_subscribers"] for d in resp.json()["daily"] if d["tier"] == "max"}
+        # Counted from first activation, a month before current_period_start.
+        assert max_by_day.get("2099-08-01", 0) >= 1
+        # The renewal is a non-event: no jump between the day before and after it.
+        assert max_by_day.get("2099-08-31", 0) == max_by_day.get("2099-09-02", 0)
     finally:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id.in_(user_ids)))
