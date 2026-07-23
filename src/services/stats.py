@@ -1711,11 +1711,35 @@ class StatsService:
                         .offset(offset)
                     )
                 ).all()
+                # Buyer's subscription state: a live sub (active/overdue) wins over ended ones.
+                subs_by_user: dict = {}
+                user_ids = {tx.user_id for tx, _user in rows}
+                if user_ids:
+                    sub_rows = (
+                        (
+                            await db.execute(
+                                select(PlanSubscription).where(
+                                    PlanSubscription.user_id.in_(user_ids),
+                                    PlanSubscription.status != "pending",
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for sub in sub_rows:
+                        if sub.status in ("active", "overdue"):
+                            subs_by_user[sub.user_id] = sub.tier
+                        else:
+                            subs_by_user.setdefault(sub.user_id, "past")
+
                 topups = [
                     TopupRow(
                         created_at=tx.created_at.isoformat(),
                         user_label=_user_label(user),
                         amount=round(float(tx.amount), 2),
+                        used=round(float(tx.amount - tx.amount_left), 2),
+                        subscription=subs_by_user.get(tx.user_id),
                     )
                     for tx, user in rows
                 ]

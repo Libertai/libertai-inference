@@ -437,11 +437,18 @@ class GlobalSubscriptionsRevenueStats(BaseModel):
 
 
 class TopupRow(BaseModel):
-    """One completed Revolut credit purchase."""
+    """One completed Revolut credit purchase.
+
+    ``subscription``: the buyer's current sub tier (active/overdue), "past" when only ended
+    subs exist, None when they never subscribed. ``used``: credits already consumed from
+    this purchase (amount - amount_left).
+    """
 
     created_at: str
     user_label: str
     amount: float
+    used: float
+    subscription: str | None
 
 
 class GlobalTopupsStats(BaseModel):

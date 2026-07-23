@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.auth_tokens import create_access_token
 from src.services.stats import StatsService
@@ -214,24 +215,35 @@ async def _seed_topups():
             return
 
         user = User(email=f"revenue-topups-{uuid.uuid4().hex}@example.com")
-        db.add(user)
+        user_past = User(email=f"revenue-topups-past-{uuid.uuid4().hex}@example.com")
+        user_never = User(email=f"revenue-topups-never-{uuid.uuid4().hex}@example.com")
+        db.add_all([user, user_past, user_never])
         await db.flush()
 
+        # user: live sub; user_past: only an ended sub; user_never: no sub row at all.
+        db.add(PlanSubscription(user_id=user.id, tier="go", provider="revolut", status="active"))
+        db.add(PlanSubscription(user_id=user_past.id, tier="plus", provider="revolut", status="cancelled"))
+
         rows = [
-            (10.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+            # (user, amount, amount_left, provider, status, ref, day)
+            (user, 10.0, 4.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
              "revolut:test-table-1", date(2020, 2, 1)),
-            (20.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+            (user, 20.0, 20.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
              "revolut:test-table-2", date(2020, 2, 2)),
-            (99.0, CreditTransactionProvider.revolut, CreditTransactionStatus.pending,
+            (user, 99.0, 99.0, CreditTransactionProvider.revolut, CreditTransactionStatus.pending,
              "revolut:test-table-3", date(2020, 2, 3)),
-            (50.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+            (user, 50.0, 50.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
              "upgrade_remainder:test-x", date(2020, 2, 4)),
-            (30.0, CreditTransactionProvider.voucher, CreditTransactionStatus.completed,
+            (user, 30.0, 30.0, CreditTransactionProvider.voucher, CreditTransactionStatus.completed,
              "voucher:test-table-5", date(2020, 2, 5)),
+            (user_past, 5.0, 0.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+             "revolut:test-table-6", date(2020, 2, 6)),
+            (user_never, 1.0, 1.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
+             "revolut:test-table-7", date(2020, 2, 7)),
         ]
-        for amount, provider, status, ref, day in rows:
+        for owner, amount, amount_left, provider, status, ref, day in rows:
             txn = CreditTransaction(
-                user_id=user.id, amount=amount, amount_left=amount,
+                user_id=owner.id, amount=amount, amount_left=amount_left,
                 provider=provider, status=status, external_reference=ref,
             )
             txn.created_at = datetime.combine(day, datetime.min.time().replace(hour=12))
@@ -244,11 +256,14 @@ async def test_revenue_topups_table():
     await _seed_topups()
 
     stats = await StatsService.get_global_revenue_topups(TOPUPS_START, TOPUPS_END)
-    assert stats.total == 2
+    assert stats.total == 4
     # Newest first; excluded: pending, upgrade_remainder, non-revolut.
-    assert [t.amount for t in stats.topups] == [20.0, 10.0]
+    assert [t.amount for t in stats.topups] == [1.0, 5.0, 20.0, 10.0]
+    assert [t.used for t in stats.topups] == [0.0, 5.0, 0.0, 6.0]
+    # Live sub -> tier, ended sub only -> "past", no sub row -> None.
+    assert [t.subscription for t in stats.topups] == [None, "past", "go", "go"]
     assert all(t.user_label for t in stats.topups)
 
     page2 = await StatsService.get_global_revenue_topups(TOPUPS_START, TOPUPS_END, limit=1, offset=1)
-    assert page2.total == 2
-    assert [t.amount for t in page2.topups] == [10.0]
+    assert page2.total == 4
+    assert [t.amount for t in page2.topups] == [5.0]
