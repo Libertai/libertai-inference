@@ -36,6 +36,7 @@ from src.interfaces.stats import (
     CreditsConsumptionDay,
     TierCreditsDay,
     GlobalSubscriptionsStats,
+    GlobalUserBaseActivityStats,
     TierSubscribers,
     GlobalSubscribersOverTimeStats,
     TierSubscribersDay,
@@ -1060,6 +1061,81 @@ class StatsService:
                 )
         except Exception as e:
             logger.error(f"Error retrieving subscriptions stats: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_global_user_base_activity(start_date: date, end_date: date) -> GlobalUserBaseActivityStats:
+        """Anonymous + free activity within a range, for the subscriptions user-base cards.
+
+        Anonymous: AnonChatUsage rows whose current window started in the range — approximates
+        IPs active in the range (only each IP's latest window is stored). Free: distinct account
+        users active on api/cli/chat in the range with no active paid subscription (current
+        attribution, matching the segment charts).
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                anonymous = (
+                    await db.execute(
+                        select(func.count(AnonChatUsage.id)).where(
+                            AnonChatUsage.window_started_at >= start_datetime,
+                            AnonChatUsage.window_started_at <= end_datetime,
+                        )
+                    )
+                ).scalar() or 0
+
+                # No active subscription row -> free. The active-subscription left join matches at
+                # most one row per user (partial unique constraint).
+                no_active_sub = and_(
+                    PlanSubscription.user_id == ApiKey.user_id,
+                    PlanSubscription.status == "active",
+                )
+
+                free_idents: set[str] = set()
+                inference_free = (
+                    await db.execute(
+                        select(ApiKey.user_id)
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        .outerjoin(PlanSubscription, no_active_sub)
+                        .where(
+                            ApiKey.type.in_([ApiKeyType.api, ApiKeyType.cli]),
+                            ApiKey.user_id.isnot(None),
+                            PlanSubscription.id.is_(None),
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                        )
+                        .distinct()
+                    )
+                ).all()
+                chat_free = (
+                    await db.execute(
+                        select(ApiKey.user_id)
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .outerjoin(PlanSubscription, no_active_sub)
+                        .where(
+                            ApiKey.user_id.isnot(None),
+                            PlanSubscription.id.is_(None),
+                            ChatRequest.created_at >= start_datetime,
+                            ChatRequest.created_at <= end_datetime,
+                        )
+                        .distinct()
+                    )
+                ).all()
+                for r in inference_free:
+                    free_idents.add(str(r.user_id))
+                for r in chat_free:
+                    free_idents.add(str(r.user_id))
+
+                return GlobalUserBaseActivityStats(
+                    anonymous_active_users=int(anonymous),
+                    free_active_users=len(free_idents),
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving user-base activity stats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod

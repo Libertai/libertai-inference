@@ -18,6 +18,7 @@ from src.interfaces.stats import (
     GlobalSegmentCallsStats,
     GlobalCreditsConsumptionStats,
     GlobalSubscriptionsStats,
+    GlobalUserBaseActivityStats,
     GlobalSubscribersOverTimeStats,
     GlobalTierEconomicsStats,
     GlobalLatestSubscribersStats,
@@ -319,6 +320,20 @@ async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
         return await StatsService.get_global_subscriptions_stats()
     except Exception as e:
         logger.error(f"Error in subscriptions stats route: {str(e)}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/user-base-activity", response_model=GlobalUserBaseActivityStats, dependencies=[Depends(require_staff)]
+)
+async def get_user_base_activity(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+) -> GlobalUserBaseActivityStats:
+    try:
+        return await StatsService.get_global_user_base_activity(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Error in user-base-activity stats route: {str(e)}", exc_info=True)
         raise
 
 

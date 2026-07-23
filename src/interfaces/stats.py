@@ -259,6 +259,18 @@ class GlobalSubscriptionsStats(BaseModel):
     anonymous_users: int
 
 
+class GlobalUserBaseActivityStats(BaseModel):
+    """Range-scoped user-base activity for the subscriptions cards.
+
+    ``anonymous_active_users`` approximates logged-out chat IPs active in the range: only each
+    IP's latest usage window survives (one row per IP, reset in place), so IPs whose last
+    window predates the range are missed for historical ranges.
+    """
+
+    anonymous_active_users: int
+    free_active_users: int
+
+
 class TierSubscribersDay(BaseModel):
     """Active paid subscribers in one tier on a single day."""
 

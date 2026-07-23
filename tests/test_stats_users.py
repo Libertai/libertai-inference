@@ -11,6 +11,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 
 from src.interfaces.api_keys import ApiKeyType
+from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
@@ -77,6 +78,12 @@ async def _seed() -> None:
         ).scalar_one_or_none()
         if existing_sub is None:
             db.add(PlanSubscription(user_id=user1.id, tier="plus", provider="revolut", status="active"))
+
+        existing_anon = (
+            await db.execute(select(AnonChatUsage).where(AnonChatUsage.ip == "dau-anon-1"))
+        ).scalar_one_or_none()
+        if existing_anon is None:
+            db.add(AnonChatUsage(ip="dau-anon-1", window_started_at=DAY1, count=1, week_started_at=DAY1, week_count=1))
 
         db.add_all(
             [
@@ -170,3 +177,18 @@ async def test_per_type_users_by_tier():
     # Liberclaw identities can't hold subscriptions -> no by-tier breakdown.
     liberclaw = await StatsService._get_inference_users_stats(ApiKeyType.liberclaw, START, END)
     assert liberclaw.daily_active_users_by_tier == []
+
+
+async def test_user_base_activity():
+    await _seed()
+
+    stats = await StatsService.get_global_user_base_activity(START, END)
+    # u2 is the only active free account user (u1 is on plus; liberclaw has no account).
+    assert stats.free_active_users == 1
+    # The seeded anon IP's window started on DAY1, inside the range.
+    assert stats.anonymous_active_users == 1
+
+    # A range before any activity sees nothing.
+    before = await StatsService.get_global_user_base_activity(date(2019, 1, 1), date(2019, 1, 31))
+    assert before.free_active_users == 0
+    assert before.anonymous_active_users == 0
