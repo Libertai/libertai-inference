@@ -36,6 +36,6 @@ jobs:
           python-version-file: 'pyproject.toml'
           cache: 'poetry'
       - name: Install dependencies
-        run: pip install ruff
+        run: poetry install --only dev --no-root
       - name: Run Ruff
-        run: ruff check --output-format=github
+        run: poetry run ruff check --output-format=github
