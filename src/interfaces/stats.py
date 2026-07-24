@@ -371,6 +371,7 @@ class SubscriptionActivityType(str, Enum):
     """Human-facing subscription lifecycle events for the activity feed."""
 
     subscribed = "subscribed"
+    renewed = "renewed"
     upgraded = "upgraded"
     downgraded = "downgraded"
     cancelled = "cancelled"

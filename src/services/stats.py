@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, date, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, cast, Date, Integer, select, distinct, case, literal, and_
+from sqlalchemy.orm import aliased
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
@@ -1274,10 +1275,13 @@ class StatsService:
     # declined cards on a checkout the user then retries (checkout_declined) and the redundant
     # ``overdue`` (``payment_failed`` covers the same incident) are all dropped. ``payment_failed``
     # therefore means a *live* sub failed to bill, never a fumbled card at signup.
-    # ``upgraded`` (logged on the new sub at completion, metadata from/to) supersedes that sub's
-    # ``activated`` so an upgrade reads as a single "from -> to" row.
+    # ``activated`` is a subscription's first successful charge; every later billing cycle logs
+    # ``renewed``, so the two map to distinct feed types. ``upgraded`` (logged on the new sub at
+    # completion, metadata from/to) supersedes that sub's ``activated`` so an upgrade reads as a
+    # single "from -> to" row.
     _ACTIVITY_TYPE_MAP = {
         "activated": SubscriptionActivityType.subscribed,
+        "renewed": SubscriptionActivityType.renewed,
         "upgraded": SubscriptionActivityType.upgraded,
         "downgraded": SubscriptionActivityType.downgraded,
         "cancelled": SubscriptionActivityType.cancelled,
@@ -1286,10 +1290,6 @@ class StatsService:
         "payment_failed": SubscriptionActivityType.payment_failed,
     }
     _ACTIVITY_TRANSITION_TYPES = (SubscriptionActivityType.upgraded, SubscriptionActivityType.downgraded)
-    # Safety bound on raw events scanned per request. Lifecycle events grow slowly (a handful per
-    # subscriber), so scanning them all keeps offset pagination and ``total`` exact; the cap only
-    # guards against pathological growth.
-    _ACTIVITY_SCAN_CAP = 10_000
 
     @staticmethod
     async def get_subscription_activity(
@@ -1297,35 +1297,51 @@ class StatsService:
     ) -> GlobalSubscriptionActivityStats:
         """Recent subscription lifecycle events, newest first, mapped to human-facing types.
 
-        An upgrade completion logs an ``upgraded`` event (metadata from/to) on the new sub; that
-        sub's ``activated`` is suppressed so the pair reads as one row. ``types=None``/empty
-        returns every mapped type. ``offset``/``limit`` paginate the mapped stream; ``total`` is
-        the full mapped count for the requested types.
+        Filtering, ordering, ``offset``/``limit`` and ``total`` all run in SQL. An upgrade
+        completion logs an ``upgraded`` event (metadata from/to) on the new sub; that sub's
+        ``activated`` is suppressed so the pair reads as one row. ``types=None``/empty returns
+        every mapped type.
         """
         try:
             async with AsyncSessionLocal() as db:
-                stmt = (
-                    select(PlanSubscriptionEvent, PlanSubscription, User)
-                    .join(PlanSubscription, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
-                    .join(User, PlanSubscription.user_id == User.id)
-                    .order_by(PlanSubscriptionEvent.created_at.desc())
-                    .limit(StatsService._ACTIVITY_SCAN_CAP)
+                wanted = set(types) if types else set(SubscriptionActivityType)
+                raw_types = [
+                    raw for raw, mapped in StatsService._ACTIVITY_TYPE_MAP.items() if mapped in wanted
+                ]
+
+                paired_upgrade = aliased(PlanSubscriptionEvent)
+                is_upgrade_activation = and_(
+                    PlanSubscriptionEvent.event_type == "activated",
+                    select(paired_upgrade.id)
+                    .where(
+                        paired_upgrade.subscription_id == PlanSubscriptionEvent.subscription_id,
+                        paired_upgrade.event_type == "upgraded",
+                    )
+                    .exists(),
                 )
-                rows = (await db.execute(stmt)).all()
+                condition = and_(PlanSubscriptionEvent.event_type.in_(raw_types), ~is_upgrade_activation)
 
-                # Subs whose activation is really an upgrade completion -> hide their "Subscribed".
-                upgraded_subs = {e.subscription_id for e, _s, _u in rows if e.event_type == "upgraded"}
+                total = (
+                    await db.execute(
+                        select(func.count()).select_from(PlanSubscriptionEvent).where(condition)
+                    )
+                ).scalar_one()
 
-                wanted = set(types) if types else None
+                rows = (
+                    await db.execute(
+                        select(PlanSubscriptionEvent, PlanSubscription, User)
+                        .join(PlanSubscription, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
+                        .join(User, PlanSubscription.user_id == User.id)
+                        .where(condition)
+                        .order_by(PlanSubscriptionEvent.created_at.desc(), PlanSubscriptionEvent.id.desc())
+                        .offset(offset)
+                        .limit(limit)
+                    )
+                ).all()
+
                 events: list[SubscriptionActivityEvent] = []
                 for event, sub, user in rows:
-                    activity_type = StatsService._ACTIVITY_TYPE_MAP.get(event.event_type)
-                    if activity_type is None:
-                        continue
-                    if event.event_type == "activated" and event.subscription_id in upgraded_subs:
-                        continue  # the paired "Upgraded" row already represents this activation
-                    if wanted is not None and activity_type not in wanted:
-                        continue
+                    activity_type = StatsService._ACTIVITY_TYPE_MAP[event.event_type]
                     meta = event.metadata_json or {}
                     if activity_type in StatsService._ACTIVITY_TRANSITION_TYPES:
                         from_tier = meta.get("from")
@@ -1333,18 +1349,17 @@ class StatsService:
                     else:
                         from_tier = None
                         tier = sub.tier
-                    label = _user_label(user)
                     events.append(
                         SubscriptionActivityEvent(
                             created_at=event.created_at.isoformat(),
                             type=activity_type,
-                            user_label=label,
+                            user_label=_user_label(user),
                             tier=tier,
                             from_tier=from_tier,
                             provider=sub.provider,
                         )
                     )
-                return GlobalSubscriptionActivityStats(events=events[offset : offset + limit], total=len(events))
+                return GlobalSubscriptionActivityStats(events=events, total=total)
         except Exception as e:
             logger.error(f"Error retrieving subscription activity: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
@@ -1359,7 +1374,7 @@ class StatsService:
     def _replay_subscription_timelines(subs, events_by_sub) -> list[dict]:
         """Rebuild each sub's activation window and tier timeline from its event log.
 
-        - activated_on: day of the FIRST ``activated`` event (renewals repeat it), None if never.
+        - activated_on: day of the first ``activated`` event, None if never activated.
         - ended_on: day of the first terminal event (exclusive — no MRR that day), None if live.
         - tier_changes: [(activation_day, initial_tier)] + one entry per ``downgraded`` event.
           Initial tier from the ``created`` event metadata, falling back to the row's current tier

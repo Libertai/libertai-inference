@@ -185,6 +185,63 @@ async def test_subscription_activity_offset_paginates_mapped_stream():
     assert past_end.events == []
 
 
+async def test_subscription_activity_distinguishes_renewals():
+    async with AsyncSessionLocal() as db:
+        renewer = User(email="activity-renew@example.com")
+        db.add(renewer)
+        await db.flush()
+        sub = PlanSubscription(user_id=renewer.id, tier="go", status="active", provider="revolut")
+        sub.created_at = datetime(2099, 4, 10)
+        db.add(sub)
+        await db.flush()
+        db.add_all(
+            [
+                _event(sub.id, "created", 10, "r-1", {"tier": "go"}),
+                _event(sub.id, "activated", 11, "r-2"),
+                _event(sub.id, "renewed", 12, "r-3"),
+            ]
+        )
+        await db.commit()
+
+    result = await StatsService.get_subscription_activity(limit=50)
+    mine = [e for e in result.events if e.user_label == "activity-renew@example.com"]
+    assert [e.type for e in mine] == [SubscriptionActivityType.renewed, SubscriptionActivityType.subscribed]
+    assert all(e.tier == "go" for e in mine)
+
+    only_renewed = await StatsService.get_subscription_activity(
+        limit=50, types=[SubscriptionActivityType.renewed]
+    )
+    assert only_renewed.events and all(
+        e.type is SubscriptionActivityType.renewed for e in only_renewed.events
+    )
+    assert any(e.user_label == "activity-renew@example.com" for e in only_renewed.events)
+
+
+async def test_subscription_activity_shows_renewals_of_upgraded_subs():
+    # The upgrade-completion "activated" stays suppressed (its "upgraded" row represents it),
+    # but later renewals of that sub must still appear.
+    async with AsyncSessionLocal() as db:
+        user = User(email="activity-upgrenew@example.com")
+        db.add(user)
+        await db.flush()
+        sub = PlanSubscription(user_id=user.id, tier="plus", status="active", provider="revolut")
+        sub.created_at = datetime(2099, 4, 20)
+        db.add(sub)
+        await db.flush()
+        db.add_all(
+            [
+                _event(sub.id, "activated", 20, "ur-1"),
+                _event(sub.id, "upgraded", 20, "ur-2", {"from": "go", "to": "plus"}),
+                _event(sub.id, "renewed", 21, "ur-3"),
+            ]
+        )
+        await db.commit()
+
+    result = await StatsService.get_subscription_activity(limit=50)
+    mine = [e for e in result.events if e.user_label == "activity-upgrenew@example.com"]
+    assert [e.type for e in mine] == [SubscriptionActivityType.renewed, SubscriptionActivityType.upgraded]
+
+
 # Runs last and asserts membership only, so its committed rows can't perturb the order-dependent
 # assertions above (these tests share one session-scoped DB with no per-test rollback).
 async def test_latest_subscribers_label_prefers_display_name_with_contact_in_parens():
