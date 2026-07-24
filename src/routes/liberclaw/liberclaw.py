@@ -22,7 +22,7 @@ async def get_or_create_api_key(request: LiberclawApiKeyRequest) -> LiberclawApi
     try:
         return await LiberclawService.get_or_create_api_key(user_id=request.user_id, user_type=request.user_type)
     except Exception as e:
-        logger.error(f"Error in get_or_create_api_key: {str(e)}", exc_info=True)
+        logger.error(f"Error in get_or_create_api_key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -34,7 +34,7 @@ async def update_tier(request: LiberclawTierUpdate) -> None:
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in update_tier: {str(e)}", exc_info=True)
+        logger.error(f"Error in update_tier: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -53,7 +53,7 @@ async def grant_extra_credits(request: LiberclawExtraCreditsGrant) -> LiberclawE
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in grant_extra_credits: {str(e)}", exc_info=True)
+        logger.error(f"Error in grant_extra_credits: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -65,5 +65,5 @@ async def get_user(user_id: str, user_type: str) -> LiberclawUserResponse:
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in get_user: {str(e)}", exc_info=True)
+        logger.error(f"Error in get_user: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

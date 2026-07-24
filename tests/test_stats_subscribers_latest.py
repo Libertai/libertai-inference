@@ -1,10 +1,10 @@
 from datetime import datetime
 
+from src.interfaces.stats import SubscriptionActivityType, SubscriptionStatusFilter
 from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from src.interfaces.stats import SubscriptionActivityType, SubscriptionStatusFilter
 from src.services.stats import StatsService
 
 

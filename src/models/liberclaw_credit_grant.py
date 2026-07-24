@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, String, TIMESTAMP, UUID
+from sqlalchemy import TIMESTAMP, UUID, CheckConstraint, Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 

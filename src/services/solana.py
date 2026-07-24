@@ -7,7 +7,7 @@ import struct
 
 from solana.rpc.api import Client
 from solders.pubkey import Pubkey
-from sqlalchemy import select, desc
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
@@ -15,7 +15,7 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
-from src.utils.token import get_token_price, get_sol_token_price
+from src.utils.token import get_sol_token_price, get_token_price
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class SolanaService:
     @staticmethod
     def _get_event_discriminator(event_name: str) -> bytes:
         """Calculates the 8-byte Anchor event discriminator."""
-        return hashlib.sha256(f"event:{event_name}".encode("utf-8")).digest()[:8]
+        return hashlib.sha256(f"event:{event_name}".encode()).digest()[:8]
 
     def extract_payment_event(self, meta):
         """Extract PaymentEvent or SolPaymentEvent data from transaction metadata"""
@@ -79,16 +79,15 @@ class SolanaService:
                             return {"user": user, "amount": amount, "status": status, "event_type": "token_payment"}
 
                     # Check for SolPaymentEvent discriminator
-                    elif event_data.startswith(sol_payment_event_discriminator):
-                        # Ensure data is long enough
-                        if len(event_data) >= 56:
-                            offset = 8
-                            user = str(Pubkey(event_data[offset : offset + 32]))
-                            offset += 32
-                            amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
-                            # skip timestamp
+                    # Ensure data is long enough
+                    elif event_data.startswith(sol_payment_event_discriminator) and len(event_data) >= 56:
+                        offset = 8
+                        user = str(Pubkey(event_data[offset : offset + 32]))
+                        offset += 32
+                        amount = struct.unpack("<Q", event_data[offset : offset + 8])[0]
+                        # skip timestamp
 
-                            return {"user": user, "amount": amount, "status": status, "event_type": "sol_payment"}
+                        return {"user": user, "amount": amount, "status": status, "event_type": "sol_payment"}
 
                 except Exception as e:
                     print(f"Error parsing event data: {e}")

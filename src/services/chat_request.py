@@ -36,5 +36,5 @@ class ChatRequestService:
                 await db.commit()
                 return True
         except Exception as e:
-            logger.error(f"Error recording chat request: {str(e)}", exc_info=True)
+            logger.error(f"Error recording chat request: {e!s}", exc_info=True)
             raise

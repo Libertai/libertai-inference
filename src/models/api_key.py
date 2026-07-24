@@ -3,18 +3,18 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, TIMESTAMP, ForeignKey, Float, Boolean, func, UUID, Enum, select
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Enum, Float, ForeignKey, String, func, select
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.expression import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
-from src.models.base import Base, AsyncSessionLocal
-from src.models.liberclaw_user import LiberclawUser  # noqa: F401 - must be imported for FK resolution
+from src.models.base import AsyncSessionLocal, Base
+from src.models.liberclaw_user import LiberclawUser
 
 if TYPE_CHECKING:
-    from src.models.user import User
-    from src.models.inference_call import InferenceCall
     from src.models.chat_request import ChatRequest
+    from src.models.inference_call import InferenceCall
+    from src.models.user import User
 
 
 class ApiKey(Base):

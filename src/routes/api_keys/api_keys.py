@@ -54,7 +54,7 @@ async def get_api_keys(user: User = Depends(get_current_user)) -> ApiKeyListResp
         api_keys = await ApiKeyService.get_api_keys(user_id=user.id)
         return ApiKeyListResponse(keys=api_keys)
     except Exception as e:
-        logger.error(f"Error getting API keys: {str(e)}", exc_info=True)
+        logger.error(f"Error getting API keys: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -64,7 +64,7 @@ async def get_chat_api_key(user: User = Depends(get_current_user)) -> ChatApiKey
         chat_api_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user.id, user_address=user.address)
         return ChatApiKeyResponse(key=chat_api_key.full_key)
     except Exception as e:
-        logger.error(f"Error getting or creating chat API key: {str(e)}", exc_info=True)
+        logger.error(f"Error getting or creating chat API key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -82,7 +82,7 @@ async def create_cli_api_key(
             user_id=user.id, host=cli_create.host, user_address=user.address
         )
     except Exception as e:
-        logger.error(f"Error creating CLI API key: {str(e)}", exc_info=True)
+        logger.error(f"Error creating CLI API key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -91,7 +91,7 @@ async def get_cli_api_keys(user: User = Depends(get_current_user)) -> list[ApiKe
     try:
         return await ApiKeyService.get_cli_api_keys(user_id=user.id)
     except Exception as e:
-        logger.error(f"Error getting CLI API keys: {str(e)}", exc_info=True)
+        logger.error(f"Error getting CLI API keys: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -131,7 +131,7 @@ async def update_api_key(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating API key: {str(e)}", exc_info=True)
+        logger.error(f"Error updating API key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -151,11 +151,11 @@ async def delete_api_key(key_id: uuid.UUID, user: User = Depends(get_current_use
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key with ID {key_id} not found")
 
-        return None
+        return
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting API key: {str(e)}", exc_info=True)
+        logger.error(f"Error deleting API key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -339,11 +339,11 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
 
-        return None
+        return
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error logging API key usage: {str(e)}", exc_info=True)
+        logger.error(f"Error logging API key usage: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
@@ -353,5 +353,5 @@ async def get_admin_all_api_keys() -> ApiKeyAdminListResponse:
         result = await ApiKeyService.get_admin_all_api_keys()
         return ApiKeyAdminListResponse(keys=result.valid, invalid_keys=result.invalid)
     except Exception as e:
-        logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
+        logger.error(f"Error getting all API keys: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")

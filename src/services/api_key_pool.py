@@ -35,34 +35,33 @@ class ApiKeyPoolService:
         Skips (returns 0) when another replica is already refilling — the count-then-create
         below would overshoot the pool if two processes ran it concurrently."""
         try:
-            async with _refill_lock:
-                async with AsyncSessionLocal() as db:
-                    count = int(
-                        (
-                            await db.execute(
-                                select(sql_func.count())
-                                .select_from(ApiKeyDB)
-                                .where(ApiKeyDB.type == ApiKeyType.pool)
-                            )
-                        ).scalar()
-                        or 0
-                    )
-                    deficit = config.POOL_SIZE - count
-                    if deficit <= 0:
-                        return 0
-                    for _ in range(deficit):
-                        row = ApiKeyDB(
-                            key=ApiKeyDB.generate_key(),
-                            name=POOL_SENTINEL_NAME,
-                            type=ApiKeyType.pool,
+            async with _refill_lock, AsyncSessionLocal() as db:
+                count = int(
+                    (
+                        await db.execute(
+                            select(sql_func.count())
+                            .select_from(ApiKeyDB)
+                            .where(ApiKeyDB.type == ApiKeyType.pool)
                         )
-                        row.created_at = datetime.now()
-                        db.add(row)
-                    await db.commit()
-                    logger.info(f"Warm pool topped up by {deficit} (target {config.POOL_SIZE})")
-                    return deficit
+                    ).scalar()
+                    or 0
+                )
+                deficit = config.POOL_SIZE - count
+                if deficit <= 0:
+                    return 0
+                for _ in range(deficit):
+                    row = ApiKeyDB(
+                        key=ApiKeyDB.generate_key(),
+                        name=POOL_SENTINEL_NAME,
+                        type=ApiKeyType.pool,
+                    )
+                    row.created_at = datetime.now()
+                    db.add(row)
+                await db.commit()
+                logger.info(f"Warm pool topped up by {deficit} (target {config.POOL_SIZE})")
+                return deficit
         except Exception as e:
-            logger.error(f"Error ensuring warm API-key pool: {str(e)}", exc_info=True)
+            logger.error(f"Error ensuring warm API-key pool: {e!s}", exc_info=True)
             return 0
 
     @staticmethod

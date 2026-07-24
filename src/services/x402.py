@@ -91,24 +91,23 @@ class X402Service:
             if config.THIRDWEB_VAULT_ACCESS_TOKEN:
                 headers["x-vault-access-token"] = config.THIRDWEB_VAULT_ACCESS_TOKEN
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{THIRDWEB_X402_BASE}/settle",
-                    json={
-                        "x402Version": x402_version,
-                        "paymentPayload": parsed_payload,
-                        "paymentRequirements": parsed_requirements,
-                        "waitUntil": "confirmed",
-                    },
-                    headers=headers,
-                ) as response:
-                    if response.status == 200:
-                        logger.info(f"x402 payment settled (actual: {actual_amount_micro} micro-USDC)")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"x402 settlement failed: {response.status} - {error_text}")
-                        return False
+            async with aiohttp.ClientSession() as session, session.post(
+                f"{THIRDWEB_X402_BASE}/settle",
+                json={
+                    "x402Version": x402_version,
+                    "paymentPayload": parsed_payload,
+                    "paymentRequirements": parsed_requirements,
+                    "waitUntil": "confirmed",
+                },
+                headers=headers,
+            ) as response:
+                if response.status == 200:
+                    logger.info(f"x402 payment settled (actual: {actual_amount_micro} micro-USDC)")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"x402 settlement failed: {response.status} - {error_text}")
+                    return False
         except Exception as e:
             logger.error(f"x402 settlement exception: {e}")
             return False

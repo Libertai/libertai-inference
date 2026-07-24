@@ -107,7 +107,7 @@ class RevolutProvider(PaymentProvider):
         item_name: str = "Prepaid credits",
     ) -> CheckoutResult:
         ext_ref = (metadata or {}).get("ext_ref")
-        gross_minor = int(round(amount * 100))  # authoritative charge; gross / VAT-inclusive
+        gross_minor = round(amount * 100)  # authoritative charge; gross / VAT-inclusive
         body: dict = {
             "amount": gross_minor,
             "currency": currency,

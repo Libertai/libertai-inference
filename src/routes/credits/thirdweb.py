@@ -3,7 +3,7 @@ import hmac
 import time
 import uuid
 
-from fastapi import HTTPException, Header, Request
+from fastapi import Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from web3 import Web3
@@ -11,10 +11,10 @@ from web3 import Web3
 from src.config import config
 from src.interfaces.credits import (
     CreditTransactionProvider,
+    CreditTransactionStatus,
     ThirdwebOnchainTransactionData,
     ThirdwebOnrampTransactionData,
     ThirdwebPurchaseData,
-    CreditTransactionStatus,
 )
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -166,8 +166,8 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
         await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
 
     except Exception as e:
-        logger.error(f"Error processing Thirdweb onchain webhook: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing onchain webhook: {str(e)}")
+        logger.error(f"Error processing Thirdweb onchain webhook: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing onchain webhook: {e!s}")
 
 
 async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> None:
@@ -208,5 +208,5 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
         await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
 
     except Exception as e:
-        logger.error(f"Error processing Thirdweb onramp webhook: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing onramp webhook: {str(e)}")
+        logger.error(f"Error processing Thirdweb onramp webhook: {e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing onramp webhook: {e!s}")

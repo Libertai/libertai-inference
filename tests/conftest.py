@@ -60,26 +60,25 @@ def _ensure_test_database_exists() -> None:
 _ensure_test_database_exists()
 
 # --- Import models AFTER the env is set so metadata is complete and bound to the test DB ---
-from src.models.base import Base  # noqa: E402
-
 # Import every model module so Base.metadata knows all tables (mirrors alembic/env.py).
-import src.models.anon_chat_usage  # noqa: E402,F401
-import src.models.api_key  # noqa: E402,F401
-import src.models.auth_code  # noqa: E402,F401
-import src.models.chat_request  # noqa: E402,F401
-import src.models.credit_transaction  # noqa: E402,F401
-import src.models.inference_call  # noqa: E402,F401
-import src.models.liberclaw_user  # noqa: E402,F401
-import src.models.liberclaw_credit_grant  # noqa: E402,F401
-import src.models.magic_link  # noqa: E402,F401
-import src.models.oauth_connection  # noqa: E402,F401
-import src.models.entitlement_window  # noqa: E402,F401
-import src.models.plan_subscription  # noqa: E402,F401
-import src.models.plan_subscription_event  # noqa: E402,F401
-import src.models.session  # noqa: E402,F401
-import src.models.user  # noqa: E402,F401
-import src.models.wallet_challenge  # noqa: E402,F401
-import src.models.wallet_connection  # noqa: E402,F401
+import src.models.anon_chat_usage
+import src.models.api_key
+import src.models.auth_code
+import src.models.chat_request
+import src.models.credit_transaction
+import src.models.entitlement_window
+import src.models.inference_call
+import src.models.liberclaw_credit_grant
+import src.models.liberclaw_user
+import src.models.magic_link
+import src.models.oauth_connection
+import src.models.plan_subscription
+import src.models.plan_subscription_event
+import src.models.session
+import src.models.user
+import src.models.wallet_challenge
+import src.models.wallet_connection  # noqa: F401
+from src.models.base import Base
 
 _engine = create_async_engine(make_url(TEST_DATABASE_URL).set(drivername="postgresql+psycopg"))
 

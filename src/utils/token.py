@@ -50,7 +50,7 @@ async def get_token_price() -> float:
 
         return price
     except httpx.HTTPError as e:
-        logger.error(f"Failed to fetch token price: {str(e)}")
+        logger.error(f"Failed to fetch token price: {e!s}")
         raise
 
 
@@ -74,5 +74,5 @@ async def get_sol_token_price() -> float:
 
         return price
     except httpx.HTTPError as e:
-        logger.error(f"Failed to fetch token price: {str(e)}")
+        logger.error(f"Failed to fetch token price: {e!s}")
         raise

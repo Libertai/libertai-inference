@@ -1,2 +1,9 @@
-# Set the maximum line length to 79.
 line-length = 119
+
+[lint]
+ignore = [
+    "DTZ",    # DB TIMESTAMP columns are tz-naive; the codebase works in naive local datetimes throughout
+    "B008",   # FastAPI's Depends()/Query() in function defaults is the framework idiom
+    "G201",   # logger.error(..., exc_info=True) is the repo's standard error-logging pattern
+    "BLE001", # route/service boundaries deliberately catch broad Exception and log
+]

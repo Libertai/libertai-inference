@@ -21,6 +21,7 @@ from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
 from src.services.users import get_or_create_user_by_wallet
 
+
 # Exactly what libertai-models' report_usage_event_task sends for a TTS call
 # (AudioUsageFullData.model_dump()): no output_tokens, no cached_tokens.
 def _instance_audio_payload(key: str, chars: int = 500_000) -> dict:

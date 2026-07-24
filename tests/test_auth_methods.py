@@ -9,7 +9,6 @@ from src.services import oauth
 from src.services.magic_link import create_magic_link, verify_magic_link
 from src.services.wallet_auth import create_challenge, verify_signature
 
-
 # --- magic link ---
 
 

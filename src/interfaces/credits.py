@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Annotated
+from typing import Annotated, Literal
 
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain

@@ -5,9 +5,10 @@ import uuid
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import make_url
+
+from alembic import command
 
 REVISION = "f1a2b3c4d5e6"
 PREV = "491dd7c0450b"

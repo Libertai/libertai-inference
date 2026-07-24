@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status, Cookie, Header
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel
@@ -71,7 +71,7 @@ def verify_token(libertai_auth: str = Cookie(default=None)) -> TokenData:
             detail="Authentication token has expired",
         )
     except jwt.PyJWTError as e:
-        logger.error(f"JWT verification error: {str(e)}")
+        logger.error(f"JWT verification error: {e!s}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",

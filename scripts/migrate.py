@@ -9,10 +9,10 @@ schema to be at head before serving.
 import os
 
 import psycopg
-from alembic import command
 from alembic.config import Config
 from dotenv import load_dotenv
 
+from alembic import command
 from src.utils.pg_locks import MIGRATIONS_LOCK_ID
 
 load_dotenv()

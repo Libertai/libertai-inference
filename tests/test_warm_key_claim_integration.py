@@ -161,9 +161,9 @@ async def test_chat_get_existing_does_not_consume_pool(monkeypatch):
 
 
 async def test_liberclaw_create_uses_warm_pool_key(monkeypatch):
+    from src.models.liberclaw_user import LiberclawUser
     from src.services import api_key_pool
     from src.services.liberclaw import LiberclawService
-    from src.models.liberclaw_user import LiberclawUser
 
     monkeypatch.setattr(api_key_pool.ApiKeyPoolService, "schedule_refill", staticmethod(lambda: None))
 

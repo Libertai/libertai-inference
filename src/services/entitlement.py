@@ -174,7 +174,7 @@ async def _prepaid_balance(db: AsyncSession, user_id: uuid.UUID) -> float:
         await db.execute(
             select(sql_func.coalesce(sql_func.sum(CreditTransaction.amount_left), 0.0)).where(
                 CreditTransaction.user_id == user_id,
-                CreditTransaction.is_active == True,  # noqa: E712
+                CreditTransaction.is_active == True,
                 CreditTransaction.status == CreditTransactionStatus.completed,
             )
         )

@@ -95,7 +95,7 @@ async def _balance(db, user_id) -> float:
         await db.execute(
             select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
                 CreditTransaction.user_id == user_id,
-                CreditTransaction.is_active == True,  # noqa: E712
+                CreditTransaction.is_active == True,
                 CreditTransaction.status == CreditTransactionStatus.completed,
             )
         )

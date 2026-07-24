@@ -15,9 +15,9 @@ from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
 from src.services.solana import SolanaService
-from src.utils.cron import scheduler, ltai_base_payments_lock, ltai_solana_payments_lock
-from src.utils.pg_locks import LTAI_BASE_LOCK_ID, LTAI_SOLANA_LOCK_ID, single_runner
+from src.utils.cron import ltai_base_payments_lock, ltai_solana_payments_lock, scheduler
 from src.utils.logger import setup_logger
+from src.utils.pg_locks import LTAI_BASE_LOCK_ID, LTAI_SOLANA_LOCK_ID, single_runner
 from src.utils.token import get_token_price
 
 logger = setup_logger(__name__)
@@ -73,7 +73,7 @@ async def process_base_ltai_transactions() -> list[str]:
 
         return processed_transactions
     except Exception as e:
-        logger.error(f"Error retrieving last payment block: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving last payment block: {e!s}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

@@ -7,7 +7,8 @@ app-wide — keep them all defined here.
 """
 
 import functools
-from typing import Any, Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from sqlalchemy import text
 

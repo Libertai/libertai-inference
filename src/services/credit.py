@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
@@ -70,7 +70,7 @@ class CreditService:
                 await db.commit()
                 return True
         except Exception as e:
-            logger.error(f"Error adding credits to {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error adding credits to {address}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -116,7 +116,7 @@ class CreditService:
                 await db.commit()
                 return True
         except Exception as e:
-            logger.error(f"Error adding credits to user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error adding credits to user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -130,7 +130,7 @@ class CreditService:
             select(CreditTransaction)
             .where(
                 CreditTransaction.user_id == user_id,
-                CreditTransaction.is_active == True,  # noqa: E712
+                CreditTransaction.is_active == True,
                 CreditTransaction.status == CreditTransactionStatus.completed,
             )
             .order_by(
@@ -196,7 +196,7 @@ class CreditService:
                 await own_db.commit()
                 return fully_deducted
         except Exception as e:
-            logger.error(f"Error using credits from user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error using credits from user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -204,7 +204,7 @@ class CreditService:
         result = await db.execute(
             select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
                 CreditTransaction.user_id == user_id,
-                CreditTransaction.is_active == True,  # noqa: E712
+                CreditTransaction.is_active == True,
                 CreditTransaction.status == CreditTransactionStatus.completed,
             )
         )
@@ -225,7 +225,7 @@ class CreditService:
             async with AsyncSessionLocal() as own_db:
                 return await CreditService._get_balance_on_session(own_db, user_id)
         except Exception as e:
-            logger.error(f"Error getting balance for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting balance for user {user_id}: {e!s}", exc_info=True)
             return 0
 
     @staticmethod
@@ -242,7 +242,7 @@ class CreditService:
                 )
                 return list(result.scalars().all())
         except Exception as e:
-            logger.error(f"Error getting vouchers for {address}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting vouchers for {address}: {e!s}", exc_info=True)
             return []
 
     @staticmethod
@@ -260,7 +260,7 @@ class CreditService:
                 )
                 return list(result.scalars().all())
         except Exception as e:
-            logger.error(f"Error getting vouchers for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting vouchers for user {user_id}: {e!s}", exc_info=True)
             return []
 
     @staticmethod
@@ -269,7 +269,7 @@ class CreditService:
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     select(CreditTransaction).where(
-                        CreditTransaction.is_active == True,  # noqa: E712
+                        CreditTransaction.is_active == True,
                         CreditTransaction.id == voucher_id,
                         CreditTransaction.provider == CreditTransactionProvider.voucher,
                     )
@@ -285,7 +285,7 @@ class CreditService:
                 return True
 
         except Exception as e:
-            logger.error(f"Error expiring voucher {voucher_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error expiring voucher {voucher_id}: {e!s}", exc_info=True)
             return False
 
     @staticmethod
@@ -307,5 +307,5 @@ class CreditService:
                 return True
 
         except Exception as e:
-            logger.error(f"Error updating transaction status for {external_reference}: {str(e)}", exc_info=True)
+            logger.error(f"Error updating transaction status for {external_reference}: {e!s}", exc_info=True)
             return False

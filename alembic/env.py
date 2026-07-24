@@ -1,10 +1,10 @@
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, make_url
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, make_url, pool
+
+from alembic import context
 
 # Import all models that should be included in migrations
 from src.models.api_key import ApiKey  # noqa
@@ -12,11 +12,11 @@ from src.models.auth_code import AuthCode  # noqa
 from src.models.base import Base  # Import the Base from your models
 from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
-from src.models.inference_call import InferenceCall  # noqa
-from src.models.liberclaw_user import LiberclawUser  # noqa
-from src.models.liberclaw_credit_grant import LiberclawCreditGrant  # noqa
-from src.models.magic_link import MagicLink  # noqa
 from src.models.entitlement_window import EntitlementWindow  # noqa
+from src.models.inference_call import InferenceCall  # noqa
+from src.models.liberclaw_credit_grant import LiberclawCreditGrant  # noqa
+from src.models.liberclaw_user import LiberclawUser  # noqa
+from src.models.magic_link import MagicLink  # noqa
 from src.models.oauth_connection import OAuthConnection  # noqa
 from src.models.plan_subscription import PlanSubscription  # noqa
 from src.models.plan_subscription_event import PlanSubscriptionEvent  # noqa

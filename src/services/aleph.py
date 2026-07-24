@@ -27,19 +27,18 @@ class AlephService:
 
         logger.debug("Fetching fresh Aleph models data")
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.__api_url) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    parsed_data = AlephAPIResponse.model_validate(data)
+            async with aiohttp.ClientSession() as session, session.get(self.__api_url) as response:
+                response.raise_for_status()
+                data = await response.json()
+                parsed_data = AlephAPIResponse.model_validate(data)
 
-                    # Update cache
-                    self.models_data = parsed_data
-                    self.__last_fetch_time = current_time
+                # Update cache
+                self.models_data = parsed_data
+                self.__last_fetch_time = current_time
 
-                    return parsed_data
+                return parsed_data
         except Exception as e:
-            logger.error(f"Error fetching Aleph models data: {str(e)}", exc_info=True)
+            logger.error(f"Error fetching Aleph models data: {e!s}", exc_info=True)
             # If we have cached data, return it even if expired
             if self.models_data is not None:
                 logger.warning("Using expired cached data due to fetch error")

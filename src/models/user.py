@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import TIMESTAMP, UUID, Boolean, Float, String, func, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.models.base import Base, AsyncSessionLocal
+from src.models.base import AsyncSessionLocal, Base
 
 if TYPE_CHECKING:
     from src.models.api_key import ApiKey
@@ -69,7 +69,7 @@ class User(Base):
             result = await db.execute(
                 select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
                     CreditTransaction.user_id == self.id,
-                    CreditTransaction.is_active == True,  # noqa: E712
+                    CreditTransaction.is_active == True,
                     CreditTransaction.status == CreditTransactionStatus.completed,
                 )
             )

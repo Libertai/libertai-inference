@@ -5,11 +5,11 @@ from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 
 from src.interfaces.credits import (
-    VoucherAddCreditsRequest,
     CreditTransactionProvider,
-    VoucherCreditsResponse,
     GetVouchersRequest,
+    VoucherAddCreditsRequest,
     VoucherChangeExpireRequest,
+    VoucherCreditsResponse,
 )
 from src.models.base import AsyncSessionLocal
 from src.routes.credits import router

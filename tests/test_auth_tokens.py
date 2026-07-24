@@ -38,6 +38,5 @@ def test_wrong_type_rejected():
 def test_expired_access_token_rejected():
     with freeze_time("2026-01-01 00:00:00"):
         token = create_access_token(uuid.uuid4())
-    with freeze_time("2026-12-31 00:00:00"):
-        with pytest.raises(jwt.ExpiredSignatureError):
-            decode_token(token, ACCESS)
+    with freeze_time("2026-12-31 00:00:00"), pytest.raises(jwt.ExpiredSignatureError):
+        decode_token(token, ACCESS)

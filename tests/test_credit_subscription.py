@@ -25,7 +25,6 @@ from src.services.credit import CreditService
 from src.services.payments.credit_subscription import CREDITS_PROVIDER, CreditSubscriptionService
 from src.subscription_tiers import get_tier
 
-
 # ------------------------------------------------------------------ helpers
 
 async def _make_user(db: AsyncSession) -> User:

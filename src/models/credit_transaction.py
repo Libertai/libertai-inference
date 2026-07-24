@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Float, TIMESTAMP, ForeignKey, CheckConstraint, Integer, Boolean, UUID, Enum
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy import TIMESTAMP, UUID, Boolean, CheckConstraint, Enum, Float, ForeignKey, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus

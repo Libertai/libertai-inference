@@ -39,7 +39,8 @@ from src.models.session import Session
 from src.models.user import User
 from src.services import magic_link, oauth, wallet_auth
 from src.services.auth import create_access_token, get_current_user, get_optional_user
-from src.services.auth_tokens import REFRESH, create_access_token as create_user_access_token, create_refresh_token, decode_token
+from src.services.auth_tokens import REFRESH, create_refresh_token, decode_token
+from src.services.auth_tokens import create_access_token as create_user_access_token
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
@@ -335,9 +336,10 @@ async def exchange_code(request: ExchangeRequest, response: fastapi.Response) ->
         if auth_code is None or auth_code.expires_at < datetime.now():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
         # PKCE-bound codes (CLI loopback) require the matching verifier; OAuth codes don't.
-        if auth_code.challenge is not None:
-            if request.verifier is None or not _pkce_matches(request.verifier, auth_code.challenge):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid PKCE verifier")
+        if auth_code.challenge is not None and (
+            request.verifier is None or not _pkce_matches(request.verifier, auth_code.challenge)
+        ):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid PKCE verifier")
         pair = TokenPairResponse(
             access_token=decrypt(auth_code.access_token), refresh_token=decrypt(auth_code.refresh_token)
         )

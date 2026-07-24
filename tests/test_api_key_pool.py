@@ -14,7 +14,7 @@ from sqlalchemy import delete, func, select
 from src.interfaces.api_keys import ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
-from src.services.api_key_pool import ApiKeyPoolService, POOL_SENTINEL_NAME
+from src.services.api_key_pool import POOL_SENTINEL_NAME, ApiKeyPoolService
 
 pytestmark = pytest.mark.asyncio
 

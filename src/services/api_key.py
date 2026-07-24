@@ -1,5 +1,4 @@
 import uuid
-
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
@@ -8,8 +7,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
 from src.config import config
+from src.interfaces.api_keys import ApiKey, ApiKeyType, FullApiKey, InvalidKeyInfo, InvalidKeyReason, invalid_key_info
 from src.liberclaw_tiers import LIBERCLAW_TIERS
-from src.interfaces.api_keys import ApiKey, FullApiKey, ApiKeyType, InvalidKeyInfo, InvalidKeyReason, invalid_key_info
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
@@ -117,7 +116,7 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error creating API key for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error creating API key for user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -205,7 +204,7 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error rotating CLI API key for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error rotating CLI API key for user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -323,7 +322,7 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error getting or creating chat API key for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting or creating chat API key for user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -378,7 +377,7 @@ class ApiKeyService:
                 return result
 
         except Exception as e:
-            logger.error(f"Error getting API keys for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting API keys for user {user_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -415,7 +414,7 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error getting API key with ID {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error getting API key with ID {key_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -473,7 +472,7 @@ class ApiKeyService:
                 )
 
         except Exception as e:
-            logger.error(f"Error updating API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error updating API key {key_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -506,7 +505,7 @@ class ApiKeyService:
                 return True
 
         except Exception as e:
-            logger.error(f"Error deleting API key {key_id}: {str(e)}", exc_info=True)
+            logger.error(f"Error deleting API key {key_id}: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -586,8 +585,8 @@ class ApiKeyService:
                 user_ids = {k.user_id for k in candidates if k.user_id and k.type in chargeable_api_types}
                 balances: dict[uuid.UUID, float] = {}
                 if user_ids:
-                    from src.models.credit_transaction import CreditTransaction
                     from src.interfaces.credits import CreditTransactionStatus
+                    from src.models.credit_transaction import CreditTransaction
 
                     balance_rows = (
                         await db.execute(
@@ -597,7 +596,7 @@ class ApiKeyService:
                             )
                             .where(
                                 CreditTransaction.user_id.in_(user_ids),
-                                CreditTransaction.is_active == True,  # noqa: E712
+                                CreditTransaction.is_active == True,
                                 CreditTransaction.status == CreditTransactionStatus.completed,
                             )
                             .group_by(CreditTransaction.user_id)
@@ -761,7 +760,7 @@ class ApiKeyService:
                 return AdminApiKeys(valid=valid, invalid=invalid)
 
         except Exception as e:
-            logger.error(f"Error getting all API keys: {str(e)}", exc_info=True)
+            logger.error(f"Error getting all API keys: {e!s}", exc_info=True)
             raise
 
     @staticmethod
@@ -906,5 +905,5 @@ class ApiKeyService:
                 return True
 
         except Exception as e:
-            logger.error(f"Error logging API key usage for {key}: {str(e)}", exc_info=True)
+            logger.error(f"Error logging API key usage for {key}: {e!s}", exc_info=True)
             raise

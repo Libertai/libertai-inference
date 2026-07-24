@@ -1,10 +1,9 @@
 import json
+from datetime import timezone
 
 import httpx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from datetime import timezone
-
 from pydantic import BaseModel, ConfigDict
 
 from src.config import config
@@ -162,13 +161,13 @@ async def proxy_chat_request(
         logger.error(f"Error forwarding request to LibertAI API: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Error forwarding request to LibertAI API: {str(e)}",
+            detail=f"Error forwarding request to LibertAI API: {e!s}",
         )
     except Exception as e:
         logger.error(f"Unexpected error in chat proxy: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}",
+            detail=f"Unexpected error: {e!s}",
         )
 
 

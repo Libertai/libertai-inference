@@ -10,9 +10,10 @@ import os
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import make_url
+
+from alembic import command
 
 PRE_MIGRATION_REV = "2bccd793c8f4"  # head before Migration A (drop agents/subscriptions)
 MIGRATION_A_REV = "ce9e82ee761a"

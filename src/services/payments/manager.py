@@ -274,13 +274,17 @@ class PaymentManager:
         end = sub.current_period_end
         if end is not None and (end.replace(tzinfo=None) if end.tzinfo else end) < now:
             raise ValueError("The billing period already ended")
-        if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
-            # Undo a scheduled paid downgrade: schedule a change back to the current plan
-            # (overwrites the provider's pending change).
-            if sub.provider != "manual" and sub.provider_subscription_id:
-                await self.provider.change_subscription_plan(
-                    sub.provider_subscription_id, tier=sub.tier, currency=sub.currency or DEFAULT_CURRENCY
-                )
+        # Undo a scheduled paid downgrade: schedule a change back to the current plan
+        # (overwrites the provider's pending change).
+        if (
+            sub.pending_tier
+            and sub.pending_tier != DEFAULT_TIER
+            and sub.provider != "manual"
+            and sub.provider_subscription_id
+        ):
+            await self.provider.change_subscription_plan(
+                sub.provider_subscription_id, tier=sub.tier, currency=sub.currency or DEFAULT_CURRENCY
+            )
         sub.pending_tier = None
         sub.cancel_at_period_end = False
         await self._log_event(sub, "resumed")
@@ -404,9 +408,11 @@ class PaymentManager:
     # ------------------------------------------------------------------ webhook dispatch
     async def handle_event(self, event: PaymentEvent) -> None:
         # Top-ups settle first (local pending row keyed by order id).
-        if event.type in (PaymentEventType.order_completed, PaymentEventType.order_failed):
-            if await self._settle_topup(event):
-                return
+        if event.type in (
+            PaymentEventType.order_completed,
+            PaymentEventType.order_failed,
+        ) and await self._settle_topup(event):
+            return
 
         sub = await self._resolve_subscription(event)
         if not sub:
@@ -561,7 +567,7 @@ class PaymentManager:
             select(PlanSubscription)
             .where(
                 PlanSubscription.status.in_(["active", "overdue"]),
-                PlanSubscription.cancel_at_period_end == True,  # noqa: E712
+                PlanSubscription.cancel_at_period_end == True,
                 PlanSubscription.current_period_end <= pre_cutoff,
             )
             .with_for_update()
@@ -575,8 +581,8 @@ class PaymentManager:
             .where(
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.current_period_end < cutoff,
-                (PlanSubscription.cancel_at_period_end == True)  # noqa: E712
-                | (PlanSubscription.is_trial == True),  # noqa: E712
+                (PlanSubscription.cancel_at_period_end == True)
+                | (PlanSubscription.is_trial == True),
             )
             .with_for_update()
         )

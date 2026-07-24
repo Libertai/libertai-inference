@@ -5,29 +5,29 @@ from fastapi import Depends, HTTPException, Query
 from src.interfaces.api_keys import ApiKeyType, InferenceKeyType
 from src.interfaces.stats import (
     DashboardStats,
-    UsageStats,
-    GlobalCreditsStats,
     GlobalApiStats,
-    GlobalTokensStats,
     GlobalChatCallsStats,
     GlobalChatTokensStats,
-    GlobalSummaryStats,
-    GlobalUsersStats,
-    UsersWindow,
-    GlobalSegmentMessagesStats,
-    GlobalSegmentCallsStats,
     GlobalCreditsConsumptionStats,
-    GlobalSubscriptionsStats,
-    GlobalUserBaseActivityStats,
-    GlobalSubscribersOverTimeStats,
-    GlobalTierEconomicsStats,
+    GlobalCreditsStats,
     GlobalLatestSubscribersStats,
-    SubscriptionStatusFilter,
-    SubscriptionActivityType,
+    GlobalSegmentCallsStats,
+    GlobalSegmentMessagesStats,
+    GlobalSubscribersOverTimeStats,
     GlobalSubscriptionActivityStats,
-    GlobalSubscriptionsRevenueStats,
     GlobalSubscriptionsChurnStats,
+    GlobalSubscriptionsRevenueStats,
+    GlobalSubscriptionsStats,
+    GlobalSummaryStats,
+    GlobalTierEconomicsStats,
+    GlobalTokensStats,
     GlobalTopupsStats,
+    GlobalUserBaseActivityStats,
+    GlobalUsersStats,
+    SubscriptionActivityType,
+    SubscriptionStatusFilter,
+    UsageStats,
+    UsersWindow,
 )
 from src.models.user import User
 from src.routes.stats import router
@@ -44,7 +44,7 @@ async def get_dashboard_stats(user: User = Depends(get_current_user)) -> Dashboa
         # Stats are still wallet-address keyed; email users (no address) get empty stats for now.
         return await StatsService.get_dashboard_stats(user.address or "")
     except Exception as e:
-        logger.error(f"Error in dashboard stats route for user {user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Error in dashboard stats route for user {user.id}: {e!s}", exc_info=True)
         raise
 
 
@@ -57,7 +57,7 @@ async def get_usage_stats(
     try:
         return await StatsService.get_usage_stats(user.address or "", start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in usage stats route for user {user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Error in usage stats route for user {user.id}: {e!s}", exc_info=True)
         raise
 
 
@@ -73,7 +73,7 @@ async def get_chat_calls_stats(
     try:
         return await StatsService.get_global_chat_calls_stats(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in chat calls stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat calls stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -85,7 +85,7 @@ async def get_chat_tokens_stats(
     try:
         return await StatsService.get_global_chat_tokens_stats(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in chat tokens stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat tokens stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -98,7 +98,7 @@ async def get_chat_users_stats(
     try:
         return await StatsService.get_global_chat_users_stats(start_date, end_date, window)
     except Exception as e:
-        logger.error(f"Error in chat users stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat users stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -124,7 +124,7 @@ async def get_latest_subscribers(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in latest subscribers route: {str(e)}", exc_info=True)
+        logger.error(f"Error in latest subscribers route: {e!s}", exc_info=True)
         raise
 
 
@@ -149,7 +149,7 @@ async def get_subscription_activity(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in subscription activity route: {str(e)}", exc_info=True)
+        logger.error(f"Error in subscription activity route: {e!s}", exc_info=True)
         raise
 
 
@@ -165,7 +165,7 @@ async def get_subscriptions_revenue(
     try:
         return await StatsService.get_global_subscriptions_revenue(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in subscriptions revenue route: {str(e)}", exc_info=True)
+        logger.error(f"Error in subscriptions revenue route: {e!s}", exc_info=True)
         raise
 
 
@@ -181,7 +181,7 @@ async def get_revenue_topups(
     try:
         return await StatsService.get_global_revenue_topups(start_date, end_date, limit, offset)
     except Exception as e:
-        logger.error(f"Error in revenue topups route: {str(e)}", exc_info=True)
+        logger.error(f"Error in revenue topups route: {e!s}", exc_info=True)
         raise
 
 
@@ -197,7 +197,7 @@ async def get_subscriptions_churn(
     try:
         return await StatsService.get_global_subscriptions_churn(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in subscriptions churn route: {str(e)}", exc_info=True)
+        logger.error(f"Error in subscriptions churn route: {e!s}", exc_info=True)
         raise
 
 
@@ -213,7 +213,7 @@ async def get_inference_calls_stats(
     try:
         return await StatsService._get_inference_api_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in {key_type.value} calls stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} calls stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -226,7 +226,7 @@ async def get_inference_tokens_stats(
     try:
         return await StatsService._get_inference_tokens_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in {key_type.value} tokens stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} tokens stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -239,7 +239,7 @@ async def get_inference_credits_stats(
     try:
         return await StatsService._get_inference_credits_stats(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in {key_type.value} credits stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} credits stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -253,7 +253,7 @@ async def get_inference_users_stats(
     try:
         return await StatsService._get_inference_users_stats(ApiKeyType(key_type.value), start_date, end_date, window)
     except Exception as e:
-        logger.error(f"Error in {key_type.value} users stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} users stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -266,7 +266,7 @@ async def get_aggregate_users_stats(
     try:
         return await StatsService.get_global_users_stats(start_date, end_date, window)
     except Exception as e:
-        logger.error(f"Error in aggregate users stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in aggregate users stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -278,7 +278,7 @@ async def get_global_summary(
     try:
         return await StatsService.get_global_summary_stats(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in global summary stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in global summary stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -292,7 +292,7 @@ async def get_messages_by_segment(
     try:
         return await StatsService.get_global_messages_by_segment(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in messages-by-segment stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in messages-by-segment stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -309,7 +309,7 @@ async def get_calls_by_segment(
     try:
         return await StatsService.get_global_calls_by_segment(ApiKeyType(key_type.value), start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in {key_type.value} calls-by-segment stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in {key_type.value} calls-by-segment stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -325,7 +325,7 @@ async def get_credits_consumption(
     try:
         return await StatsService.get_global_credits_consumption(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in credits-consumption stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in credits-consumption stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -336,7 +336,7 @@ async def get_subscriptions_stats() -> GlobalSubscriptionsStats:
     try:
         return await StatsService.get_global_subscriptions_stats()
     except Exception as e:
-        logger.error(f"Error in subscriptions stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in subscriptions stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -350,7 +350,7 @@ async def get_user_base_activity(
     try:
         return await StatsService.get_global_user_base_activity(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in user-base-activity stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in user-base-activity stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -366,7 +366,7 @@ async def get_subscribers_over_time(
     try:
         return await StatsService.get_global_subscribers_over_time(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in subscribers-over-time stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in subscribers-over-time stats route: {e!s}", exc_info=True)
         raise
 
 
@@ -382,5 +382,5 @@ async def get_tier_economics(
     try:
         return await StatsService.get_global_tier_economics(start_date, end_date)
     except Exception as e:
-        logger.error(f"Error in tier-economics stats route: {str(e)}", exc_info=True)
+        logger.error(f"Error in tier-economics stats route: {e!s}", exc_info=True)
         raise

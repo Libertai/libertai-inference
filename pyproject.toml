@@ -34,7 +34,7 @@ geoip2 = "^5.2.0"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
-ruff = "^0.6.0"
+ruff = "^0.16.0"
 pytest = "^9.0.3"
 pytest-asyncio = "^1.4.0"
 freezegun = "^1.5.5"

@@ -14,6 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
+
 from src.models.base import Base
 
 if TYPE_CHECKING:

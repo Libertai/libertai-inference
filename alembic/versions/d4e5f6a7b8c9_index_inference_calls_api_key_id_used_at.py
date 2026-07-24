@@ -11,15 +11,15 @@ Add a composite index so those become index range scans. Created CONCURRENTLY to
 avoid locking writes on the large table.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "d4e5f6a7b8c9"
-down_revision: Union[str, None] = "c1d2e3f4a5b6"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c1d2e3f4a5b6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 INDEX_NAME = "ix_inference_calls_api_key_id_used_at"
 

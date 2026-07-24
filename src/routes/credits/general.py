@@ -1,15 +1,15 @@
 from datetime import datetime
 
-from fastapi import HTTPException, status, Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 
 from src.interfaces.credits import (
-    ExpiredCreditTransactionsResponse,
-    ExpiredCreditTransaction,
     CreditBalanceResponse,
+    CreditTransactionProvider,
     CreditTransactionResponse,
     CreditTransactionsResponse,
-    CreditTransactionProvider,
+    ExpiredCreditTransaction,
+    ExpiredCreditTransactionsResponse,
 )
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
@@ -30,7 +30,7 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(CreditTransaction).where(
-                    CreditTransaction.is_active == True,  # noqa: E712
+                    CreditTransaction.is_active == True,
                     CreditTransaction.expired_at.isnot(None),
                     CreditTransaction.expired_at < datetime.now(),
                 )
@@ -57,9 +57,9 @@ async def update_expired_credit_transactions() -> ExpiredCreditTransactionsRespo
             )
 
     except Exception as e:
-        logger.error(f"Error updating expired transactions: {str(e)}", exc_info=True)
+        logger.error(f"Error updating expired transactions: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating expired transactions: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating expired transactions: {e!s}"
         )
 
 
@@ -69,9 +69,9 @@ async def get_user_balance(user: User = Depends(get_current_user)) -> CreditBala
         balance = await CreditService.get_balance(user.id)
         return CreditBalanceResponse(address=user.address, balance=balance)
     except Exception as e:
-        logger.error(f"Error retrieving balance for user {user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving balance for user {user.id}: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving credit balance: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving credit balance: {e!s}"
         )
 
 
@@ -104,7 +104,7 @@ async def get_transaction_history(user: User = Depends(get_current_user)) -> Cre
 
             return CreditTransactionsResponse(address=user.address, transactions=transaction_responses)
     except Exception as e:
-        logger.error(f"Error retrieving transaction history for user {user.id}: {str(e)}", exc_info=True)
+        logger.error(f"Error retrieving transaction history for user {user.id}: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving transaction history: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving transaction history: {e!s}"
         )

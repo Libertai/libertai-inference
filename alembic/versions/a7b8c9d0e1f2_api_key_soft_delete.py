@@ -8,16 +8,17 @@ Adds a nullable ``deleted_at`` to ``api_keys`` so keys can be soft-deleted —
 hidden + disabled — without cascading away their inference_calls usage history.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a7b8c9d0e1f2"
-down_revision: Union[str, None] = "f1a2b3c4d5e6"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "f1a2b3c4d5e6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

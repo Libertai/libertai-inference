@@ -1,63 +1,64 @@
 import uuid
-from datetime import datetime, timedelta, date, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import ClassVar
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, cast, Date, Integer, select, distinct, case, literal, and_
+from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, select
 from sqlalchemy.orm import aliased
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.interfaces.stats import (
-    DashboardStats,
-    TokenStats,
-    UsageStats,
-    DailyTokens,
-    UsageByEntity,
-    GlobalCreditsStats,
-    CreditsUsage,
-    GlobalApiStats,
-    ModelApiUsage,
-    GlobalTokensStats,
     Call,
-    GlobalChatCallsStats,
     ChatCallUsage,
-    GlobalChatTokensStats,
     ChatTokenUsage,
-    GlobalSummaryStats,
+    ChurnWeek,
+    CreditsConsumptionDay,
+    CreditsUsage,
     DailyActiveUsers,
     DailyTierActiveUsers,
-    GlobalUsersStats,
-    UsersWindow,
-    GlobalSegmentMessagesStats,
-    SegmentMessageUsage,
-    SegmentCallUsage,
-    GlobalSegmentCallsStats,
+    DailyTokens,
+    DashboardStats,
+    GlobalApiStats,
+    GlobalChatCallsStats,
+    GlobalChatTokensStats,
     GlobalCreditsConsumptionStats,
-    CreditsConsumptionDay,
-    TierCreditsDay,
-    GlobalSubscriptionsStats,
-    GlobalUserBaseActivityStats,
-    TierSubscribers,
-    GlobalSubscribersOverTimeStats,
-    TierSubscribersDay,
-    GlobalTierEconomicsStats,
-    TierEconomicsDay,
-    TierPrice,
-    LatestSubscriber,
+    GlobalCreditsStats,
     GlobalLatestSubscribersStats,
-    SubscriptionStatusFilter,
-    SubscriptionActivityType,
-    SubscriptionActivityEvent,
+    GlobalSegmentCallsStats,
+    GlobalSegmentMessagesStats,
+    GlobalSubscribersOverTimeStats,
     GlobalSubscriptionActivityStats,
+    GlobalSubscriptionsChurnStats,
+    GlobalSubscriptionsRevenueStats,
+    GlobalSubscriptionsStats,
+    GlobalSummaryStats,
+    GlobalTierEconomicsStats,
+    GlobalTokensStats,
+    GlobalTopupsStats,
+    GlobalUserBaseActivityStats,
+    GlobalUsersStats,
+    LatestSubscriber,
+    ModelApiUsage,
     MrrByTier,
     MrrDay,
+    SegmentCallUsage,
+    SegmentMessageUsage,
+    SubscriptionActivityEvent,
+    SubscriptionActivityType,
+    SubscriptionStatusFilter,
+    TierCreditsDay,
+    TierEconomicsDay,
+    TierPrice,
+    TierSubscribers,
+    TierSubscribersDay,
+    TokenStats,
     TopupDay,
-    GlobalSubscriptionsRevenueStats,
     TopupRow,
-    GlobalTopupsStats,
-    ChurnWeek,
-    GlobalSubscriptionsChurnStats,
+    UsageByEntity,
+    UsageStats,
+    UsersWindow,
 )
 from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
@@ -68,7 +69,7 @@ from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from src.subscription_tiers import get_tier, PAID_TIERS
+from src.subscription_tiers import PAID_TIERS, get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -162,10 +163,10 @@ class StatsService:
                 )
 
         except Exception as e:
-            logger.error(f"Error retrieving dashboard stats for {user_address}: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving dashboard stats for {user_address}: {e!s}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error retrieving dashboard statistics: {str(e)}",
+                detail=f"Error retrieving dashboard statistics: {e!s}",
             )
 
     @staticmethod
@@ -297,10 +298,10 @@ class StatsService:
                 )
 
         except Exception as e:
-            logger.error(f"Error retrieving usage stats for {user_address}: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving usage stats for {user_address}: {e!s}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error retrieving usage statistics: {str(e)}",
+                detail=f"Error retrieving usage statistics: {e!s}",
             )
 
     @staticmethod
@@ -619,7 +620,7 @@ class StatsService:
                 segment_by_ident = {str(r.ident): r.segment for r in raw}
                 return StatsService._rolling_users_stats(rows, start_date, end_date, window.days, segment_by_ident)
         except Exception as e:
-            logger.error(f"Error retrieving chat users stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving chat users stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -723,7 +724,7 @@ class StatsService:
                         segment_by_ident[ident] = cr.segment
                 return StatsService._rolling_users_stats(rows, start_date, end_date, window.days, segment_by_ident)
         except Exception as e:
-            logger.error(f"Error retrieving aggregate users stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving aggregate users stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -761,7 +762,7 @@ class StatsService:
 
                 return GlobalChatCallsStats(total_calls=total, chat_usage=chat_usage)
         except Exception as e:
-            logger.error(f"Error retrieving chat calls stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving chat calls stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -814,7 +815,7 @@ class StatsService:
                     token_usage=token_usage,
                 )
         except Exception as e:
-            logger.error(f"Error retrieving chat token stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving chat token stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -853,7 +854,7 @@ class StatsService:
                     total_output_tokens=i_out + c_out,
                 )
         except Exception as e:
-            logger.error(f"Error retrieving global summary stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving global summary stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -909,7 +910,7 @@ class StatsService:
                     )
                 return GlobalSegmentMessagesStats(total_messages=total, messages=messages)
         except Exception as e:
-            logger.error(f"Error retrieving messages-by-segment stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving messages-by-segment stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -973,7 +974,7 @@ class StatsService:
                     )
                 return GlobalSegmentCallsStats(total_calls=total, calls=calls)
         except Exception as e:
-            logger.error(f"Error retrieving calls-by-segment stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving calls-by-segment stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1026,7 +1027,7 @@ class StatsService:
                     daily_by_tier=daily_by_tier,
                 )
         except Exception as e:
-            logger.error(f"Error retrieving credits-consumption stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving credits-consumption stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1063,7 +1064,7 @@ class StatsService:
                     anonymous_users=int(anonymous_users),
                 )
         except Exception as e:
-            logger.error(f"Error retrieving subscriptions stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving subscriptions stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1138,7 +1139,7 @@ class StatsService:
                     free_active_users=len(free_idents),
                 )
         except Exception as e:
-            logger.error(f"Error retrieving user-base activity stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving user-base activity stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1162,7 +1163,7 @@ class StatsService:
             ]
             return GlobalSubscribersOverTimeStats(daily=daily)
         except Exception as e:
-            logger.error(f"Error retrieving subscribers-over-time stats: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving subscribers-over-time stats: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1209,7 +1210,7 @@ class StatsService:
                     ],
                 )
         except Exception as e:
-            logger.error(f"Error retrieving tier economics: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving tier economics: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1266,7 +1267,7 @@ class StatsService:
                     )
                 return GlobalLatestSubscribersStats(subscribers=subscribers, total=total)
         except Exception as e:
-            logger.error(f"Error retrieving latest subscribers: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving latest subscribers: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     # Raw event_type -> human-facing activity type. Only completed, meaningful transitions are
@@ -1281,7 +1282,7 @@ class StatsService:
     # single "from -> to" row. ``expired_insufficient_credits`` (credits-provider renewal that
     # couldn't be covered) is also a churn, distinct from ``expired_abandoned_checkout`` (a
     # never-activated checkout, dropped entirely rather than mapped).
-    _ACTIVITY_TYPE_MAP = {
+    _ACTIVITY_TYPE_MAP: ClassVar[dict[str, SubscriptionActivityType]] = {
         "activated": SubscriptionActivityType.subscribed,
         "renewed": SubscriptionActivityType.renewed,
         "upgraded": SubscriptionActivityType.upgraded,
@@ -1364,7 +1365,7 @@ class StatsService:
                     )
                 return GlobalSubscriptionActivityStats(events=events, total=total)
         except Exception as e:
-            logger.error(f"Error retrieving subscription activity: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving subscription activity: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     # Events that end a subscription's paying life. ``cancelled_for_upgrade`` ends the old row of
@@ -1669,7 +1670,7 @@ class StatsService:
                     total_topups=total_topups,
                 )
         except Exception as e:
-            logger.error(f"Error retrieving subscriptions revenue: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving subscriptions revenue: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1738,7 +1739,7 @@ class StatsService:
                 ]
                 return GlobalTopupsStats(total=int(total), topups=topups)
         except Exception as e:
-            logger.error(f"Error retrieving revenue topups: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving revenue topups: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
@@ -1772,10 +1773,13 @@ class StatsService:
         total_churned = 0
         for t in timelines:
             a = t["activated_on"]
-            if a and start_date <= a <= end_date:
-                if week_of(a) not in upgrade_weeks.get(t["user_id"], set()):
-                    weeks[week_of(a)]["new"] += 1
-                    total_new += 1
+            if (
+                a
+                and start_date <= a <= end_date
+                and week_of(a) not in upgrade_weeks.get(t["user_id"], set())
+            ):
+                weeks[week_of(a)]["new"] += 1
+                total_new += 1
             e = t["ended_on"]
             if (
                 e
@@ -1826,5 +1830,5 @@ class StatsService:
                 timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
                 return StatsService._churn_from_timelines(timelines, start_date, end_date)
         except Exception as e:
-            logger.error(f"Error retrieving subscriptions churn: {str(e)}", exc_info=True)
+            logger.error(f"Error retrieving subscriptions churn: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
