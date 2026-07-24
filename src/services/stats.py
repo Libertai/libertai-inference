@@ -1278,7 +1278,9 @@ class StatsService:
     # ``activated`` is a subscription's first successful charge; every later billing cycle logs
     # ``renewed``, so the two map to distinct feed types. ``upgraded`` (logged on the new sub at
     # completion, metadata from/to) supersedes that sub's ``activated`` so an upgrade reads as a
-    # single "from -> to" row.
+    # single "from -> to" row. ``expired_insufficient_credits`` (credits-provider renewal that
+    # couldn't be covered) is also a churn, distinct from ``expired_abandoned_checkout`` (a
+    # never-activated checkout, dropped entirely rather than mapped).
     _ACTIVITY_TYPE_MAP = {
         "activated": SubscriptionActivityType.subscribed,
         "renewed": SubscriptionActivityType.renewed,
@@ -1287,6 +1289,7 @@ class StatsService:
         "cancelled": SubscriptionActivityType.cancelled,
         "expired": SubscriptionActivityType.churned,
         "finished": SubscriptionActivityType.churned,
+        "expired_insufficient_credits": SubscriptionActivityType.churned,
         "payment_failed": SubscriptionActivityType.payment_failed,
     }
     _ACTIVITY_TRANSITION_TYPES = (SubscriptionActivityType.upgraded, SubscriptionActivityType.downgraded)
@@ -1366,7 +1369,10 @@ class StatsService:
 
     # Events that end a subscription's paying life. ``cancelled_for_upgrade`` ends the old row of
     # an upgrade pair (the replacement row has its own ``activated``), avoiding double-counting.
-    _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade")
+    # ``expired_insufficient_credits`` is a credits-provider renewal that couldn't be covered —
+    # also terminal. ``expired_abandoned_checkout`` (never-activated checkout) stays excluded: it
+    # has no activation to end.
+    _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade", "expired_insufficient_credits")
     # Terminal events that count as churn (excludes cancelled_for_upgrade, an upgrade replacement).
     _CHURN_TERMINAL_EVENTS = tuple(e for e in _TERMINAL_EVENTS if e != "cancelled_for_upgrade")
 

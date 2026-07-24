@@ -242,6 +242,30 @@ async def test_subscription_activity_shows_renewals_of_upgraded_subs():
     assert [e.type for e in mine] == [SubscriptionActivityType.renewed, SubscriptionActivityType.upgraded]
 
 
+async def test_subscription_activity_shows_churn_for_expired_insufficient_credits():
+    # A credits-provider sub that can't cover renewal expires via a distinct event type; it must
+    # still surface as a churn in the feed rather than being dropped or misclassified.
+    async with AsyncSessionLocal() as db:
+        user = User(email="activity-insufficient@example.com")
+        db.add(user)
+        await db.flush()
+        sub = PlanSubscription(user_id=user.id, tier="go", status="expired", provider="credits")
+        sub.created_at = datetime(2099, 4, 25)
+        db.add(sub)
+        await db.flush()
+        db.add_all(
+            [
+                _event(sub.id, "activated", 25, "ic-1"),
+                _event(sub.id, "expired_insufficient_credits", 26, "ic-2"),
+            ]
+        )
+        await db.commit()
+
+    result = await StatsService.get_subscription_activity(limit=50)
+    mine = [e for e in result.events if e.user_label == "activity-insufficient@example.com"]
+    assert [e.type for e in mine] == [SubscriptionActivityType.churned, SubscriptionActivityType.subscribed]
+
+
 # Runs last and asserts membership only, so its committed rows can't perturb the order-dependent
 # assertions above (these tests share one session-scoped DB with no per-test rollback).
 async def test_latest_subscribers_label_prefers_display_name_with_contact_in_parens():
