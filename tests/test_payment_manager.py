@@ -750,3 +750,37 @@ async def test_check_expirations_revert_survives_index_collision(db, monkeypatch
     # The outer transaction survived the savepoint rollback: writes still work.
     refreshed.tier = "go"
     await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_renewal_cycle_logs_renewed_not_activated(db):
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:setup_1",
+                     provider_subscription_id="psub_1", order_id="setup_1",
+                     metadata={"order_id": "setup_1"})
+    )
+    # Next billing cycle completes on a new order -> renewed, not a second activated.
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:ren_1",
+                     provider_subscription_id="psub_1", order_id="ren_1",
+                     metadata={"order_id": "ren_1"})
+    )
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]
+
+    # Out-of-order decline for the already-paid renewal order is ignored (sub stays active).
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_DECLINED:ren_1",
+                     provider_subscription_id="psub_1", order_id="ren_1",
+                     metadata={"order_id": "ren_1"})
+    )
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"
+    assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]

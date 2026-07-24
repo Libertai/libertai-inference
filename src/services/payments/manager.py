@@ -439,7 +439,23 @@ class PaymentManager:
                 sub.tier = sub.pending_tier
                 sub.pending_tier = None
             await self._refresh_cycle_dates(sub)
-            await self._log_event(sub, "activated", event.provider_event_id, event.metadata)
+            already_activated = (
+                await self.db.execute(
+                    select(PlanSubscriptionEvent.id)
+                    .where(
+                        PlanSubscriptionEvent.subscription_id == sub.id,
+                        PlanSubscriptionEvent.event_type == "activated",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            # First successful charge is "activated"; every later completed cycle is a renewal.
+            await self._log_event(
+                sub,
+                "activated" if already_activated is None else "renewed",
+                event.provider_event_id,
+                event.metadata,
+            )
             # If this activation completes an upgrade, record it on the new sub so the two
             # subscriptions read as a single "Go -> Plus" event downstream.
             upgraded_from = await self._cancel_upgrading_subs(user.id, exclude_sub_id=sub.id)
@@ -473,14 +489,14 @@ class PaymentManager:
         await self.db.flush()
 
     async def _order_completed(self, sub: PlanSubscription, order_id: str | None) -> bool:
-        """Has this subscription already been activated by ``order_id``?"""
+        """Has this subscription already been successfully billed for ``order_id``?"""
         if not order_id:
             return False
         existing = (
             await self.db.execute(
                 select(PlanSubscriptionEvent.id).where(
                     PlanSubscriptionEvent.subscription_id == sub.id,
-                    PlanSubscriptionEvent.event_type == "activated",
+                    PlanSubscriptionEvent.event_type.in_(("activated", "renewed")),
                     PlanSubscriptionEvent.metadata_json["order_id"].as_string() == order_id,
                 )
             )
