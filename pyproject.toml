@@ -13,7 +13,7 @@ package-mode = false
 python = ">=3.11,<3.14"
 fastapi = { extras = ["standard"], version = "^0.114.1" }
 apscheduler = "^3.10.4"
-setuptools = "^78.1.1"
+setuptools = ">=78.1.1,<84.0.0"
 web3 = "^7.15.0"
 httpx = ">=0.27"
 sqlalchemy = { extras = ["mypy"], version = "^2.0.39" }
