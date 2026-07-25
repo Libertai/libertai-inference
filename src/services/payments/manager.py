@@ -163,13 +163,24 @@ class PaymentManager:
         if event.type == PaymentEventType.order_completed:
             if tx.status != CreditTransactionStatus.completed:
                 tx.status = CreditTransactionStatus.completed
+                # A card can be declined several times before one succeeds on the same order.
+                # Each decline zeroed the row, so restore it in full — never leave a paid-for
+                # top-up with amount_left 0 / is_active False.
+                tx.is_active = True
+                tx.amount_left = tx.amount
                 logger.info(f"Top-up {tx.external_reference} completed ({tx.amount} credits)")
             else:
                 logger.info(f"Top-up {tx.external_reference} already completed, skipping")
         elif event.type == PaymentEventType.order_failed:
-            tx.status = CreditTransactionStatus.error
-            tx.is_active = False
-            tx.amount_left = 0
+            if tx.status == CreditTransactionStatus.completed:
+                # Out-of-order delivery: a declined attempt on an order that has since been
+                # paid. Applying it would confiscate credits the user paid for and may have
+                # already partly spent.
+                logger.info(f"Ignoring failure for already-completed top-up {tx.external_reference}")
+            else:
+                tx.status = CreditTransactionStatus.error
+                tx.is_active = False
+                tx.amount_left = 0
         await self.db.flush()
         return True
 

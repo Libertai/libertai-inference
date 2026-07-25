@@ -149,6 +149,60 @@ async def test_topup_failure_voids_pending(db):
 
 
 @pytest.mark.asyncio
+async def test_topup_declined_then_captured_on_retry_credits_in_full(db):
+    """Several declines on one order, then a success: the retry must credit the full amount.
+
+    Revolut retries payments under the same order id, so the pending row is voided by each
+    decline before the successful attempt completes it.
+    """
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=10.0, charge_amount=10.0, charge_currency="USD")
+
+    for i in range(3):
+        await mgr.handle_event(
+            PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                         provider_event_id=f"ORDER_PAYMENT_DECLINED:ord_1:{i}", order_id="ord_1")
+        )
+    assert await _balance(db, user.id) == 0.0
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:ord_1", order_id="ord_1")
+    )
+
+    tx = (
+        await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.external_reference == _topup_external_ref("fake", "ord_1")
+            )
+        )
+    ).scalar_one()
+    assert tx.status == CreditTransactionStatus.completed
+    assert tx.is_active is True
+    assert tx.amount_left == 10.0
+    assert await _balance(db, user.id) == 10.0
+
+
+@pytest.mark.asyncio
+async def test_late_decline_does_not_confiscate_completed_topup(db):
+    """Out-of-order delivery: a decline arriving after the order was paid must not void credits."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=10.0, charge_amount=10.0, charge_currency="USD")
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                     provider_event_id="ORDER_COMPLETED:ord_1", order_id="ord_1")
+    )
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_DECLINED:ord_1", order_id="ord_1")
+    )
+    assert await _balance(db, user.id) == 10.0
+
+
+@pytest.mark.asyncio
 async def test_topup_eur_pack_charges_eur_but_records_usd_credits(db):
     """EU packs: the provider is charged the gross EUR figure, the pending row records USD credits."""
     user = await _make_user(db)
