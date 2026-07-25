@@ -2,7 +2,6 @@ import asyncio
 import base64
 import hashlib
 import json
-import logging
 import struct
 
 from solana.rpc.api import Client
@@ -15,9 +14,10 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
+from src.utils.logger import setup_logger
 from src.utils.token import get_sol_token_price, get_token_price
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 
 class SolanaService:

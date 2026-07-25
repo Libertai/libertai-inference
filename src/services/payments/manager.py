@@ -12,7 +12,6 @@ the ``plan_subscriptions`` row and is read directly by the entitlement service.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -42,8 +41,9 @@ from src.subscription_tiers import (
     is_downgrade,
     is_upgrade,
 )
+from src.utils.logger import setup_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 # A top-up credit transaction is keyed by this hash so webhook replays dedup and
 # the pending row created at checkout time can be completed on confirmation.

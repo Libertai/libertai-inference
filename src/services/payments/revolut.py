@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import logging
 import time
 
 import httpx
@@ -26,8 +25,9 @@ from src.services.payments.base import (
     SubscriptionInfo,
 )
 from src.subscription_tiers import get_provider_plan
+from src.utils.logger import setup_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 PROVIDER_ID = "revolut"
 
