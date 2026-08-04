@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from src.config import config
@@ -17,6 +17,7 @@ from src.interfaces.credits import CreditTransactionProvider, CreditTransactionS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.inference_call import InferenceCall
 from src.models.user import User
 from src.services.api_key import ApiKeyService
 from src.services.auth_tokens import create_access_token
@@ -219,5 +220,66 @@ async def test_cli_key_rotation_survives_repeated_calls():
         results = [await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="box") for _ in range(20)]
         assert len({r.id for r in results}) == 1
         assert len({r.full_key for r in results}) == 20
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_cli_key_list_reports_last_used():
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        key = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="box")
+
+        listed = await ApiKeyService.get_cli_api_keys(user.id)
+        assert len(listed) == 1
+        assert listed[0].last_used_at is None
+
+        async with AsyncSessionLocal() as db:
+            for when in (datetime(2026, 1, 1, 9, 0), datetime(2026, 1, 2, 9, 0)):
+                call = InferenceCall(api_key_id=key.id, credits_used=0.0, model_name="m", input_tokens=0, output_tokens=0)
+                call.used_at = when
+                db.add(call)
+            await db.commit()
+
+        listed = await ApiKeyService.get_cli_api_keys(user.id)
+        assert listed[0].last_used_at == datetime(2026, 1, 2, 9, 0)
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_cli_key_list_omits_expired_and_disabled():
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        expired = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="old")
+        disabled = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="off")
+        await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="live")
+
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(ApiKeyDB).where(ApiKeyDB.id == expired.id).values(expires_at=datetime.now() - timedelta(days=1))
+            )
+            await db.execute(update(ApiKeyDB).where(ApiKeyDB.id == disabled.id).values(is_active=False))
+            await db.commit()
+
+        names = {k.name for k in await ApiKeyService.get_cli_api_keys(user.id)}
+        assert names == {"libertai-cli@live"}
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_cli_key_list_treats_null_expiry_as_valid():
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        key = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="forever")
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(ApiKeyDB).where(ApiKeyDB.id == key.id).values(expires_at=None))
+            await db.commit()
+
+        assert len(await ApiKeyService.get_cli_api_keys(user.id)) == 1
     finally:
         await _cleanup(user.id)

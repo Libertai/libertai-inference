@@ -2,13 +2,21 @@ import uuid
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
 from src.config import config
-from src.interfaces.api_keys import ApiKey, ApiKeyType, FullApiKey, InvalidKeyInfo, InvalidKeyReason, invalid_key_info
+from src.interfaces.api_keys import (
+    ApiKey,
+    ApiKeyType,
+    CliApiKey,
+    FullApiKey,
+    InvalidKeyInfo,
+    InvalidKeyReason,
+    invalid_key_info,
+)
 from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
@@ -191,25 +199,33 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    async def get_cli_api_keys(user_id: uuid.UUID) -> list[ApiKey]:
-        """List a user's CLI API keys (masked) so they can be reviewed/revoked separately
-        from standard api keys."""
+    async def get_cli_api_keys(user_id: uuid.UUID) -> list[CliApiKey]:
+        """List a user's currently valid CLI API keys (masked), so devices can be reviewed
+        and disconnected separately from standard api keys. Expired and disabled keys are
+        unusable and are omitted."""
+        now = datetime.now()
+        # Correlated max() over the (api_key_id, used_at) index — an index-only backward
+        # scan per key. A GROUP BY join would aggregate the whole inference_calls table.
+        last_used_at = (
+            select(sql_func.max(InferenceCall.used_at))
+            .where(InferenceCall.api_key_id == ApiKeyDB.id)
+            .correlate(ApiKeyDB)
+            .scalar_subquery()
+        )
         async with AsyncSessionLocal() as db:
-            cli_keys = (
-                (
-                    await db.execute(
-                        select(ApiKeyDB).where(
-                            ApiKeyDB.user_id == user_id,
-                            ApiKeyDB.type == ApiKeyType.cli,
-                            ApiKeyDB.deleted_at.is_(None),
-                        )
+            rows = (
+                await db.execute(
+                    select(ApiKeyDB, last_used_at.label("last_used_at")).where(
+                        ApiKeyDB.user_id == user_id,
+                        ApiKeyDB.type == ApiKeyType.cli,
+                        ApiKeyDB.deleted_at.is_(None),
+                        ApiKeyDB.is_active.is_(True),
+                        or_(ApiKeyDB.expires_at.is_(None), ApiKeyDB.expires_at > now),
                     )
                 )
-                .scalars()
-                .all()
-            )
+            ).all()
             return [
-                ApiKey(
+                CliApiKey(
                     id=key.id,
                     key=key.masked_key,
                     name=key.name,
@@ -220,8 +236,9 @@ class ApiKeyService:
                     monthly_limit=key.monthly_limit,
                     type=key.type,
                     expires_at=key.expires_at,
+                    last_used_at=last_used,
                 )
-                for key in cli_keys
+                for key, last_used in rows
             ]
 
     @staticmethod

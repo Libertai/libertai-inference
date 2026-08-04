@@ -12,6 +12,7 @@ from src.interfaces.api_keys import (
     ApiKeyType,
     ApiKeyUpdate,
     ChatApiKeyResponse,
+    CliApiKey,
     CliApiKeyCreate,
     FullApiKey,
     ImageInferenceCallData,
@@ -87,7 +88,7 @@ async def create_cli_api_key(
 
 
 @router.get("/cli")  # type: ignore
-async def get_cli_api_keys(user: User = Depends(get_current_user)) -> list[ApiKey]:
+async def get_cli_api_keys(user: User = Depends(get_current_user)) -> list[CliApiKey]:
     try:
         return await ApiKeyService.get_cli_api_keys(user_id=user.id)
     except Exception as e:
