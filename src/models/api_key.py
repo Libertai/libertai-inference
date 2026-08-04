@@ -63,8 +63,9 @@ class ApiKey(Base):
     )
     liberclaw_user: Mapped["LiberclawUser | None"] = relationship("LiberclawUser", back_populates="api_keys")
 
-    # Names are not unique: a user may have several keys sharing a name (and reuse a
-    # soft-deleted key's name freely).
+    # Names are not unique in general: a user may have several keys sharing a name (and
+    # reuse a soft-deleted key's name freely). Live CLI keys are the exception — see the
+    # partial unique index in __table_args__.
 
     def __init__(
         self,
