@@ -702,9 +702,7 @@ class ApiKeyService:
                         if lc_user is None:
                             continue
                         tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
-                        effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(
-                            key.liberclaw_user_id, 0.0
-                        )
+                        effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0)
                         if liberclaw_usage.get(key.id, 0.0) >= effective_limit:
                             invalid[key.key] = invalid_key_info(InvalidKeyReason.liberclaw_limit)
                             continue
