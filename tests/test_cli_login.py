@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
@@ -152,3 +153,28 @@ async def test_expired_cli_key_excluded_from_gateway(async_client):
         assert created.full_key not in (await ApiKeyService.get_admin_all_api_keys()).valid
     finally:
         await _cleanup(uid)
+
+
+async def test_duplicate_live_cli_name_rejected():
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                ApiKeyDB(
+                    key=ApiKeyDB.generate_key(), name="libertai-cli@dup", user_id=user.id, type=ApiKeyType.cli
+                )
+            )
+            await db.commit()
+
+        with pytest.raises(IntegrityError):
+            async with AsyncSessionLocal() as db:
+                db.add(
+                    ApiKeyDB(
+                        key=ApiKeyDB.generate_key(), name="libertai-cli@dup", user_id=user.id, type=ApiKeyType.cli
+                    )
+                )
+                await db.commit()
+    finally:
+        await _cleanup(user.id)

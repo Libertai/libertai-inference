@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, Enum, Float, ForeignKey, String, func, select
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Enum, Float, ForeignKey, Index, String, func, select, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.expression import func as sql_func
 
@@ -19,6 +19,18 @@ if TYPE_CHECKING:
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
+    __table_args__ = (
+        # One live CLI key per (user, device name). Scoped to cli — name uniqueness is
+        # deliberately absent for type=api. Soft-deleted rows fall outside the index, so a
+        # disconnect followed by `libertai login` mints a fresh row rather than colliding.
+        Index(
+            "uq_api_keys_cli_user_name",
+            "user_id",
+            "name",
+            unique=True,
+            postgresql_where=text("type = 'cli' AND deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
