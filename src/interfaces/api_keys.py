@@ -139,6 +139,12 @@ class FullApiKey(ApiKey):
     full_key: str
 
 
+class CliApiKey(ApiKey):
+    # Most recent metered inference call made with this key. None when the device has
+    # never run inference — `libertai login`, `status` and `keys` leave no trace here.
+    last_used_at: datetime | None = None
+
+
 class ApiKeyListResponse(BaseModel):
     keys: list[FullApiKey]
 
