@@ -6,6 +6,7 @@ in a fixed 2020 window and queried over exactly that range, so committed rows fr
 tests (stamped "now") never fall in range and can't pollute the counts.
 """
 
+import uuid
 from datetime import date, datetime
 
 from sqlalchemy import select
@@ -62,7 +63,12 @@ async def _seed() -> None:
 
         u1_api = ApiKey(key=ApiKey.generate_key(), name="dau-u1-api", user_id=user1.id, type=ApiKeyType.api)
         u2_api = ApiKey(key=ApiKey.generate_key(), name="dau-u2-api", user_id=user2.id, type=ApiKeyType.api)
-        u1_cli = ApiKey(key=ApiKey.generate_key(), name="dau-u1-cli", user_id=user1.id, type=ApiKeyType.cli)
+        u1_cli = ApiKey(
+            key=ApiKey.generate_key(),
+            name=f"dau-u1-cli-{uuid.uuid4().hex[:8]}",
+            user_id=user1.id,
+            type=ApiKeyType.cli,
+        )
         u1_chat = ApiKey(key=ApiKey.generate_key(), name="dau-u1-chat", user_id=user1.id, type=ApiKeyType.chat)
         lc_key = ApiKey(
             key=ApiKey.generate_key(),
