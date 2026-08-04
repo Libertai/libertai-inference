@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
@@ -127,63 +128,45 @@ class ApiKeyService:
     ) -> FullApiKey:
         """Mint — or rotate in place — the CLI API key for a user/device.
 
-        Keyed on (user_id, name, type=cli) so the row, and its related inference_calls
-        (usage history), survives re-login: only the secret key value and expiry are
-        regenerated. Used as the final step of the CLI browser-SSO login flow.
+        Upserted on (user_id, name) so the row, and its related inference_calls (usage
+        history), survives re-login: only the secret and the expiry are regenerated. Used
+        as the final step of the CLI browser-SSO login flow.
         """
         name = f"libertai-cli@{host}" if host else "libertai-cli"
         expires_at = datetime.now() + timedelta(days=CLI_KEY_TTL_DAYS)
 
         try:
             async with AsyncSessionLocal() as db:
-                existing = (
-                    (
-                        await db.execute(
-                            select(ApiKeyDB).where(
-                                ApiKeyDB.user_id == user_id,
-                                ApiKeyDB.name == name,
-                                ApiKeyDB.type == ApiKeyType.cli,
-                                ApiKeyDB.deleted_at.is_(None),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .first()
-                )
+                # Adopt a warm string if one is ready. It is consumed on both branches — the
+                # insert uses it directly, and DO UPDATE sets key to the same value — so the
+                # refill is scheduled exactly when a pooled string was actually taken.
+                warm = await ApiKeyPoolService.claim_warm_string(db)
+                claimed = warm is not None
+                new_key = warm if warm is not None else ApiKeyDB.generate_key()
 
-                claimed = False
-                if existing is not None:
-                    # Rotate in place: same row (and usage history), new secret + expiry.
-                    # Adopt a warm string if one is ready; the pool row is deleted first
-                    # (inside claim_warm_string) so UNIQUE(key) is never violated.
-                    warm = await ApiKeyPoolService.claim_warm_string(db)
-                    existing.key = warm if warm is not None else ApiKeyDB.generate_key()
-                    existing.expires_at = expires_at
-                    existing.is_active = True
-                    api_key = existing
-                    claimed = warm is not None
-                else:
-                    pool_row = await ApiKeyPoolService.claim_warm_key(
-                        db,
-                        target_type=ApiKeyType.cli,
-                        user_id=user_id,
+                stmt = (
+                    pg_insert(ApiKeyDB)
+                    .values(
+                        key=new_key,
                         name=name,
+                        user_id=user_id,
                         user_address=user_address,
+                        type=ApiKeyType.cli,
                         expires_at=expires_at,
                     )
-                    if pool_row is not None:
-                        api_key = pool_row
-                        claimed = True
-                    else:
-                        api_key = ApiKeyDB(
-                            key=ApiKeyDB.generate_key(),
-                            name=name,
-                            user_id=user_id,
-                            user_address=user_address,
-                            type=ApiKeyType.cli,
-                            expires_at=expires_at,
-                        )
-                        db.add(api_key)
+                    .on_conflict_do_update(
+                        index_elements=[ApiKeyDB.user_id, ApiKeyDB.name],
+                        # Must be a literal. The ORM form (ApiKeyDB.type == ApiKeyType.cli)
+                        # renders as a bind parameter, and Postgres can only prove a partial
+                        # index implication against Const nodes: it works on a custom plan and
+                        # then raises InvalidColumnReference once the plan cache goes generic.
+                        index_where=text("type = 'cli' AND deleted_at IS NULL"),
+                        set_={"key": new_key, "expires_at": expires_at, "is_active": True},
+                    )
+                )
+                api_key = (
+                    (await db.execute(select(ApiKeyDB).from_statement(stmt.returning(ApiKeyDB)))).scalars().one()
+                )
                 key = api_key.key
                 await db.commit()
 

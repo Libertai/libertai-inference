@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from src.config import config
@@ -176,5 +176,48 @@ async def test_duplicate_live_cli_name_rejected():
                     )
                 )
                 await db.commit()
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_cli_key_reminted_after_disconnect():
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        first = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="box")
+        await ApiKeyService.delete_api_key(first.id)
+
+        second = await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="box")
+
+        assert second.id != first.id  # soft-deleted row is outside the index, so a new row
+        async with AsyncSessionLocal() as db:
+            live = (
+                (
+                    await db.execute(
+                        select(ApiKeyDB).where(
+                            ApiKeyDB.user_id == user.id,
+                            ApiKeyDB.name == "libertai-cli@box",
+                            ApiKeyDB.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(live) == 1
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_cli_key_rotation_survives_repeated_calls():
+    """The ON CONFLICT arbiter must be inferable on a generic plan, not just a custom one."""
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, f"cli-{uuid.uuid4().hex}@example.com")
+        await db.commit()
+    try:
+        results = [await ApiKeyService.rotate_or_create_cli_api_key(user.id, host="box") for _ in range(20)]
+        assert len({r.id for r in results}) == 1
+        assert len({r.full_key for r in results}) == 20
     finally:
         await _cleanup(user.id)
