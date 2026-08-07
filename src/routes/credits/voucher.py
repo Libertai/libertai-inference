@@ -15,6 +15,7 @@ from src.models.base import AsyncSessionLocal
 from src.routes.credits import router
 from src.services.auth import require_staff
 from src.services.credit import CreditService
+from src.services.disposable_email import DisposableEmailError
 from src.services.users import get_or_create_user_by_email, get_user_by_email
 from src.utils.logger import setup_logger
 
@@ -32,7 +33,12 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
         # Commit the (possibly new) user before crediting: add_credits_for_user opens its
         # own session and must see the row.
         async with AsyncSessionLocal() as db:
-            user, _ = await get_or_create_user_by_email(db, voucher_request.email)
+            try:
+                user, _ = await get_or_create_user_by_email(db, voucher_request.email)
+            except DisposableEmailError:
+                raise HTTPException(
+                    status_code=400, detail="Refusing to open an account on a disposable email domain."
+                ) from None
             await db.commit()
             user_id = user.id
         return await CreditService.add_credits_for_user(

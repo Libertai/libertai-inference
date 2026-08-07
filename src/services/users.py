@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.oauth_connection import OAuthConnection
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
+from src.services.disposable_email import DisposableEmailError, is_disposable_email
 
 if TYPE_CHECKING:
     from src.services.oauth import OAuthUserInfo
@@ -57,11 +58,18 @@ async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
 
 
 async def get_or_create_user_by_email(db: AsyncSession, email: str) -> tuple[User, bool]:
-    """Resolve an email to its user, creating one if none exists. No wallet."""
+    """Resolve an email to its user, creating one if none exists. No wallet.
+
+    Raises ``DisposableEmailError`` rather than open an account on a disposable
+    domain. Only creation is gated: accounts that predate the filter, or whose
+    domain the list picked up later, keep authenticating.
+    """
     email = email.strip().lower()
     user = (await db.execute(select(User).where(User.email == email))).scalars().first()
     if user is not None:
         return user, False
+    if is_disposable_email(email):
+        raise DisposableEmailError(email)
     user = User(email=email)
     db.add(user)
     await db.flush()

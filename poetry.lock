@@ -1160,6 +1160,21 @@ toolz = ">=0.8.0"
 cython = ["cython"]
 
 [[package]]
+name = "disposable-email-domains"
+version = "0.0.237"
+description = "A set of disposable email domains"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "disposable_email_domains-0.0.237-py3-none-any.whl", hash = "sha256:d1bde8c216d117e001da3aa0d3f22dce2bbd7044e44e8dfbebc1aca33e0779a7"},
+    {file = "disposable_email_domains-0.0.237.tar.gz", hash = "sha256:80a055f2b20260510169b9f966a0d06f2a05d73a214b7e15f1545e0fccf87a58"},
+]
+
+[package.extras]
+dev = ["check-manifest"]
+
+[[package]]
 name = "dnspython"
 version = "2.7.0"
 description = "DNS toolkit"
@@ -3973,4 +3988,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "feb9dc98585154e037b55d1550dc1721001eaf2905c67c8296324cbbeba9567f"
+content-hash = "c512706313b40e672ed56bdc85e5908cbb95f4d7c1ea3ed2735e9f81c744f39d"

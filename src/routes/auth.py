@@ -41,6 +41,7 @@ from src.services import magic_link, oauth, wallet_auth
 from src.services.auth import create_access_token, get_current_user, get_optional_user
 from src.services.auth_tokens import REFRESH, create_refresh_token, decode_token
 from src.services.auth_tokens import create_access_token as create_user_access_token
+from src.services.disposable_email import DisposableEmailError
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
@@ -254,7 +255,14 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
         )
         if email is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
-        user, _ = await get_or_create_user_by_email(db, email)
+        try:
+            user, _ = await get_or_create_user_by_email(db, email)
+        except DisposableEmailError:
+            logger.warning("Blocked signup on disposable email domain: %s", email)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This email provider is not accepted. Use a permanent address.",
+            ) from None
         pair = await _issue_token_pair(db, user)
         await db.commit()
     _set_auth_cookies(response, pair)

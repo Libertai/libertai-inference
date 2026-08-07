@@ -4,10 +4,12 @@ from datetime import datetime, timedelta
 from cryptography.fernet import Fernet
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from sqlalchemy import select
 
 from src.config import config
 from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
+from src.models.user import User
 from src.services.magic_link import create_magic_link
 from src.services.users import get_or_create_user_by_email
 
@@ -65,6 +67,20 @@ async def test_email_magic_link_verify(async_client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
+
+
+async def test_email_magic_link_verify_refuses_disposable_domain(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
+    email = "throwaway@web-library.net"
+    async with AsyncSessionLocal() as db:
+        _token, code = await create_magic_link(db, email)
+        await db.commit()
+
+    resp = await async_client.post("/auth/verify-magic-link", json={"email": email, "code": code})
+    assert resp.status_code == 403
+
+    async with AsyncSessionLocal() as db:
+        assert (await db.execute(select(User).where(User.email == email))).scalars().first() is None
 
 
 async def test_me_returns_user_profile(async_client):

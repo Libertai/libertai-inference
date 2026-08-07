@@ -31,6 +31,7 @@ eth-account = "^0.13.7"
 cryptography = ">=48,<51"
 greenlet = "^3.5.1"
 geoip2 = "^5.2.0"
+disposable-email-domains = ">=0.0.237"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.1"
