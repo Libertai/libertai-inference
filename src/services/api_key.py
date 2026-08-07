@@ -36,6 +36,7 @@ from src.services.entitlement import (
     get_allowance_state,
     month_overflow_by_users,
     open_windows,
+    remaining_allowance,
     window_usage_by_users,
 )
 from src.subscription_tiers import DEFAULT_TIER, get_tier
@@ -825,8 +826,8 @@ class ApiKeyService:
                     await open_windows(db, chargeable_user_id, now)
                     # Billing split only needs the window fields — skip the cap queries.
                     state = await get_allowance_state(db, chargeable_user_id, now, include_cap=False)
-                    remaining_5h = max(0.0, state.window_5h_limit - state.window_5h_used)
-                    remaining_weekly = max(0.0, state.weekly_limit - state.weekly_used)
+                    remaining_5h = remaining_allowance(state.window_5h_limit, state.window_5h_used)
+                    remaining_weekly = remaining_allowance(state.weekly_limit, state.weekly_used)
                     tier_covered = min(credits_used, remaining_5h, remaining_weekly)
 
                 # Liberclaw keys: usage overflowing the tier's rolling-window cap is paid
