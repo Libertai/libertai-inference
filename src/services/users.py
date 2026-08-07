@@ -1,13 +1,14 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.oauth_connection import OAuthConnection
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.services.disposable_email import DisposableEmailError, is_disposable_email
+from src.utils.email_canonical import canonical_email, canonical_email_expression
 
 if TYPE_CHECKING:
     from src.services.oauth import OAuthUserInfo
@@ -52,20 +53,27 @@ async def get_or_create_user_by_wallet(db: AsyncSession, address: str, chain: st
     return user
 
 
+def _by_canonical_email(email: str) -> Select[tuple[User]]:
+    """Match on the expression the unique index is built on, so the lookup is an index scan."""
+    return select(User).where(canonical_email_expression("users.email") == canonical_email(email))
+
+
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     """Look up a user by email without creating one. Returns None if no account exists."""
-    return (await db.execute(select(User).where(User.email == email.strip().lower()))).scalars().first()
+    return (await db.execute(_by_canonical_email(email))).scalars().first()
 
 
 async def get_or_create_user_by_email(db: AsyncSession, email: str) -> tuple[User, bool]:
     """Resolve an email to its user, creating one if none exists. No wallet.
+
+    Resolution is by canonical form, creation stores the address as typed.
 
     Raises ``DisposableEmailError`` rather than open an account on a disposable
     domain. Only creation is gated: accounts that predate the filter, or whose
     domain the list picked up later, keep authenticating.
     """
     email = email.strip().lower()
-    user = (await db.execute(select(User).where(User.email == email))).scalars().first()
+    user = (await db.execute(_by_canonical_email(email))).scalars().first()
     if user is not None:
         return user, False
     if is_disposable_email(email):
@@ -96,7 +104,7 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
 
     user = None
     if info.email:
-        user = (await db.execute(select(User).where(User.email == info.email.strip().lower()))).scalars().first()
+        user = (await db.execute(_by_canonical_email(info.email))).scalars().first()
 
     created = False
     if user is None:

@@ -2,10 +2,11 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, Float, String, func, select
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Float, Index, String, func, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import AsyncSessionLocal, Base
+from src.utils.email_canonical import canonical_email_expression
 
 if TYPE_CHECKING:
     from src.models.api_key import ApiKey
@@ -18,6 +19,11 @@ if TYPE_CHECKING:
 
 class User(Base):
     __tablename__ = "users"
+
+    # One account per canonical address: NULL emails are unconstrained (NULLs are distinct).
+    __table_args__ = (
+        Index("uq_users_email_canonical", canonical_email_expression(), unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
