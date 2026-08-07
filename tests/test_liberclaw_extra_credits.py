@@ -236,13 +236,14 @@ async def test_overflow_without_grant_records_nothing():
 
 async def test_consume_partial_when_grants_short():
     lc, _ = await _setup()
+    granted = FREE_LIMIT * 0.25
     try:
-        await _grant(lc, fraction=0.25)  # 5 credits on free tier
+        await _grant(lc, fraction=0.25)
         async with AsyncSessionLocal() as db:
-            consumed = await LiberclawService.consume_extra_credits(db, lc.id, 8.0)
+            consumed = await LiberclawService.consume_extra_credits(db, lc.id, granted * 2)
             await db.commit()
             left = await LiberclawService.extra_credits_left(db, lc.id)
-        assert consumed == 5.0
+        assert consumed == granted
         assert left == 0.0
     finally:
         await _cleanup(lc.id)
