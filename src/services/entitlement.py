@@ -40,6 +40,10 @@ from src.subscription_tiers import DEFAULT_TIER, TierConfig, get_tier
 # are exhausted (matches the legacy gateway threshold).
 PREPAID_MIN = 0.02
 
+# Window room at or below this counts as none left: float8 usage sums drift ~1e-12
+# around their cap. Stays below the cheapest billable call (1e-5).
+CREDIT_EPSILON = 1e-6
+
 # Fixed window kinds and their durations.
 WINDOW_5H = "5h"
 WINDOW_WEEKLY = "weekly"
@@ -86,9 +90,20 @@ class AllowanceState:
     extra_credits_used_this_month: float = 0.0
 
 
+def remaining_allowance(limit: float, used: float) -> float:
+    """Spendable room left in a window. Gate and billing split must both use this:
+    room the gate honours but the split rounds to zero stops usage accruing, so the
+    window never closes."""
+    remaining = limit - used
+    return remaining if remaining > CREDIT_EPSILON else 0.0
+
+
 def compute_source(tier: TierConfig, usage_5h: float, usage_weekly: float, prepaid: float) -> str:
     """Decide which path covers the *next* call: tier window, prepaid, or none."""
-    within_window = usage_5h < tier.window_5h_credits and usage_weekly < tier.weekly_credits
+    within_window = (
+        remaining_allowance(tier.window_5h_credits, usage_5h) > 0.0
+        and remaining_allowance(tier.weekly_credits, usage_weekly) > 0.0
+    )
     if within_window:
         return "tier"
     if prepaid >= PREPAID_MIN:

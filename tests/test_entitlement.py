@@ -1,5 +1,6 @@
 """Fixed-window entitlement: windows accrue then reset to 0 on expiry (not rolling)."""
 
+import math
 import uuid
 from datetime import datetime, timedelta
 
@@ -14,7 +15,16 @@ from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
-from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, get_allowance_state, open_windows, window_usage_by_users
+from src.services.entitlement import (
+    WINDOW_5H,
+    WINDOW_WEEKLY,
+    compute_source,
+    get_allowance_state,
+    open_windows,
+    remaining_allowance,
+    window_usage_by_users,
+)
+from src.subscription_tiers import get_tier
 
 NOW = datetime(2026, 6, 3, 12, 0, 0)
 
@@ -180,3 +190,34 @@ async def test_chat_key_usage_counts_in_window(db):
     state = await get_allowance_state(db, user.id, now=NOW)
     assert state.weekly_used == pytest.approx(1.5)
     assert state.window_5h_used == pytest.approx(1.5)
+
+
+def test_usage_one_ulp_below_cap_counts_as_exhausted():
+    """A saturated window's float8 usage sum lands an ULP either side of its cap."""
+    tier = get_tier("free")
+    assert compute_source(tier, 0.0, math.nextafter(tier.weekly_credits, 0.0), 0.0) == "blocked"
+    assert compute_source(tier, math.nextafter(tier.window_5h_credits, 0.0), 0.0, 0.0) == "blocked"
+
+
+def test_real_remaining_room_still_grants_tier_coverage():
+    tier = get_tier("free")
+    # 0.0001 credits left is a spendable amount, not float noise.
+    assert compute_source(tier, 0.0, tier.weekly_credits - 0.0001, 0.0) == "tier"
+
+
+def test_remaining_allowance_snaps_float_noise_to_zero():
+    assert remaining_allowance(2.0, math.nextafter(2.0, 0.0)) == 0.0
+    assert remaining_allowance(2.0, 2.0) == 0.0
+    assert remaining_allowance(2.0, 2.5) == 0.0
+    assert remaining_allowance(2.0, 1.75) == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_saturated_weekly_window_blocks_through_query_path(db):
+    user = await _user(db)
+    key = await _api_key(db, user.id)
+    await _window(db, user.id, WINDOW_WEEKLY, started_at=NOW - timedelta(days=1), expires_at=NOW + timedelta(days=6))
+    await _use(db, key.id, math.nextafter(2.0, 0.0), NOW - timedelta(hours=1))
+
+    state = await get_allowance_state(db, user.id, now=NOW)
+    assert state.source == "blocked"
