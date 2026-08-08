@@ -59,6 +59,9 @@ class LiberclawService:
             )
 
             if existing_key:
+                # Same value, never rotated: running VMs hold it verbatim.
+                existing_key.is_active = True
+                await db.commit()
                 return LiberclawApiKeyResponse(key=existing_key.key, is_new=False)
 
             claimed = await ApiKeyPoolService.claim_warm_key(
@@ -84,6 +87,34 @@ class LiberclawService:
                 ApiKeyPoolService.schedule_refill()
 
             return LiberclawApiKeyResponse(key=key, is_new=True)
+
+    @staticmethod
+    async def deactivate_api_key(user_id: str, user_type: str) -> bool:
+        """Suspend a Liberclaw user's key. Returns True if a key was deactivated."""
+        async with AsyncSessionLocal() as db:
+            key = (
+                (
+                    await db.execute(
+                        select(ApiKeyDB)
+                        .join(LiberclawUser, LiberclawUser.id == ApiKeyDB.liberclaw_user_id)
+                        .where(
+                            LiberclawUser.user_id == user_id,
+                            LiberclawUser.user_type == user_type,
+                            ApiKeyDB.type == ApiKeyType.liberclaw,
+                            ApiKeyDB.is_active,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+            if key is None:
+                return False
+
+            key.is_active = False
+            await db.commit()
+            return True
 
     @staticmethod
     async def update_tier(user_id: str, user_type: str, tier: str) -> None:

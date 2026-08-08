@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status
 
 from src.interfaces.liberclaw import (
+    LiberclawApiKeyDeactivateResponse,
     LiberclawApiKeyRequest,
     LiberclawApiKeyResponse,
     LiberclawExtraCreditsGrant,
@@ -23,6 +24,19 @@ async def get_or_create_api_key(request: LiberclawApiKeyRequest) -> LiberclawApi
         return await LiberclawService.get_or_create_api_key(user_id=request.user_id, user_type=request.user_type)
     except Exception as e:
         logger.error(f"Error in get_or_create_api_key: {e!s}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/api-key/deactivate", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def deactivate_api_key(request: LiberclawApiKeyRequest) -> LiberclawApiKeyDeactivateResponse:
+    """Deactivate a Liberclaw user's API key once they have no running agent."""
+    try:
+        deactivated = await LiberclawService.deactivate_api_key(
+            user_id=request.user_id, user_type=request.user_type
+        )
+        return LiberclawApiKeyDeactivateResponse(deactivated=deactivated)
+    except Exception as e:
+        logger.error(f"Error in deactivate_api_key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

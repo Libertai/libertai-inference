@@ -20,6 +20,10 @@ class LiberclawApiKeyResponse(BaseModel):
     is_new: bool
 
 
+class LiberclawApiKeyDeactivateResponse(BaseModel):
+    deactivated: bool
+
+
 class LiberclawExtraCreditsGrant(BaseModel):
     user_id: str
     user_type: str
