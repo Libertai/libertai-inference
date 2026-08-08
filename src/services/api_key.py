@@ -526,7 +526,10 @@ class ApiKeyService:
                     (
                         await db.execute(
                             select(ApiKeyDB)
+                            # Outer join: liberclaw, x402 and pool keys have no user_id.
+                            .outerjoin(User, ApiKeyDB.user_id == User.id)
                             .where(ApiKeyDB.deleted_at.is_(None))
+                            .where(or_(ApiKeyDB.user_id.is_(None), User.suspended_at.is_(None)))
                             .options(selectinload(ApiKeyDB.liberclaw_user))
                         )
                     )

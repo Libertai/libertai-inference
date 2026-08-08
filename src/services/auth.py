@@ -91,6 +91,12 @@ def _extract_token(authorization: str | None, libertai_auth: str | None) -> str 
     return libertai_auth
 
 
+def _reject_if_suspended(user: User) -> None:
+    """Same 401 as an unknown token: the reason is not surfaced."""
+    if user.suspended_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+
+
 async def _resolve_user_from_token(token: str) -> User:
     try:
         payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
@@ -116,6 +122,7 @@ async def _resolve_user_from_token(token: str) -> User:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials"
                 )
+            _reject_if_suspended(user)
             return user
 
         # Legacy wallet token: sub is an address (+ optional chain claim). Resolve to its user,
@@ -127,6 +134,7 @@ async def _resolve_user_from_token(token: str) -> User:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid chain in token")
         user = await get_or_create_user_by_wallet(db, format_address(chain, sub))
         await db.commit()
+        _reject_if_suspended(user)
         return user
 
 

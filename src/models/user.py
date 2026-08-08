@@ -35,6 +35,10 @@ class User(Base):
     # Monthly cap (USD credits) on overflow spend beyond entitlement windows. NULL = unlimited.
     monthly_extra_credit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # NULL = active. Never delete a suspended row: it holds its uq_users_email_canonical slot.
+    suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    suspension_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Legacy wallet address. Identity moved to wallet_connections; kept (nullable, unique) for one
     # release as a rollback hatch and so existing address-based FKs resolve until the FK swap.
     address: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)

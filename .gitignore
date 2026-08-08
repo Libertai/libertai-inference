@@ -170,8 +170,8 @@ dump_*.sql
 *.dump
 *.sql.gz
 
-# Superpowers planning docs (kept local)
-docs/superpowers/
+# Local-only notes and planning docs
+docs/
 
 # Local x402 test harness
 scripts/node_modules/
