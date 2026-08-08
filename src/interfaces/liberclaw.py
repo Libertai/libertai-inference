@@ -50,3 +50,8 @@ class LiberclawUserResponse(BaseModel):
     # Unconsumed granted extra credits (usable once credits_used exceeds credits_limit).
     extra_credits_left: float = 0.0
     created_at: datetime
+    # Last inference call on any of this user's keys, over all time rather than
+    # the rolling window. Every path an agent can be driven by — chat, Telegram,
+    # direct link — ends in a call here, so this is the only complete record of
+    # whether the user has ever actually used anything.
+    last_call_at: datetime | None = None

@@ -176,6 +176,14 @@ class LiberclawService:
                 )
             ).scalar()
 
+            last_call_at = (
+                await db.execute(
+                    select(sql_func.max(InferenceCall.used_at))
+                    .join(ApiKeyDB, InferenceCall.api_key_id == ApiKeyDB.id)
+                    .where(ApiKeyDB.liberclaw_user_id == lc_user.id)
+                )
+            ).scalar()
+
             return LiberclawUserResponse(
                 id=lc_user.id,
                 user_id=lc_user.user_id,
@@ -186,6 +194,7 @@ class LiberclawService:
                 rolling_window_days=rolling_days,
                 extra_credits_left=await LiberclawService.extra_credits_left(db, lc_user.id),
                 created_at=lc_user.created_at,
+                last_call_at=last_call_at,
             )
 
     @staticmethod
