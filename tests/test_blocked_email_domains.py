@@ -1,9 +1,14 @@
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.models.blocked_email_domain import BlockedEmailDomain
 from src.services.disposable_email import _BLOCKLIST, DisposableEmailError, is_blocked_signup_domain
 from src.services.users import get_or_create_user_by_email, get_user_by_email
+
+# Punycode of "blöcked-fixture.test".
+IDN_FIXTURE_PUNYCODE = "xn--blcked-fixture-wpb.test"
+IDN_FIXTURE_UNICODE = "blöcked-fixture.test"
 
 
 async def test_blocked_domain_row_round_trips(db):
@@ -46,16 +51,64 @@ async def test_match_ignores_case_and_surrounding_whitespace(db):
     assert await is_blocked_signup_domain(db, "  Someone@BLOCKED-Fixture.TEST  ") is True
 
 
+async def test_trailing_dot_does_not_bypass_the_match(db):
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    assert await is_blocked_signup_domain(db, "someone@blocked-fixture.test.") is True
+
+
+async def test_trailing_dot_does_not_bypass_the_package_list(db):
+    package_domain = next(iter(_BLOCKLIST))
+
+    assert await is_blocked_signup_domain(db, f"someone@{package_domain}.") is True
+
+
+async def test_unicode_spelling_matches_the_punycode_row(db):
+    db.add(BlockedEmailDomain(domain=IDN_FIXTURE_PUNYCODE))
+    await db.flush()
+
+    assert await is_blocked_signup_domain(db, f"someone@{IDN_FIXTURE_UNICODE}") is True
+    assert await is_blocked_signup_domain(db, f"someone@{IDN_FIXTURE_PUNYCODE}") is True
+
+
 async def test_address_without_at_sign_is_not_blocked(db):
     assert await is_blocked_signup_domain(db, "notanemail") is False
 
 
-async def test_signup_on_listed_domain_raises(db):
-    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
-    await db.flush()
+async def test_address_without_a_domain_is_not_blocked(db):
+    assert await is_blocked_signup_domain(db, "someone@") is False
 
+
+async def test_signup_without_a_domain_creates_no_user(db):
     with pytest.raises(DisposableEmailError):
-        await get_or_create_user_by_email(db, "newcomer@blocked-fixture.test")
+        await get_or_create_user_by_email(db, "someone@")
+
+    assert await get_user_by_email(db, "someone@") is None
+
+
+async def test_row_that_is_not_normalized_is_rejected(db):
+    with pytest.raises(IntegrityError):
+        async with db.begin_nested():
+            db.add(BlockedEmailDomain(domain="Blocked-Fixture.TEST"))
+
+
+async def test_a_failing_lookup_refuses_the_signup(db, monkeypatch):
+    """The gate fails closed: a database error must reach the caller, never read as "not blocked"."""
+    original_execute = db.execute
+
+    async def execute(statement, *args, **kwargs):
+        if "blocked_email_domains" in str(statement):
+            raise OperationalError("SELECT", {}, Exception("connection lost"))
+        return await original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", execute)
+
+    with pytest.raises(OperationalError):
+        await get_or_create_user_by_email(db, "newcomer@allowed-fixture.test")
+
+    monkeypatch.undo()
+    assert await get_user_by_email(db, "newcomer@allowed-fixture.test") is None
 
 
 async def test_signup_on_listed_domain_creates_no_user(db):

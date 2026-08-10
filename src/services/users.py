@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.oauth_connection import OAuthConnection
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
-from src.services.disposable_email import DisposableEmailError, is_blocked_signup_domain
+from src.services.disposable_email import DisposableEmailError, is_blocked_signup_domain, signup_domain
 from src.utils.email_canonical import canonical_email, canonical_email_expression
 
 if TYPE_CHECKING:
@@ -69,14 +69,15 @@ async def get_or_create_user_by_email(db: AsyncSession, email: str) -> tuple[Use
     Resolution is by canonical form, creation stores the address as typed.
 
     Raises ``DisposableEmailError`` rather than open an account on a blocked domain,
-    whether the domain came from the static package list or ``blocked_email_domains``.
+    whether the domain came from the static package list or ``blocked_email_domains``,
+    or on an address that carries no domain at all.
     Only creation is gated: existing accounts keep authenticating whatever the lists say.
     """
     email = email.strip().lower()
     user = (await db.execute(_by_canonical_email(email))).scalars().first()
     if user is not None:
         return user, False
-    if await is_blocked_signup_domain(db, email):
+    if signup_domain(email) == "" or await is_blocked_signup_domain(db, email):
         raise DisposableEmailError(email)
     user = User(email=email)
     db.add(user)

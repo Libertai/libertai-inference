@@ -3,11 +3,10 @@ import uuid
 import pytest
 
 from src.models.user import User
-from src.services.disposable_email import DisposableEmailError, is_disposable_email
+from src.services.disposable_email import _BLOCKLIST, DisposableEmailError, is_disposable_email
 from src.services.users import get_or_create_user_by_email
 
-# mail.tm's public domain during the August 2026 signup flood.
-DISPOSABLE = "web-library.net"
+DISPOSABLE = next(iter(_BLOCKLIST))
 
 
 def test_known_disposable_domain_is_flagged():

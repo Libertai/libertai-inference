@@ -19,24 +19,34 @@ class DisposableEmailError(ValueError):
     """An account was about to be created on a blocked domain."""
 
 
-def _domain_of(email: str) -> str | None:
-    """The address's domain, trimmed and lowercased. None when there is no ``@``."""
+def signup_domain(email: str) -> str | None:
+    """The address's domain in the form both lists are keyed on.
+
+    Trimmed, lowercased, stripped of the root's trailing dot and folded to punycode, so a
+    single domain has a single spelling. ``None`` when there is no ``@``, ``""`` when the
+    address carries no domain. Malformed labels keep their plain lowercased form.
+    """
     parts = email.strip().lower().rsplit("@", 1)
-    return parts[1] if len(parts) == 2 else None
+    if len(parts) != 2:
+        return None
+    domain = parts[1].rstrip(".")
+    try:
+        return domain.encode("idna").decode("ascii")
+    except UnicodeError:
+        return domain
 
 
 def is_disposable_email(email: str) -> bool:
     """Whether the email's domain is on the static package list."""
-    domain = _domain_of(email)
-    return domain is not None and domain in _BLOCKLIST
+    return signup_domain(email) in _BLOCKLIST
 
 
 async def is_blocked_signup_domain(db: AsyncSession, email: str) -> bool:
     """Whether account creation on this address must be refused, by either source."""
-    domain = _domain_of(email)
-    if domain is None:
+    domain = signup_domain(email)
+    if not domain:
         return False
-    if domain in _BLOCKLIST:
+    if is_disposable_email(email):
         return True
     row = (
         (await db.execute(select(BlockedEmailDomain.domain).where(BlockedEmailDomain.domain == domain)))

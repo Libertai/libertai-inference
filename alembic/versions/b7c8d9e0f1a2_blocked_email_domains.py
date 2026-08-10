@@ -26,6 +26,8 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(), nullable=True),
         sa.Column("created_at", sa.TIMESTAMP(), server_default=sa.func.current_timestamp(), nullable=False),
         sa.PrimaryKeyConstraint("domain"),
+        # Matching is exact, so a row that is not already normalised would never match anything.
+        sa.CheckConstraint("domain = lower(btrim(domain))", name="blocked_email_domains_domain_normalized"),
     )
 
 
