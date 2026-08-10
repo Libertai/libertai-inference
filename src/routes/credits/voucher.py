@@ -37,7 +37,7 @@ async def add_voucher_credits(voucher_request: VoucherAddCreditsRequest) -> bool
                 user, _ = await get_or_create_user_by_email(db, voucher_request.email)
             except DisposableEmailError:
                 raise HTTPException(
-                    status_code=400, detail="Refusing to open an account on a disposable email domain."
+                    status_code=400, detail="Refusing to open an account on a blocked email domain."
                 ) from None
             await db.commit()
             user_id = user.id

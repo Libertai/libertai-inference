@@ -258,10 +258,10 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
         try:
             user, _ = await get_or_create_user_by_email(db, email)
         except DisposableEmailError:
-            logger.warning("Blocked signup on disposable email domain: %s", email)
+            logger.warning("Refused signup on a blocked email domain: %s", email)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="This email provider is not accepted. Use a permanent address.",
+                detail="This email domain is not accepted. Use a different address.",
             ) from None
         pair = await _issue_token_pair(db, user)
         await db.commit()
