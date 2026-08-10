@@ -64,6 +64,7 @@ _ensure_test_database_exists()
 import src.models.anon_chat_usage
 import src.models.api_key
 import src.models.auth_code
+import src.models.blocked_email_domain
 import src.models.chat_request
 import src.models.credit_transaction
 import src.models.entitlement_window

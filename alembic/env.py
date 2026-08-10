@@ -10,6 +10,7 @@ from alembic import context
 from src.models.api_key import ApiKey  # noqa
 from src.models.auth_code import AuthCode  # noqa
 from src.models.base import Base  # Import the Base from your models
+from src.models.blocked_email_domain import BlockedEmailDomain  # noqa
 from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.entitlement_window import EntitlementWindow  # noqa

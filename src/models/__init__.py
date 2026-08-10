@@ -3,6 +3,7 @@
 from src.models.api_key import ApiKey
 from src.models.auth_code import AuthCode
 from src.models.base import Base
+from src.models.blocked_email_domain import BlockedEmailDomain
 from src.models.credit_transaction import CreditTransaction, CreditTransactionProvider, CreditTransactionStatus
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
@@ -21,6 +22,7 @@ __all__ = [
     "ApiKey",
     "AuthCode",
     "Base",
+    "BlockedEmailDomain",
     "CreditTransaction",
     "CreditTransactionProvider",
     "CreditTransactionStatus",
