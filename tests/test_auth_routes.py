@@ -210,6 +210,32 @@ async def test_refresh_without_token_is_401(async_client):
     assert response.status_code == 401
 
 
+async def test_refresh_rejects_suspended_user_and_revokes_session(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    pair = (
+        await async_client.post(
+            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+        )
+    ).json()
+
+    async with AsyncSessionLocal() as db:
+        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
+        user.suspended_at = datetime.now()
+        await db.commit()
+
+    refused = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
+    assert refused.status_code == 401
+
+    # The session is revoked, so lifting the suspension can't resurrect the old cookie.
+    async with AsyncSessionLocal() as db:
+        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
+        user.suspended_at = None
+        await db.commit()
+    retried = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
+    assert retried.status_code == 401
+
+
 async def test_logout_revokes_session_from_cookie(async_client):
     account = Account.create()
     message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]

@@ -416,6 +416,12 @@ async def refresh_tokens(
         user = await db.get(User, session.user_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        if user.suspended_at is not None:
+            # Suspension must end the session here too, or the refresh cookie keeps minting access
+            # tokens for 90 days while every authenticated route 401s — the client never logs out.
+            session.revoked_at = datetime.now()
+            await db.commit()
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
         new_refresh = create_refresh_token(user.id, session.id)
         session.refresh_token_hash = _hash(new_refresh)
         await db.flush()
