@@ -1,7 +1,9 @@
+import pytest
 from sqlalchemy import select
 
 from src.models.blocked_email_domain import BlockedEmailDomain
-from src.services.disposable_email import _BLOCKLIST, is_blocked_signup_domain
+from src.services.disposable_email import _BLOCKLIST, DisposableEmailError, is_blocked_signup_domain
+from src.services.users import get_or_create_user_by_email, get_user_by_email
 
 
 async def test_blocked_domain_row_round_trips(db):
@@ -46,3 +48,40 @@ async def test_match_ignores_case_and_surrounding_whitespace(db):
 
 async def test_address_without_at_sign_is_not_blocked(db):
     assert await is_blocked_signup_domain(db, "notanemail") is False
+
+
+async def test_signup_on_listed_domain_raises(db):
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    with pytest.raises(DisposableEmailError):
+        await get_or_create_user_by_email(db, "newcomer@blocked-fixture.test")
+
+
+async def test_signup_on_listed_domain_creates_no_user(db):
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    with pytest.raises(DisposableEmailError):
+        await get_or_create_user_by_email(db, "newcomer@blocked-fixture.test")
+
+    assert await get_user_by_email(db, "newcomer@blocked-fixture.test") is None
+
+
+async def test_signup_on_unlisted_domain_succeeds(db):
+    user, created = await get_or_create_user_by_email(db, "newcomer@allowed-fixture.test")
+
+    assert created is True
+    assert user.email == "newcomer@allowed-fixture.test"
+
+
+async def test_account_predating_the_block_still_resolves(db):
+    user, created = await get_or_create_user_by_email(db, "early@blocked-fixture.test")
+    assert created is True
+
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    same, created_again = await get_or_create_user_by_email(db, "early@blocked-fixture.test")
+    assert created_again is False
+    assert same.id == user.id
