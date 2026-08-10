@@ -9,6 +9,7 @@ from sqlalchemy import select
 from src.config import config
 from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
+from src.models.session import Session
 from src.models.user import User
 from src.services.disposable_email import _BLOCKLIST
 from src.services.magic_link import create_magic_link
@@ -68,6 +69,46 @@ async def test_email_magic_link_verify(async_client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["access_token"]
+
+
+async def test_email_magic_link_verify_refuses_suspended_user(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
+    email = "suspended-login@example.com"
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, email)
+        user.suspended_at = datetime.now()
+        await db.commit()
+        _token, code = await create_magic_link(db, email)
+        await db.commit()
+
+    resp = await async_client.post("/auth/verify-magic-link", json={"email": email, "code": code})
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "account_suspended"
+
+    # No session row, or the refresh cookie would outlive the refused login.
+    async with AsyncSessionLocal() as db:
+        user = (await db.execute(select(User).where(User.email == email))).scalars().one()
+        sessions = (await db.execute(select(Session).where(Session.user_id == user.id))).scalars().all()
+        assert sessions == []
+
+
+async def test_wallet_verify_refuses_suspended_user(async_client):
+    account = Account.create()
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    await async_client.post(
+        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+    )
+    async with AsyncSessionLocal() as db:
+        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
+        user.suspended_at = datetime.now()
+        await db.commit()
+
+    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
+    refused = await async_client.post(
+        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
+    )
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["code"] == "account_suspended"
 
 
 async def test_email_magic_link_verify_refuses_disposable_domain(async_client, monkeypatch):

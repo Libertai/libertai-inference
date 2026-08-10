@@ -59,6 +59,15 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 _AUTH_CODE_TTL_SECONDS = 60
 
+# Machine-readable so the web apps can tell a closed account from a stale link without matching
+# prose. `oauth_callback` redirects rather than returning JSON, so it carries the same code as a
+# query param — keep the two spellings identical.
+ACCOUNT_SUSPENDED_CODE = "account_suspended"
+ACCOUNT_SUSPENDED_DETAIL = {
+    "code": ACCOUNT_SUSPENDED_CODE,
+    "message": "This account has been suspended.",
+}
+
 
 def _set_session_cookie(response: fastapi.Response, access_token: str) -> None:
     """Set the shared session cookie so console + chat web apps share login across *.libertai.io."""
@@ -108,7 +117,14 @@ def _pkce_matches(verifier: str, challenge: str) -> bool:
 
 
 async def _issue_token_pair(db, user: User, device_info: str | None = None) -> TokenPairResponse:
-    """Create a Session + access/refresh pair, storing the refresh hash for rotation."""
+    """Create a Session + access/refresh pair, storing the refresh hash for rotation.
+
+    Every login path mints its session here, so this is where suspension is enforced on the way
+    in. Guarding only token *use* leaves login succeeding and every subsequent call 401ing, which
+    reads as a broken client rather than a closed account.
+    """
+    if user.suspended_at is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ACCOUNT_SUSPENDED_DETAIL)
     session = Session(
         user_id=user.id,
         refresh_token_hash="pending",
@@ -311,9 +327,22 @@ async def oauth_callback(
     redirect_uri = f"{config.API_URL}/auth/oauth/{provider}/callback"
     info = await oauth.exchange_code_for_user_info(provider, code, redirect_uri)
 
+    # Re-validate the carried base (defence in depth — cookies are client-supplied) before redirecting.
+    frontend_base = resolve_frontend_base(oauth_redirect)
+
     async with AsyncSessionLocal() as db:
         user, _ = await get_or_create_user_by_oauth(db, info)
-        pair = await _issue_token_pair(db, user)
+        try:
+            pair = await _issue_token_pair(db, user)
+        except HTTPException as exc:
+            # This arm returns a redirect, not JSON, so a raised 403 would strand the user on a
+            # bare error page instead of the app that can explain it.
+            if exc.status_code != status.HTTP_403_FORBIDDEN:
+                raise
+            response = RedirectResponse(f"{frontend_base}/auth/callback?error={ACCOUNT_SUSPENDED_CODE}")
+            response.delete_cookie("oauth_state")
+            response.delete_cookie("oauth_redirect")
+            return response
         one_time_code = secrets.token_urlsafe(32)
         db.add(
             AuthCode(
@@ -326,8 +355,6 @@ async def oauth_callback(
         )
         await db.commit()
 
-    # Re-validate the carried base (defence in depth — cookies are client-supplied) before redirecting.
-    frontend_base = resolve_frontend_base(oauth_redirect)
     response = RedirectResponse(f"{frontend_base}/auth/callback?code={one_time_code}")
     response.delete_cookie("oauth_state")
     response.delete_cookie("oauth_redirect")
