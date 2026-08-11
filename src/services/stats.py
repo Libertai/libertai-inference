@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import ClassVar
 
 from fastapi import HTTPException, status
-from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, select
+from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.orm import aliased
 
 from src.config import config
@@ -89,6 +89,23 @@ def _user_label(user: User) -> str:
     bare contact. ``contact`` resolves email > wallet address > user id."""
     contact = user.email or user.address or str(user.id)
     return f"{user.display_name} ({contact})" if user.display_name else contact
+
+
+def _live_keys(stmt):
+    """Restrict a statement already joined to ``ApiKey`` to keys owned by a live account.
+
+    A suspended account is not part of the user base, so its calls, messages, tokens and
+    credits are excluded from every global statistic. The join is an OUTER join and the
+    predicate admits ``user_id IS NULL`` because that column is nullable: liberclaw keys hang
+    off ``liberclaw_user_id`` and legacy keys off nothing. An inner join, or a bare
+    ``suspended_at IS NULL``, silently drops both from the totals.
+
+    ``liberclaw_users`` carries no suspension column, so liberclaw traffic cannot be filtered
+    here; that side is cut by deactivating the key instead.
+    """
+    return stmt.outerjoin(User, ApiKey.user_id == User.id).where(
+        or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None))
+    )
 
 
 class StatsService:
@@ -314,12 +331,13 @@ class StatsService:
 
             model_stats = (
                 await db.execute(
-                    select(
-                        cast(InferenceCall.used_at, Date).label("date"),
-                        InferenceCall.model_name.label("model_name"),
-                        func.sum(InferenceCall.credits_used).label("credits"),
+                    _live_keys(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            InferenceCall.model_name.label("model_name"),
+                            func.sum(InferenceCall.credits_used).label("credits"),
+                        ).join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     )
-                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .where(
                         ApiKey.type == key_type,
                         InferenceCall.used_at >= start_datetime,
@@ -353,12 +371,13 @@ class StatsService:
 
             model_stats = (
                 await db.execute(
-                    select(
-                        cast(InferenceCall.used_at, Date).label("date"),
-                        InferenceCall.model_name.label("name"),
-                        func.count(InferenceCall.id).label("count"),
+                    _live_keys(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            InferenceCall.model_name.label("name"),
+                            func.count(InferenceCall.id).label("count"),
+                        ).join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     )
-                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .where(
                         ApiKey.type == key_type,
                         InferenceCall.used_at >= start_datetime,
@@ -392,14 +411,15 @@ class StatsService:
 
             inference_stats = (
                 await db.execute(
-                    select(
-                        cast(InferenceCall.used_at, Date).label("date"),
-                        InferenceCall.model_name.label("model_name"),
-                        func.sum(InferenceCall.input_tokens).label("input_tokens"),
-                        func.sum(InferenceCall.output_tokens).label("output_tokens"),
-                        func.sum(InferenceCall.cached_tokens).label("cached_tokens"),
+                    _live_keys(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            InferenceCall.model_name.label("model_name"),
+                            func.sum(InferenceCall.input_tokens).label("input_tokens"),
+                            func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                            func.sum(InferenceCall.cached_tokens).label("cached_tokens"),
+                        ).join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     )
-                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .where(
                         ApiKey.type == key_type,
                         InferenceCall.used_at >= start_datetime,
@@ -523,21 +543,23 @@ class StatsService:
                 ).label("segment")
                 raw = (
                     await db.execute(
-                        select(
-                            cast(InferenceCall.used_at, Date).label("date"),
-                            identity.label("ident"),
-                            segment,
-                        )
-                        .select_from(InferenceCall)
-                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                        # At most one active subscription per user (unique constraint), so this
-                        # left join adds at most one paid-tier row per call.
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(InferenceCall.used_at, Date).label("date"),
+                                identity.label("ident"),
+                                segment,
+                            )
+                            .select_from(InferenceCall)
+                            .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                            # At most one active subscription per user (unique constraint), so
+                            # this left join adds at most one paid-tier row per call.
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(
                             ApiKey.type == key_type,
@@ -554,12 +576,14 @@ class StatsService:
 
             raw = (
                 await db.execute(
-                    select(
-                        cast(InferenceCall.used_at, Date).label("date"),
-                        identity.label("ident"),
+                    _live_keys(
+                        select(
+                            cast(InferenceCall.used_at, Date).label("date"),
+                            identity.label("ident"),
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     )
-                    .select_from(InferenceCall)
-                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                     .where(
                         ApiKey.type == key_type,
                         identity.isnot(None),
@@ -594,19 +618,21 @@ class StatsService:
 
                 raw = (
                     await db.execute(
-                        select(
-                            cast(ChatRequest.created_at, Date).label("date"),
-                            ApiKey.user_id.label("ident"),
-                            segment,
-                        )
-                        .select_from(ChatRequest)
-                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(ChatRequest.created_at, Date).label("date"),
+                                ApiKey.user_id.label("ident"),
+                                segment,
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(
                             ApiKey.user_id.isnot(None),
@@ -651,23 +677,25 @@ class StatsService:
 
                 inference_rows = (
                     await db.execute(
-                        select(
-                            cast(InferenceCall.used_at, Date).label("date"),
-                            ApiKey.type.label("type"),
-                            ApiKey.user_id.label("user_id"),
-                            ApiKey.liberclaw_user_id.label("liberclaw_user_id"),
-                            segment,
-                        )
-                        .select_from(InferenceCall)
-                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                        # At most one active subscription per user (unique constraint), so this
-                        # left join adds at most one paid-tier row per call.
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(InferenceCall.used_at, Date).label("date"),
+                                ApiKey.type.label("type"),
+                                ApiKey.user_id.label("user_id"),
+                                ApiKey.liberclaw_user_id.label("liberclaw_user_id"),
+                                segment,
+                            )
+                            .select_from(InferenceCall)
+                            .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                            # At most one active subscription per user (unique constraint), so
+                            # this left join adds at most one paid-tier row per call.
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(
                             ApiKey.type.in_([ApiKeyType.api, ApiKeyType.cli, ApiKeyType.liberclaw]),
@@ -680,19 +708,21 @@ class StatsService:
 
                 chat_rows = (
                     await db.execute(
-                        select(
-                            cast(ChatRequest.created_at, Date).label("date"),
-                            ApiKey.user_id.label("user_id"),
-                            segment,
-                        )
-                        .select_from(ChatRequest)
-                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(ChatRequest.created_at, Date).label("date"),
+                                ApiKey.user_id.label("user_id"),
+                                segment,
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(
                             ApiKey.user_id.isnot(None),
@@ -736,10 +766,14 @@ class StatsService:
 
                 chat_stats = (
                     await db.execute(
-                        select(
-                            cast(ChatRequest.created_at, Date).label("date"),
-                            ChatRequest.model_name.label("name"),
-                            func.count(ChatRequest.id).label("count"),
+                        _live_keys(
+                            select(
+                                cast(ChatRequest.created_at, Date).label("date"),
+                                ChatRequest.model_name.label("name"),
+                                func.count(ChatRequest.id).label("count"),
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
                         )
                         .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
                         .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
@@ -774,12 +808,16 @@ class StatsService:
 
                 chat_stats = (
                     await db.execute(
-                        select(
-                            cast(ChatRequest.created_at, Date).label("date"),
-                            ChatRequest.model_name.label("model_name"),
-                            func.sum(ChatRequest.input_tokens).label("input_tokens"),
-                            func.sum(ChatRequest.output_tokens).label("output_tokens"),
-                            func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                        _live_keys(
+                            select(
+                                cast(ChatRequest.created_at, Date).label("date"),
+                                ChatRequest.model_name.label("model_name"),
+                                func.sum(ChatRequest.input_tokens).label("input_tokens"),
+                                func.sum(ChatRequest.output_tokens).label("output_tokens"),
+                                func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
                         )
                         .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
                         .group_by(cast(ChatRequest.created_at, Date), ChatRequest.model_name)
@@ -827,20 +865,28 @@ class StatsService:
 
                 inference = (
                     await db.execute(
-                        select(
-                            func.count(InferenceCall.id).label("cnt"),
-                            func.coalesce(func.sum(InferenceCall.input_tokens), 0).label("inp"),
-                            func.coalesce(func.sum(InferenceCall.output_tokens), 0).label("out"),
+                        _live_keys(
+                            select(
+                                func.count(InferenceCall.id).label("cnt"),
+                                func.coalesce(func.sum(InferenceCall.input_tokens), 0).label("inp"),
+                                func.coalesce(func.sum(InferenceCall.output_tokens), 0).label("out"),
+                            )
+                            .select_from(InferenceCall)
+                            .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                         ).where(InferenceCall.used_at >= start_datetime, InferenceCall.used_at <= end_datetime)
                     )
                 ).first()
 
                 chat = (
                     await db.execute(
-                        select(
-                            func.count(ChatRequest.id).label("cnt"),
-                            func.coalesce(func.sum(ChatRequest.input_tokens), 0).label("inp"),
-                            func.coalesce(func.sum(ChatRequest.output_tokens), 0).label("out"),
+                        _live_keys(
+                            select(
+                                func.count(ChatRequest.id).label("cnt"),
+                                func.coalesce(func.sum(ChatRequest.input_tokens), 0).label("inp"),
+                                func.coalesce(func.sum(ChatRequest.output_tokens), 0).label("out"),
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
                         ).where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
                     )
                 ).first()
@@ -878,21 +924,23 @@ class StatsService:
 
                 rows = (
                     await db.execute(
-                        select(
-                            cast(ChatRequest.created_at, Date).label("date"),
-                            segment,
-                            func.count(ChatRequest.id).label("cnt"),
-                        )
-                        .select_from(ChatRequest)
-                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        # At most one active subscription per user (unique constraint), so this
-                        # left join adds at most one paid-tier row per message.
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(ChatRequest.created_at, Date).label("date"),
+                                segment,
+                                func.count(ChatRequest.id).label("cnt"),
+                            )
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                            # At most one active subscription per user (unique constraint), so
+                            # this left join adds at most one paid-tier row per message.
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(ChatRequest.created_at >= start_datetime, ChatRequest.created_at <= end_datetime)
                         .group_by(cast(ChatRequest.created_at, Date), segment)
@@ -938,21 +986,23 @@ class StatsService:
 
                 rows = (
                     await db.execute(
-                        select(
-                            cast(InferenceCall.used_at, Date).label("date"),
-                            segment,
-                            func.count(InferenceCall.id).label("cnt"),
-                        )
-                        .select_from(InferenceCall)
-                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                        # At most one active subscription per user (unique constraint), so this
-                        # left join adds at most one paid-tier row per call.
-                        .outerjoin(
-                            PlanSubscription,
-                            and_(
-                                PlanSubscription.user_id == ApiKey.user_id,
-                                PlanSubscription.status == "active",
-                            ),
+                        _live_keys(
+                            select(
+                                cast(InferenceCall.used_at, Date).label("date"),
+                                segment,
+                                func.count(InferenceCall.id).label("cnt"),
+                            )
+                            .select_from(InferenceCall)
+                            .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                            # At most one active subscription per user (unique constraint), so
+                            # this left join adds at most one paid-tier row per call.
+                            .outerjoin(
+                                PlanSubscription,
+                                and_(
+                                    PlanSubscription.user_id == ApiKey.user_id,
+                                    PlanSubscription.status == "active",
+                                ),
+                            )
                         )
                         .where(
                             ApiKey.type == key_type,
@@ -1036,13 +1086,16 @@ class StatsService:
         free users (no active paid sub), and anonymous users (distinct logged-out chat IPs)."""
         try:
             async with AsyncSessionLocal() as db:
+                # Suspended accounts are excluded from both terms, so the free count (a
+                # subtraction) stays consistent rather than absorbing the difference.
                 rows = (
                     await db.execute(
                         select(
                             PlanSubscription.tier.label("tier"),
                             func.count(distinct(PlanSubscription.user_id)).label("cnt"),
                         )
-                        .where(PlanSubscription.status == "active")
+                        .join(User, PlanSubscription.user_id == User.id)
+                        .where(PlanSubscription.status == "active", User.suspended_at.is_(None))
                         .group_by(PlanSubscription.tier)
                         .order_by(PlanSubscription.tier)
                     )
@@ -1050,7 +1103,9 @@ class StatsService:
                 by_tier = [TierSubscribers(tier=r.tier, active_subscribers=int(r.cnt or 0)) for r in rows]
                 total_paid = sum(t.active_subscribers for t in by_tier)
 
-                total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+                total_users = (
+                    await db.execute(select(func.count(User.id)).where(User.suspended_at.is_(None)))
+                ).scalar() or 0
                 # Registered users without an active paid subscription.
                 free_users = max(0, int(total_users) - total_paid)
 
@@ -1100,10 +1155,12 @@ class StatsService:
                 free_idents: set[str] = set()
                 inference_free = (
                     await db.execute(
-                        select(ApiKey.user_id)
-                        .select_from(InferenceCall)
-                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
-                        .outerjoin(PlanSubscription, no_active_sub)
+                        _live_keys(
+                            select(ApiKey.user_id)
+                            .select_from(InferenceCall)
+                            .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                            .outerjoin(PlanSubscription, no_active_sub)
+                        )
                         .where(
                             ApiKey.type.in_([ApiKeyType.api, ApiKeyType.cli]),
                             ApiKey.user_id.isnot(None),
@@ -1116,10 +1173,12 @@ class StatsService:
                 ).all()
                 chat_free = (
                     await db.execute(
-                        select(ApiKey.user_id)
-                        .select_from(ChatRequest)
-                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
-                        .outerjoin(PlanSubscription, no_active_sub)
+                        _live_keys(
+                            select(ApiKey.user_id)
+                            .select_from(ChatRequest)
+                            .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                            .outerjoin(PlanSubscription, no_active_sub)
+                        )
                         .where(
                             ApiKey.user_id.isnot(None),
                             PlanSubscription.id.is_(None),
@@ -1509,14 +1568,16 @@ class StatsService:
 
         rows = (
             await db.execute(
-                select(
-                    cast(InferenceCall.used_at, Date).label("date"),
-                    ApiKey.user_id.label("user_id"),
-                    func.coalesce(func.sum(InferenceCall.credits_used), 0.0).label("credits"),
-                    func.coalesce(func.sum(InferenceCall.tier_credits_used), 0.0).label("tier_credits"),
+                _live_keys(
+                    select(
+                        cast(InferenceCall.used_at, Date).label("date"),
+                        ApiKey.user_id.label("user_id"),
+                        func.coalesce(func.sum(InferenceCall.credits_used), 0.0).label("credits"),
+                        func.coalesce(func.sum(InferenceCall.tier_credits_used), 0.0).label("tier_credits"),
+                    )
+                    .select_from(InferenceCall)
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                 )
-                .select_from(InferenceCall)
-                .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
                 .where(
                     InferenceCall.used_at >= start_datetime,
                     InferenceCall.used_at <= end_datetime,
