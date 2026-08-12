@@ -782,6 +782,32 @@ async def test_refused_activation_is_recorded_as_an_audit_event(db):
 
 
 @pytest.mark.asyncio
+async def test_redelivered_refusal_is_recorded_once(db):
+    """Revolut redelivers an event until it is acknowledged; each delivery must dedup against
+    the refusal already on file rather than piling up rows."""
+    user = await _make_user(db)
+    manager = PaymentManager(FakeProvider(), db)
+    retired = PlanSubscription(
+        user_id=user.id, tier="go", provider="fake", status="expired",
+        provider_subscription_id="psub_retired",
+    )
+    db.add(retired)
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
+    await db.flush()
+
+    event = PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_stale",
+        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
+    )
+    await manager.handle_event(event)
+    await manager.handle_event(event)
+
+    assert (await _event_types(db, retired.id)).count("activation_refused") == 1
+
+
+@pytest.mark.asyncio
 async def test_refusal_survives_a_retirement_committed_during_the_lock_wait(db, monkeypatch):
     """The first refusal check reads outside the per-user mutex, so it can miss a retirement
     that commits while the webhook queues for it. Simulate that by blinding the first read."""
