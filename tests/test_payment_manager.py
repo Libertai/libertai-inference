@@ -415,14 +415,14 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
 
     # Upgrade to plus -> old sub stays active, new pending_upgrade checkout created.
     await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
-    parked = (
+    live = (
         await db.execute(
             select(PlanSubscription).where(
                 PlanSubscription.user_id == user.id, PlanSubscription.status == "active"
             )
         )
     ).scalar_one()
-    assert parked.tier == "go"
+    assert live.tier == "go"
 
     # Pay the new sub -> activates plus, old gets cancelled.
     await mgr.handle_event(
@@ -432,7 +432,7 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     )
     assert await mgr.current_tier(user.id) == "plus"
     assert "psub_1" in provider.cancelled
-    refreshed_old = await db.get(PlanSubscription, parked.id)
+    refreshed_old = await db.get(PlanSubscription, live.id)
     assert refreshed_old.status == "cancelled"
 
 
@@ -466,6 +466,48 @@ async def test_completed_upgrade_supersedes_and_prorates(db):
     assert old.status == "cancelled"
     assert "psub_old" in provider.cancelled
     assert await _balance(db, user.id) > 0  # unused remainder credited
+
+
+@pytest.mark.asyncio
+async def test_activation_abandoned_when_the_paid_sub_cannot_be_cancelled(db):
+    """A paid row that will not cancel at the provider stays live, so activating on top of it
+    would put two rows in the one-live-subscription index. The activation gives up instead."""
+
+    class UncancellableProvider(FakeProvider):
+        async def cancel_subscription(self, provider_subscription_id: str) -> None:
+            raise RuntimeError("provider down")
+
+    user = await _make_user(db)
+    provider = UncancellableProvider()
+    manager = PaymentManager(provider, db)
+    old = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=10),
+        current_period_end=datetime.now() + timedelta(days=20),
+    )
+    new = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add_all([old, new])
+    await db.flush()
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_1",
+        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
+    ))
+
+    await db.refresh(old)
+    await db.refresh(new)
+    assert old.status == "active"  # entitlement stays where it was paid for
+    assert new.status == "pending_upgrade"  # nothing half-applied
+    assert await _balance(db, user.id) == 0.0  # no remainder credited for a cycle still running
+    assert "activated" not in await _event_types(db, new.id)
+    # The session is still usable: the abandon happened before any write, not via a rollback.
+    new.tier = "plus"
+    await db.flush()
 
 
 @pytest.mark.asyncio
