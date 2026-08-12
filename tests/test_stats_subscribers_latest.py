@@ -79,6 +79,20 @@ async def test_latest_subscribers_default_hides_unpaid_checkouts():
     assert all(s.status != "pending_upgrade" for s in result.subscribers)
 
 
+async def test_latest_subscribers_upgrading_filter_still_isolates_legacy_rows():
+    async with AsyncSessionLocal() as db:
+        user = User(email="legacy-upgrading@example.com")
+        db.add(user)
+        await db.flush()
+        sub = PlanSubscription(user_id=user.id, tier="max", provider="fake", status="upgrading")
+        sub.created_at = datetime(2099, 3, 2)
+        db.add(sub)
+        await db.commit()
+
+    result = await StatsService.get_latest_subscribers(limit=50, statuses=[SubscriptionStatusFilter.upgrading])
+    assert result.subscribers and all(s.status == "upgrading" for s in result.subscribers)
+
+
 async def test_latest_subscribers_total_counts_all_matching_ignoring_limit():
     async with AsyncSessionLocal() as db:
         for i in range(3):
