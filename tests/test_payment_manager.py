@@ -399,7 +399,7 @@ async def test_renewal_failure_marks_overdue(db):
 
 
 @pytest.mark.asyncio
-async def test_upgrade_parks_then_cancels_old(db):
+async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
@@ -434,6 +434,154 @@ async def test_upgrade_parks_then_cancels_old(db):
     assert "psub_1" in provider.cancelled
     refreshed_old = await db.get(PlanSubscription, parked.id)
     assert refreshed_old.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_completed_upgrade_supersedes_and_prorates(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    old = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=10),
+        current_period_end=datetime.now() + timedelta(days=20),
+    )
+    new = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add_all([old, new])
+    await db.flush()
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_1",
+        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
+    ))
+
+    await db.refresh(old)
+    await db.refresh(new)
+    assert new.status == "active"
+    assert old.status == "cancelled"
+    assert "psub_old" in provider.cancelled
+    assert await _balance(db, user.id) > 0  # unused remainder credited
+
+
+@pytest.mark.asyncio
+async def test_renewal_does_not_retire_an_open_upgrade_checkout(db):
+    """ORDER_COMPLETED also fires for renewals; the checkout must survive one."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    old = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=30),
+        current_period_end=datetime.now(),
+    )
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add_all([old, checkout])
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=old.id, event_type="activated"))
+    await db.flush()
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_renew",
+        provider_subscription_id="psub_old", order_id="ord_renew", metadata={},
+    ))
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
+    assert "psub_new" not in provider.cancelled
+
+
+@pytest.mark.asyncio
+async def test_refuses_to_activate_a_retired_checkout(db):
+    """A payment landing on a row we already expired must not supersede the live sub."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    live = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="active",
+        provider_subscription_id="psub_live",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    )
+    retired = PlanSubscription(
+        user_id=user.id, tier="go", provider="fake", status="expired",
+        provider_subscription_id="psub_retired",
+    )
+    db.add_all([live, retired])
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
+    await db.flush()
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_stale",
+        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
+    ))
+
+    await db.refresh(live)
+    await db.refresh(retired)
+    assert live.status == "active"
+    assert retired.status == "expired"
+    assert provider.cancelled == []
+    events = (await db.execute(
+        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == retired.id)
+    )).scalars().all()
+    assert "activated" not in events  # a refused row must never carry an activation
+
+
+@pytest.mark.asyncio
+async def test_refusal_survives_a_retirement_committed_during_the_lock_wait(db, monkeypatch):
+    """The first refusal check reads outside the per-user mutex, so it can miss a retirement
+    that commits while the webhook queues for it. Simulate that by blinding the first read."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    live = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="active",
+        provider_subscription_id="psub_live",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    )
+    retired = PlanSubscription(
+        user_id=user.id, tier="go", provider="fake", status="expired",
+        provider_subscription_id="psub_retired",
+    )
+    db.add_all([live, retired])
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
+    await db.flush()
+
+    real_check = manager._is_retired_checkout
+    calls = []
+
+    async def blind_first(sub):
+        calls.append(sub.id)
+        return False if len(calls) == 1 else await real_check(sub)
+
+    monkeypatch.setattr(manager, "_is_retired_checkout", blind_first)
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_stale",
+        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
+    ))
+
+    assert len(calls) == 2  # the post-lock read is what refused it
+    await db.refresh(live)
+    await db.refresh(retired)
+    assert live.status == "active"
+    assert retired.status == "expired"
+    assert provider.cancelled == []
+    assert "activated" not in await _event_types(db, retired.id)
 
 
 @pytest.mark.asyncio

@@ -15,13 +15,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.credit_transaction import CreditTransaction
-from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
@@ -54,6 +54,11 @@ def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
 
 
+def _user_lock_key(user_id: uuid.UUID) -> int:
+    """Signed 64-bit advisory-lock key derived from a user id."""
+    return int.from_bytes(user_id.bytes[:8], "big", signed=True)
+
+
 class PaymentManager:
     def __init__(self, provider: PaymentProvider, db: AsyncSession):
         self.provider = provider
@@ -68,6 +73,15 @@ class PaymentManager:
         if lock:
             stmt = stmt.with_for_update()
         return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _lock_user(self, user_id: uuid.UUID) -> None:
+        """Take the per-user mutex over subscription mutations, for the rest of the transaction.
+
+        Every path that touches more than one of a user's rows takes it FIRST, before any row
+        lock: the webhook and the checkout paths acquire the live row and the checkout row in
+        opposite orders, so row-level locking alone deadlocks them.
+        """
+        await self.db.execute(select(func.pg_advisory_xact_lock(_user_lock_key(user_id))))
 
     async def current_tier(self, user_id: uuid.UUID) -> str:
         sub = await self._active_subscription(user_id, lock=False)
@@ -276,6 +290,7 @@ class PaymentManager:
         return await self._open_checkout(user, tier, redirect_url, currency, "pending")
 
     async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+        await self._lock_user(user.id)
         if new_tier not in PAID_TIERS:
             raise ValueError(f"Invalid tier: {new_tier}")
         # Validated against the live row's tier, not current_tier(): that returns "free" for
@@ -390,27 +405,66 @@ class PaymentManager:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
             return False
 
-    async def _cancel_upgrading_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> str | None:
-        """Cancel any parked ``upgrading`` subs superseded by ``exclude_sub_id``'s activation.
+    async def _supersede_other_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> str | None:
+        """Retire the user's other live rows in favour of a just-paid subscription.
 
-        Returns the tier we upgraded FROM (the parked sub's tier), or ``None`` if this wasn't an
-        upgrade — lets the caller record a single ``upgraded`` event linking the two subs.
+        Returns the tier upgraded FROM when a paid row was superseded, so the caller can log a
+        single ``upgraded`` event linking the pair.
+
+        ``pending_upgrade`` is deliberately absent from the status set: ORDER_COMPLETED also
+        fires for renewals of the live subscription, and including it would cancel the user's
+        open checkout at the provider mid-payment. ``upgrading`` is included to catch rows
+        parked by the previous release.
         """
-        result = await self.db.execute(
-            select(PlanSubscription).where(
-                PlanSubscription.user_id == user_id,
-                PlanSubscription.status == "upgrading",
-                PlanSubscription.id != exclude_sub_id,
+        rows = (
+            await self.db.execute(
+                select(PlanSubscription).where(
+                    PlanSubscription.user_id == user_id,
+                    PlanSubscription.status.in_((*ACTIVE_STATUSES, "upgrading")),
+                    PlanSubscription.id != exclude_sub_id,
+                )
             )
-        )
+        ).scalars().all()
         from_tier: str | None = None
-        for old_sub in result.scalars().all():
-            from_tier = old_sub.tier
-            await self._cancel_on_provider(old_sub)
-            old_sub.status = "cancelled"
-            await self._log_event(old_sub, "cancelled_for_upgrade")
-            await self._credit_unused_remainder(old_sub)
+        for old_sub in rows:
+            paid = old_sub.current_period_start is not None
+            if not await self._cancel_on_provider(old_sub):
+                continue
+            if paid:
+                from_tier = old_sub.tier
+                old_sub.status = "cancelled"
+                await self._log_event(old_sub, "cancelled_for_upgrade")
+                await self._credit_unused_remainder(old_sub)
+            else:
+                old_sub.status = "expired"
+                await self._log_event(old_sub, "expired_abandoned_checkout")
         return from_tier
+
+    async def _is_retired_checkout(self, sub: PlanSubscription) -> bool:
+        """Has this row already been retired in favour of another subscription?
+
+        Keyed on the audit events rather than the status: the row may have been expired by the
+        sweep, by a later checkout, or by a wind-down request, and activating it now would
+        cancel and prorate whatever the user has live at this moment.
+        """
+        return (
+            await self.db.execute(
+                select(PlanSubscriptionEvent.id)
+                .where(
+                    PlanSubscriptionEvent.subscription_id == sub.id,
+                    PlanSubscriptionEvent.event_type.in_(
+                        ("cancelled_for_upgrade", "expired_abandoned_checkout")
+                    ),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none() is not None
+
+    def _log_refused_activation(self, sub: PlanSubscription, event: PaymentEvent) -> None:
+        logger.error(
+            f"Refusing activation of retired checkout {sub.id} (user {sub.user_id}, "
+            f"order {event.order_id}): the payment needs manual resolution"
+        )
 
     async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
         """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
@@ -473,11 +527,33 @@ class PaymentManager:
         ) and await self._settle_topup(event):
             return
 
-        sub = await self._resolve_subscription(event)
+        sub = await self._resolve_subscription(event, lock=False)
         if not sub:
             # Expected noise: the Revolut merchant account is shared with liberclaw, so this
             # backend receives webhook events for orders/subscriptions it doesn't own.
             logger.info(f"Ignoring payment event with no matching subscription: {event}")
+            return
+
+        activating = event.type == PaymentEventType.order_completed
+        # Refused before anything is written: a refused row that carries an ``activated``
+        # event gets an open-ended paying span in the subscription replay, because
+        # ``expired_abandoned_checkout`` is not a terminal event.
+        if activating and await self._is_retired_checkout(sub):
+            self._log_refused_activation(sub, event)
+            return
+
+        # Per-user mutex for the whole webhook. Row-level ordering cannot serve here:
+        # _resolve_subscription runs first (it is what yields the user id), so any FOR UPDATE
+        # it took would sit outside the ordering.
+        await self._lock_user(sub.user_id)
+        sub = await self._resolve_subscription(event, lock=True)
+        if not sub:
+            return
+
+        # The check above read outside the mutex, so a retirement that committed while this
+        # call queued for it is only visible now — still before any write.
+        if activating and await self._is_retired_checkout(sub):
+            self._log_refused_activation(sub, event)
             return
 
         # Dedup subscription events.
@@ -496,14 +572,6 @@ class PaymentManager:
         user = (await self.db.execute(select(User).where(User.id == sub.user_id))).scalar_one()
 
         if event.type == PaymentEventType.order_completed:
-            sub.status = "active"
-            if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
-                # A scheduled paid->paid downgrade took effect: this payment is the first
-                # cycle billed on the lower plan variation.
-                await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
-                sub.tier = sub.pending_tier
-                sub.pending_tier = None
-            await self._refresh_cycle_dates(sub)
             already_activated = (
                 await self.db.execute(
                     select(PlanSubscriptionEvent.id)
@@ -514,6 +582,19 @@ class PaymentManager:
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
+            await self.db.flush()
+
+            if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
+                # A scheduled paid->paid downgrade took effect: this payment is the first
+                # cycle billed on the lower plan variation.
+                await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
+                sub.tier = sub.pending_tier
+                sub.pending_tier = None
+            await self._refresh_cycle_dates(sub)
+            # Last mutation of this row: two ``active`` rows at once violate the
+            # one-live-subscription index, which is enforced per statement.
+            sub.status = "active"
             # First successful charge is "activated"; every later completed cycle is a renewal.
             await self._log_event(
                 sub,
@@ -523,7 +604,6 @@ class PaymentManager:
             )
             # If this activation completes an upgrade, record it on the new sub so the two
             # subscriptions read as a single "Go -> Plus" event downstream.
-            upgraded_from = await self._cancel_upgrading_subs(user.id, exclude_sub_id=sub.id)
             if upgraded_from is not None and upgraded_from != sub.tier:
                 await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
         elif event.type == PaymentEventType.order_failed:
@@ -568,15 +648,14 @@ class PaymentManager:
         ).scalar_one_or_none()
         return existing is not None
 
-    async def _resolve_subscription(self, event: PaymentEvent) -> PlanSubscription | None:
+    async def _resolve_subscription(self, event: PaymentEvent, lock: bool = True) -> PlanSubscription | None:
+        """Find the subscription an event belongs to. ``lock=False`` for the lookup that runs
+        before the per-user mutex is held, so no row lock is taken outside that ordering."""
         if event.provider_subscription_id:
-            sub = (
-                await self.db.execute(
-                    select(PlanSubscription)
-                    .where(PlanSubscription.provider_subscription_id == event.provider_subscription_id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
+            stmt = select(PlanSubscription).where(
+                PlanSubscription.provider_subscription_id == event.provider_subscription_id
+            )
+            sub = (await self.db.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
             if sub:
                 return sub
 
@@ -586,13 +665,10 @@ class PaymentManager:
                 channel = order.get("channel_data") or {}
                 rev_sub_id = channel.get("subscription_id")
                 if rev_sub_id:
-                    return (
-                        await self.db.execute(
-                            select(PlanSubscription)
-                            .where(PlanSubscription.provider_subscription_id == rev_sub_id)
-                            .with_for_update()
-                        )
-                    ).scalar_one_or_none()
+                    stmt = select(PlanSubscription).where(
+                        PlanSubscription.provider_subscription_id == rev_sub_id
+                    )
+                    return (await self.db.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
             except Exception:
                 logger.warning(f"Failed to resolve order {event.order_id} to subscription", exc_info=True)
         return None
