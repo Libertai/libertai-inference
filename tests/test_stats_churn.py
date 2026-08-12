@@ -69,3 +69,19 @@ def test_expired_insufficient_credits_ends_timeline_and_counts_as_churn():
     stats = StatsService._churn_from_timelines([timeline], date(2026, 2, 1), date(2026, 2, 28))
     assert stats.total_new == 1
     assert stats.total_churned == 1
+
+
+def test_activation_refused_is_not_terminal_or_mapped():
+    """A refusal on a row that never activated must not register as churn (it isn't terminal)
+    and must not appear in the admin activity feed (it isn't a user-facing lifecycle event)."""
+    assert "activation_refused" not in StatsService._TERMINAL_EVENTS
+    assert "activation_refused" not in StatsService._CHURN_TERMINAL_EVENTS
+    assert "activation_refused" not in StatsService._ACTIVITY_TYPE_MAP
+
+    sub = FakeSub(tier="go")
+    timeline = StatsService._replay_subscription_timelines(
+        [sub],
+        {sub.id: [FakeEvent("activation_refused", datetime(2026, 2, 15))]},
+    )[0]
+    assert timeline["ended_on"] is None  # a row that never activated has no timeline to end
+    assert timeline["terminal_event"] is None

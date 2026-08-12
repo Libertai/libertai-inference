@@ -679,6 +679,38 @@ async def test_refuses_to_activate_a_retired_checkout(db):
 
 
 @pytest.mark.asyncio
+async def test_refused_activation_is_recorded_as_an_audit_event(db):
+    """Container logs only retain since the last deploy — the refusal must survive as a
+    queryable DB row so an operator can find and credit the charge."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    retired = PlanSubscription(
+        user_id=user.id, tier="go", provider="fake", status="expired",
+        provider_subscription_id="psub_retired",
+    )
+    db.add(retired)
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
+    await db.flush()
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_stale",
+        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
+    ))
+
+    refusal = (await db.execute(
+        select(PlanSubscriptionEvent)
+        .where(
+            PlanSubscriptionEvent.subscription_id == retired.id,
+            PlanSubscriptionEvent.event_type == "activation_refused",
+        )
+    )).scalar_one()
+    assert refusal.metadata_json == {"order_id": "ord_stale"}
+
+
+@pytest.mark.asyncio
 async def test_refusal_survives_a_retirement_committed_during_the_lock_wait(db, monkeypatch):
     """The first refusal check reads outside the per-user mutex, so it can miss a retirement
     that commits while the webhook queues for it. Simulate that by blinding the first read."""

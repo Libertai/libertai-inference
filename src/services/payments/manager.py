@@ -460,9 +460,14 @@ class PaymentManager:
         # it occupies no entitlement and nothing was charged for it.
         retiring: list[PlanSubscription] = []
         for old_sub in rows:
+            paid = old_sub.current_period_start is not None
+            logger.info(
+                f"Superseding sub {old_sub.id} (provider {old_sub.provider_subscription_id}, "
+                f"tier {old_sub.tier}, paid={paid}) in favour of {exclude_sub_id}"
+            )
             if await self._cancel_on_provider(old_sub):
                 retiring.append(old_sub)
-            elif old_sub.current_period_start is not None:
+            elif paid:
                 return False, None
 
         from_tier: str | None = None
@@ -512,11 +517,16 @@ class PaymentManager:
             )
         ).scalar_one_or_none() is not None
 
-    def _log_refused_activation(self, sub: PlanSubscription, event: PaymentEvent) -> None:
+    async def _log_refused_activation(self, sub: PlanSubscription, event: PaymentEvent) -> None:
+        """The user has been charged and received nothing. Container logs only retain since the
+        last deploy, so the audit event — not this log line — is the durable record an operator
+        finds the order id and subscription in.
+        """
         logger.error(
             f"Refusing activation of retired checkout {sub.id} (user {sub.user_id}, "
             f"order {event.order_id}): the payment needs manual resolution"
         )
+        await self._log_event(sub, "activation_refused", metadata={"order_id": event.order_id})
 
     async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
         """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
@@ -596,7 +606,7 @@ class PaymentManager:
         # event gets an open-ended paying span in the subscription replay, because
         # ``expired_abandoned_checkout`` is not a terminal event.
         if activating and await self._is_retired_checkout(sub):
-            self._log_refused_activation(sub, event)
+            await self._log_refused_activation(sub, event)
             return
 
         # Per-user mutex for the whole webhook. Row-level ordering cannot serve here:
@@ -618,7 +628,7 @@ class PaymentManager:
         # touch it too, so it has either already committed — and its event is visible here — or
         # it cannot proceed until this one ends.
         if activating and await self._is_retired_checkout(sub):
-            self._log_refused_activation(sub, event)
+            await self._log_refused_activation(sub, event)
             return
 
         user = (await self.db.execute(select(User).where(User.id == sub.user_id))).scalar_one()
@@ -781,6 +791,7 @@ class PaymentManager:
             )
         ).scalars().all()
         touched: list[uuid.UUID] = []
+        failures = 0
         for sub in rows:
             if sub.provider_subscription_id:
                 try:
@@ -789,12 +800,19 @@ class PaymentManager:
                         continue
                 except Exception:
                     logger.warning(f"Could not read provider state for sub {sub.id}", exc_info=True)
+                    failures += 1
                     continue
             if not await self._cancel_on_provider(sub):
+                failures += 1
                 continue
             sub.status = "expired"
             await self._log_event(sub, "expired_abandoned_checkout")
             touched.append(sub.user_id)
+        if failures:
+            logger.warning(
+                f"{failures} abandoned upgrade checkout(s) could not be cancelled at the provider; "
+                "they stay payable until the next pass"
+            )
         if touched:
             await self.db.flush()
         return touched
