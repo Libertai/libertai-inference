@@ -236,15 +236,26 @@ class PaymentManager:
         return True
 
     # ------------------------------------------------------------------ subscriptions
+    async def _record_checkout_retired(self, sub: PlanSubscription, *, cancelled: bool) -> None:
+        """Retire a never-paid checkout row. The single place any path may retire one.
+
+        The audit event is unconditional: ``_is_retired_checkout`` keys on it, so a row whose
+        provider cancel failed still refuses a later payment rather than activating as a fresh
+        subscription carrying none of the state that retired it. Only the status write is gated
+        on ``cancelled`` — writing ``expired`` while the link is live at the provider would mark
+        the row dead locally while it stays payable.
+        """
+        if cancelled:
+            sub.status = "expired"
+        await self._log_event(sub, "expired_abandoned_checkout")
+
     async def _retire_unpaid_checkouts(self, user_id: uuid.UUID, statuses: tuple[str, ...]) -> None:
         """Expire the user's never-paid checkout rows in ``statuses``.
 
         Its own query, never ``_active_subscription``: that helper's ``scalar_one_or_none``
         matches at most one row, and a mid-upgrade user legitimately has two. Missing period
         dates select the candidates; only ``paid_subscription_ids`` decides which of them were
-        never paid. The status write is gated on the provider cancel because
-        ``_cancel_on_provider`` swallows failures — writing ``expired`` after a failed cancel
-        marks a row dead locally while it stays live and payable at the provider.
+        never paid.
         """
         rows = (
             await self.db.execute(
@@ -262,10 +273,7 @@ class PaymentManager:
             if row.id in paid_ids:
                 logger.warning(f"Sub {row.id} has a payment on record despite no period dates, not retiring it")
                 continue
-            if not await self._cancel_on_provider(row):
-                continue
-            row.status = "expired"
-            await self._log_event(row, "expired_abandoned_checkout")
+            await self._record_checkout_retired(row, cancelled=await self._cancel_on_provider(row))
         if rows:
             await self.db.flush()
 
@@ -508,8 +516,7 @@ class PaymentManager:
                 await self._log_event(old_sub, "cancelled_for_upgrade")
                 await self._credit_unused_remainder(old_sub)
             else:
-                old_sub.status = "expired"
-                await self._log_event(old_sub, "expired_abandoned_checkout")
+                await self._record_checkout_retired(old_sub, cancelled=True)
         return True, from_tier
 
     async def _is_duplicate_event(self, event: PaymentEvent) -> bool:
@@ -803,8 +810,7 @@ class PaymentManager:
         The provider leaves an abandoned subscription payable for 30 days before cancelling it
         itself; paying one that late activates a stale row against whatever the user has live
         by then. Cancelling here is the same action taken sooner. The provider state is checked
-        first so a checkout completed moments ago is left alone, and the status write is gated
-        on the cancel succeeding.
+        first so a checkout completed moments ago is left alone.
         """
         cutoff = datetime.now() - self.ABANDONED_UPGRADE_CHECKOUT_AGE
         rows = (
@@ -832,18 +838,18 @@ class PaymentManager:
                     logger.warning(f"Could not read provider state for sub {sub.id}", exc_info=True)
                     failures += 1
                     continue
-            if not await self._cancel_on_provider(sub):
+            cancelled = await self._cancel_on_provider(sub)
+            await self._record_checkout_retired(sub, cancelled=cancelled)
+            if not cancelled:
                 failures += 1
                 continue
-            sub.status = "expired"
-            await self._log_event(sub, "expired_abandoned_checkout")
             touched.append(sub.user_id)
         if failures:
             logger.warning(
                 f"{failures} abandoned upgrade checkout(s) could not be cancelled at the provider; "
                 "they stay payable until the next pass"
             )
-        if touched:
+        if rows:
             await self.db.flush()
         return touched
 
