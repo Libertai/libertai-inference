@@ -53,7 +53,7 @@ TOPUP_EXT_REF_PREFIX = "topup:"
 
 
 class SupersedeFailed(Exception):
-    """The paid subscription an activation replaces could not be cancelled at the provider.
+    """A live subscription an activation replaces could not be cancelled at the provider.
 
     Raised before anything is written, so the transaction it aborts leaves no partial state and
     the provider's retry re-attempts the cancel from a clean slate.
@@ -471,10 +471,11 @@ class PaymentManager:
     ) -> tuple[bool, str | None]:
         """Retire the user's other live rows in favour of a just-paid subscription.
 
-        Returns ``(ok, from_tier)``. ``ok`` is False when a PAID row could not be cancelled at
-        the provider: it keeps its live status, so the caller cannot go on to activate a second
-        live row. ``from_tier`` is the tier upgraded FROM when a paid row was superseded, so the
-        caller can log a single ``upgraded`` event linking the pair.
+        Returns ``(ok, from_tier)``. ``ok`` is False when a row that must not be left behind —
+        one that was paid for, or one still occupying the live-subscription index — could not be
+        cancelled at the provider, so the caller cannot go on to activate a second live row.
+        ``from_tier`` is the tier upgraded FROM when a paid row was superseded, so the caller can
+        log a single ``upgraded`` event linking the pair.
 
         ``pending_upgrade`` is deliberately absent from the status set: ORDER_COMPLETED also
         fires for renewals of the live subscription, and including it would cancel the user's
@@ -693,7 +694,7 @@ class PaymentManager:
             superseded, upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
             if not superseded:
                 detail = (
-                    f"Cannot activate sub {sub.id} (user {user.id}, order {event.order_id}): the paid "
+                    f"Cannot activate sub {sub.id} (user {user.id}, order {event.order_id}): the live "
                     f"subscription it replaces could not be cancelled at the provider, so both would "
                     f"be live at once"
                 )
