@@ -745,6 +745,37 @@ async def test_cancel_sets_period_end_flag(db):
     assert provider.cancelled == []
 
 
+@pytest.mark.parametrize("action,arg", [("cancel", None), ("downgrade", "free"), ("downgrade", "go")])
+@pytest.mark.asyncio
+async def test_wind_down_retires_the_open_upgrade_checkout(db, action, arg):
+    """Otherwise the user winds down, pays the still-live link, and silently ends up on a
+    renewing, more expensive plan."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    db.add(PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old", currency="USD",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    ))
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+
+    if action == "cancel":
+        await manager.cancel(user)
+    else:
+        await manager.request_downgrade(user, arg)
+
+    await db.refresh(checkout)
+    assert checkout.status == "expired"
+    assert "psub_new" in provider.cancelled
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("currency", ["EUR", "USD"])
 async def test_start_checkout_threads_currency_to_provider_and_locks_row(db, currency):
