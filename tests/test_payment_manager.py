@@ -399,6 +399,67 @@ async def test_renewal_failure_marks_overdue(db):
 
 
 @pytest.mark.asyncio
+async def test_declined_card_on_upgrade_checkout_stays_pending_upgrade(db):
+    """``overdue`` sits inside the live-subscription index: writing it on an upgrade
+
+    checkout would collide with the still-active subscription it is meant to replace.
+    """
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    db.add(PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    ))
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
+                     provider_event_id="ORDER_PAYMENT_DECLINED:ord_9",
+                     provider_subscription_id="psub_new", order_id="ord_9",
+                     metadata={"order_id": "ord_9"})
+    )
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
+    assert "checkout_declined" in await _event_types(db, checkout.id)
+
+
+@pytest.mark.asyncio
+async def test_subscription_overdue_ignored_on_unpaid_checkout(db):
+    """A provider-side SUBSCRIPTION_OVERDUE on an unpaid checkout row is not a card decline —
+
+    the row is left alone rather than pushed into ``overdue``, which is inside the
+    live-subscription index and would collide with the active row it is replacing.
+    """
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(provider="fake", type=PaymentEventType.subscription_overdue,
+                     provider_event_id="SUBSCRIPTION_OVERDUE:",
+                     provider_subscription_id="psub_new", order_id=None,
+                     metadata={"raw_event": "SUBSCRIPTION_OVERDUE"})
+    )
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
+    assert "overdue_ignored_unpaid_checkout" in await _event_types(db, checkout.id)
+
+
+@pytest.mark.asyncio
 async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     user = await _make_user(db)
     provider = FakeProvider()
