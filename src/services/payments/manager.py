@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.credit_transaction import CreditTransaction
-from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
@@ -657,10 +657,12 @@ class PaymentManager:
             if upgraded_from is not None and upgraded_from != sub.tier:
                 await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
         elif event.type == PaymentEventType.order_failed:
-            if sub.status == "pending":
+            if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # A card declined on the hosted checkout, not a failed subscription payment:
                 # the sub was never active (nothing to be overdue about) and the user usually
-                # retries on the same order, which then completes.
+                # retries on the same order, which then completes. ``overdue`` sits inside the
+                # live-subscription index, so writing it here on an upgrade checkout would
+                # collide with the subscription it is meant to replace.
                 await self._log_event(sub, "checkout_declined", event.provider_event_id, event.metadata)
             elif await self._order_completed(sub, event.order_id):
                 # Out-of-order delivery: a declined attempt on an order that has since been
@@ -670,8 +672,14 @@ class PaymentManager:
                 sub.status = "overdue"
                 await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
         elif event.type == PaymentEventType.subscription_overdue:
-            sub.status = "overdue"
-            await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
+            if sub.status in UNPAID_CHECKOUT_STATUSES:
+                # Not a card decline — a provider-side overdue notice on a row that was never
+                # paid. Left alone rather than pushed to ``overdue``, which is inside the
+                # live-subscription index and would collide with the row it is replacing.
+                await self._log_event(sub, "overdue_ignored_unpaid_checkout", event.provider_event_id, event.metadata)
+            else:
+                sub.status = "overdue"
+                await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
         elif event.type == PaymentEventType.subscription_cancelled:
             sub.status = "cancelled"
             await self._log_event(sub, "cancelled", event.provider_event_id, event.metadata)
