@@ -815,46 +815,61 @@ class PaymentManager:
         itself; paying one that late activates a stale row against whatever the user has live
         by then. Cancelling here is the same action taken sooner. The provider state is checked
         first so a checkout completed moments ago is left alone.
+
+        Candidates are collected lock-free, then each is resolved in its own transaction that
+        takes the user lock first and commits on its own. Locking the whole match set up front
+        would hold every matched row across the run's provider round trips, so /upgrade,
+        /cancel, /downgrade and the activation webhook of an unrelated user would queue behind
+        HTTP they have nothing to do with.
         """
         cutoff = datetime.now() - self.ABANDONED_UPGRADE_CHECKOUT_AGE
-        rows = (
+        candidates = (
             await self.db.execute(
-                select(PlanSubscription)
-                .where(
+                select(PlanSubscription.id, PlanSubscription.user_id).where(
                     PlanSubscription.status == "pending_upgrade",
                     PlanSubscription.updated_at < cutoff,
                     # A paid row can never be swept: _cancel_on_provider's failures are
                     # swallowed, so a mis-selected live row would be cancelled silently.
                     PlanSubscription.current_period_start.is_(None),
                 )
-                .with_for_update()
             )
-        ).scalars().all()
+        ).all()
         touched: list[uuid.UUID] = []
         failures = 0
-        for sub in rows:
-            if sub.provider_subscription_id:
-                try:
+        for sub_id, user_id in candidates:
+            try:
+                await self._lock_user(user_id)
+                sub = (
+                    await self.db.execute(
+                        select(PlanSubscription).where(PlanSubscription.id == sub_id).with_for_update()
+                    )
+                ).scalar_one_or_none()
+                # The selection above read an unlocked snapshot: the row may have been paid,
+                # retired or replaced while this run worked through the users ahead of it.
+                if sub is None or sub.status != "pending_upgrade" or sub.current_period_start is not None:
+                    await self.db.rollback()
+                    continue
+                if sub.provider_subscription_id:
                     info = await self.provider.get_subscription(sub.provider_subscription_id)
                     if info.state not in ("pending", "cancelled"):
+                        await self.db.rollback()
                         continue
-                except Exception:
-                    logger.warning(f"Could not read provider state for sub {sub.id}", exc_info=True)
+                cancelled = await self._cancel_on_provider(sub)
+                await self._record_checkout_retired(sub, cancelled=cancelled)
+                await self.db.commit()
+                if cancelled:
+                    touched.append(user_id)
+                else:
                     failures += 1
-                    continue
-            cancelled = await self._cancel_on_provider(sub)
-            await self._record_checkout_retired(sub, cancelled=cancelled)
-            if not cancelled:
+            except Exception:
+                logger.warning(f"Could not sweep abandoned upgrade checkout {sub_id}", exc_info=True)
                 failures += 1
-                continue
-            touched.append(sub.user_id)
+                await self.db.rollback()
         if failures:
             logger.warning(
                 f"{failures} abandoned upgrade checkout(s) could not be cancelled at the provider; "
                 "they stay payable until the next pass"
             )
-        if rows:
-            await self.db.flush()
         return touched
 
     async def check_expirations(self) -> int:
@@ -868,15 +883,16 @@ class PaymentManager:
         # locally (Revolut cancellation is terminal, which would make resume impossible) —
         # the actual provider cancel happens here, shortly before the renewal would bill.
         # Repeat calls on an already-cancelled provider sub are swallowed by _cancel_on_provider.
+        # Read without FOR UPDATE: the pass writes nothing locally, and locking the whole match
+        # set would hold rows across a provider round trip each, blocking every subscription
+        # mutation of every user matched for the length of the pass.
         pre_cutoff = datetime.now() + timedelta(hours=2)
         pending_cancel = await self.db.execute(
-            select(PlanSubscription)
-            .where(
+            select(PlanSubscription).where(
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.cancel_at_period_end == True,
                 PlanSubscription.current_period_end <= pre_cutoff,
             )
-            .with_for_update()
         )
         for sub in pending_cancel.scalars().all():
             await self._cancel_on_provider(sub)
