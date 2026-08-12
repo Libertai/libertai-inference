@@ -103,7 +103,7 @@ class PaymentManager:
     async def _active_subscription(self, user_id: uuid.UUID, lock: bool = True) -> PlanSubscription | None:
         stmt = select(PlanSubscription).where(
             PlanSubscription.user_id == user_id,
-            PlanSubscription.status.in_(["pending", "active", "overdue"]),
+            PlanSubscription.status.in_(ACTIVE_STATUSES),
         )
         if lock:
             stmt = stmt.with_for_update()
@@ -331,7 +331,7 @@ class PaymentManager:
         await self._lock_user(user.id)
         existing = await self._active_subscription(user.id)
         if existing:
-            if existing.status == "pending" and existing.current_period_end is None:
+            if existing.status == "pending" and existing.current_period_start is None:
                 await self._retire_unpaid_checkouts(user.id, ("pending",))
             else:
                 raise ValueError("User already has an active subscription")
@@ -654,9 +654,14 @@ class PaymentManager:
         # _resolve_subscription runs first (it is what yields the user id), so any FOR UPDATE
         # it took would sit outside the ordering.
         await self._lock_user(sub.user_id)
-        sub = await self._resolve_subscription(event, lock=True)
-        if not sub:
+        locked_sub = await self._resolve_subscription(event, lock=True)
+        if not locked_sub:
+            logger.info(
+                f"Sub {sub.id} no longer resolves from event {event.provider_event_id} under the "
+                f"user lock; dropping the event"
+            )
             return
+        sub = locked_sub
 
         # Redeliveries arriving together both clear the unlocked check above and then serialize
         # here. Without this second read the later one runs as a renewal — advancing the billing

@@ -24,7 +24,7 @@ from src.interfaces.payments import (
     TopupRequest,
 )
 from src.models.base import AsyncSessionLocal
-from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
@@ -282,7 +282,7 @@ async def upgrade(
                 await db.execute(
                     select(PlanSubscription).where(
                         PlanSubscription.user_id == user.id,
-                        PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                        PlanSubscription.status.in_(ACTIVE_STATUSES),
                     )
                 )
             ).scalar_one_or_none()
@@ -314,7 +314,7 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
             await db.execute(
                 select(PlanSubscription).where(
                     PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
                 )
             )
         ).scalar_one_or_none()
@@ -350,7 +350,7 @@ async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
             await db.execute(
                 select(PlanSubscription).where(
                     PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
                 )
             )
         ).scalar_one_or_none()
@@ -376,7 +376,7 @@ async def resume(user: User = Depends(get_current_user)) -> ResumeResponse:
             await db.execute(
                 select(PlanSubscription).where(
                     PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
                 )
             )
         ).scalar_one_or_none()
@@ -412,7 +412,7 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
                 select(PlanSubscription)
                 .where(
                     PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
                 )
                 .order_by(PlanSubscription.created_at.desc())
             )

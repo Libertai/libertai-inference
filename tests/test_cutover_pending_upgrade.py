@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from scripts.cutover_pending_upgrade import cutover
 from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from scripts.cutover_pending_upgrade import cutover
 from tests.test_payment_manager import FakeProvider
 
 

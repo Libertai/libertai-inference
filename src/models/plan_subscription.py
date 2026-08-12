@@ -59,8 +59,8 @@ class PlanSubscription(Base):
             unique=True,
             postgresql_where=text("status IN ('pending', 'active', 'overdue')"),
         ),
-        # At most one open upgrade checkout per user. Replaces the serialization the
-        # live-subscription index used to provide for concurrent checkout creation.
+        # At most one open upgrade checkout per user. Concurrent /upgrade calls serialize on
+        # this index; the live-subscription one above cannot, since these rows sit outside it.
         Index(
             "uq_one_upgrade_checkout",
             "user_id",
