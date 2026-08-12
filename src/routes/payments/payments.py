@@ -46,11 +46,30 @@ logger = setup_logger(__name__)
 
 @scheduler.scheduled_job("interval", hours=1)
 async def expire_subscriptions() -> int:
-    """Downgrade subscriptions past their billing period (provider-agnostic, local-only)."""
+    """Downgrade subscriptions past their billing period, and retire abandoned upgrade checkouts.
+
+    Each phase commits separately so one failure cannot lose the batch — pass 0 of
+    ``check_expirations`` issues provider-side cancels on a two-hour deadline before renewal
+    bills, and those must not be dropped because a later phase raised.
+    """
+    count = 0
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(payment_registry.get("revolut"), db)
-        count = await manager.check_expirations()
-        await db.commit()
+        try:
+            count = await manager.check_expirations()
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.error("check_expirations failed", exc_info=True)
+
+    async with AsyncSessionLocal() as db:
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        try:
+            await manager.sweep_abandoned_upgrade_checkouts()
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.error("sweep_abandoned_upgrade_checkouts failed", exc_info=True)
     return count
 
 
