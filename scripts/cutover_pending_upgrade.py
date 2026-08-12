@@ -80,9 +80,14 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
             f"resolve by hand, then re-run."
         )
 
+    # Ordered so a dry run and the real run that follows it process users identically, and so a
+    # partial-failure post-mortem can be reconstructed from the logs in a known order.
     user_ids = (
         await db.execute(
-            select(PlanSubscription.user_id).distinct().where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
+            select(PlanSubscription.user_id)
+            .distinct()
+            .where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
+            .order_by(PlanSubscription.user_id)
         )
     ).scalars().all()
 

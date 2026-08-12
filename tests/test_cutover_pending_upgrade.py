@@ -206,7 +206,11 @@ async def test_an_unexpected_error_strands_only_that_user(db):
         provider_subscription_id="psub_ok",
     )
     db.add_all([live, parked_legacy_tier, stale])
-    await db.flush()
+    # Committed, not just flushed: cutover() now processes users in a fixed user_id order
+    # (FIX-2), but the arrange phase must still not share an uncommitted transaction with
+    # cutover()'s own per-user commit/rollback boundaries — otherwise whichever user cutover
+    # rolls back first unwinds this setup too, same hazard as the other rollback-path tests.
+    await db.commit()
 
     counts = await cutover(db, FakeProvider())
 
