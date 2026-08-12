@@ -1511,3 +1511,42 @@ async def test_sweep_leaves_row_alone_when_provider_cancel_fails(db):
     assert checkout.status == "pending_upgrade"
     # Recorded anyway: paying the link the provider would not cancel must still be refused.
     assert "expired_abandoned_checkout" in await _event_types(db, checkout.id)
+
+
+@pytest.mark.asyncio
+async def test_sweep_isolates_a_failing_row_from_the_rest(db):
+    """Each candidate is resolved and committed on its own, so one unreadable provider
+    subscription cannot cost the pass the users behind it."""
+    provider = FakeProvider()
+
+    async def state_of(provider_subscription_id: str):
+        if provider_subscription_id == "psub_broken":
+            raise RuntimeError("provider down")
+        return await FakeProvider.get_subscription(provider, provider_subscription_id)
+
+    provider.get_subscription = state_of  # type: ignore[assignment]
+    manager = PaymentManager(provider, db)
+    broken, healthy = None, None
+    for name in ("psub_broken", "psub_ok"):
+        sub = PlanSubscription(
+            user_id=(await _make_user(db)).id, tier="max", provider="fake",
+            status="pending_upgrade", provider_subscription_id=name,
+        )
+        db.add(sub)
+        await db.flush()
+        broken, healthy = (sub, healthy) if name == "psub_broken" else (broken, sub)
+    await db.execute(
+        update(PlanSubscription)
+        .where(PlanSubscription.id.in_([broken.id, healthy.id]))
+        .values(updated_at=datetime.now() - timedelta(hours=25))
+    )
+    await db.commit()  # a commit boundary the sweep's rollback (on the failing row) must not cross
+
+    await manager.sweep_abandoned_upgrade_checkouts()
+    await db.rollback()  # each row was resolved in its own transaction, so nothing is left open
+
+    await db.refresh(broken)
+    await db.refresh(healthy)
+    assert broken.status == "pending_upgrade"
+    assert healthy.status == "expired"
+    assert "psub_ok" in provider.cancelled
