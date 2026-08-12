@@ -563,7 +563,11 @@ class PaymentManager:
             f"Refusing activation of retired checkout {sub.id} (user {sub.user_id}, "
             f"order {event.order_id}): the payment needs manual resolution"
         )
-        await self._log_event(sub, "activation_refused", metadata={"order_id": event.order_id})
+        # Carries the provider event id like any other recorded event, so a redelivery of the
+        # same payment dedups against it instead of adding a row and an error log per delivery.
+        await self._log_event(
+            sub, "activation_refused", event.provider_event_id, {"order_id": event.order_id}
+        )
 
     async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
         """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
