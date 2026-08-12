@@ -90,6 +90,14 @@ class AllowanceState:
     extra_credits_used_this_month: float = 0.0
 
 
+def used_percent(used: float, limit: float) -> float:
+    """Share of a window's allowance spent, 0-100. Overspend (prepaid-covered calls can
+    push usage past the cap) clamps at 100; a non-positive limit has no share to report."""
+    if limit <= 0:
+        return 0.0
+    return round(min(100.0, used / limit * 100), 2)
+
+
 def remaining_allowance(limit: float, used: float) -> float:
     """Spendable room left in a window. Gate and billing split must both use this:
     room the gate honours but the split rounds to zero stops usage accruing, so the

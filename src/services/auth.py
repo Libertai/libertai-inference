@@ -7,14 +7,21 @@ from fastapi import Cookie, Depends, Header, HTTPException, status
 from libertai_utils.chains.index import format_address
 from libertai_utils.interfaces.blockchain import LibertaiChain
 from pydantic import BaseModel
+from sqlalchemy import or_, select
+from sqlalchemy.orm import joinedload
 
 from src.config import config
+from src.interfaces.api_keys import ApiKeyType
+from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.user import User
 from src.services.users import get_or_create_user_by_wallet, get_user_by_id
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# API key types that are a user's own inference credentials, and so identify them.
+USER_OWNED_KEY_TYPES = (ApiKeyType.api, ApiKeyType.cli)
 
 
 class TokenData(BaseModel):
@@ -147,6 +154,40 @@ async def get_current_user(
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return await _resolve_user_from_token(token)
+
+
+async def get_user_from_api_key(authorization: str | None = Header(default=None)) -> User:
+    """Resolve the owner of an inference API key sent as ``Authorization: Bearer <key>``.
+
+    Only a user's own inference credentials qualify (api, cli): chat keys belong to the
+    apps, liberclaw/x402/pool to services. A key that cannot run inference cannot read
+    usage either. Every rejection is the same 401 — which of these applies is not surfaced.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+    key = authorization[7:].strip()
+    now = datetime.now()
+    async with AsyncSessionLocal() as db:
+        api_key = (
+            await db.execute(
+                select(ApiKeyDB)
+                .options(joinedload(ApiKeyDB.user))
+                .where(
+                    ApiKeyDB.key == key,
+                    ApiKeyDB.type.in_(USER_OWNED_KEY_TYPES),
+                    ApiKeyDB.deleted_at.is_(None),
+                    ApiKeyDB.is_active == True,
+                    or_(ApiKeyDB.expires_at.is_(None), ApiKeyDB.expires_at > now),
+                )
+            )
+        ).scalars().first()
+
+    if api_key is None or api_key.user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    if api_key.user.suspended_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    return api_key.user
 
 
 async def require_staff(user: User = Depends(get_current_user)) -> User:
