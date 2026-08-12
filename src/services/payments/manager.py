@@ -13,6 +13,7 @@ the ``plan_subscriptions`` row and is read directly by the entitlement service.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -61,6 +62,28 @@ class SupersedeFailed(Exception):
 
 def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
+
+
+async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscription]) -> set[uuid.UUID]:
+    """Of ``subs``, the ids that carry positive proof of a payment: an ``activated``/``renewed`` event.
+
+    Period dates are not proof of the opposite: ``_refresh_cycle_dates`` swallows provider read
+    failures, so an activation can land with none, and ``manual`` grants never have any. Only a
+    row nothing ever billed on may be treated as an abandoned checkout.
+    """
+    ids = [s.id for s in subs]
+    if not ids:
+        return set()
+    return set(
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.subscription_id).where(
+                    PlanSubscriptionEvent.subscription_id.in_(ids),
+                    PlanSubscriptionEvent.event_type.in_(("activated", "renewed")),
+                )
+            )
+        ).scalars().all()
+    )
 
 
 def _user_lock_key(user_id: uuid.UUID) -> int:
@@ -217,10 +240,11 @@ class PaymentManager:
         """Expire the user's never-paid checkout rows in ``statuses``.
 
         Its own query, never ``_active_subscription``: that helper's ``scalar_one_or_none``
-        matches at most one row, and a mid-upgrade user legitimately has two. The status
-        write is gated on the provider cancel because ``_cancel_on_provider`` swallows
-        failures — writing ``expired`` after a failed cancel marks a row dead locally while
-        it stays live and payable at the provider.
+        matches at most one row, and a mid-upgrade user legitimately has two. Missing period
+        dates select the candidates; only ``paid_subscription_ids`` decides which of them were
+        never paid. The status write is gated on the provider cancel because
+        ``_cancel_on_provider`` swallows failures — writing ``expired`` after a failed cancel
+        marks a row dead locally while it stays live and payable at the provider.
         """
         rows = (
             await self.db.execute(
@@ -233,7 +257,11 @@ class PaymentManager:
                 .with_for_update()
             )
         ).scalars().all()
+        paid_ids = await paid_subscription_ids(self.db, rows)
         for row in rows:
+            if row.id in paid_ids:
+                logger.warning(f"Sub {row.id} has a payment on record despite no period dates, not retiring it")
+                continue
             if not await self._cancel_on_provider(row):
                 continue
             row.status = "expired"
@@ -456,23 +484,25 @@ class PaymentManager:
         ).scalars().all()
 
         # Every provider cancel resolves before any local write, so that giving up leaves no
-        # half-applied supersede behind. An unpaid row that will not cancel is only skipped —
-        # it occupies no entitlement and nothing was charged for it.
-        retiring: list[PlanSubscription] = []
+        # half-applied supersede behind. Only a row outside the one-live-subscription index
+        # (``upgrading``) may be skipped when it will not cancel: leaving a live row behind
+        # would collide with the ``active`` write the caller finishes on.
+        paid_ids = await paid_subscription_ids(self.db, rows)
+        retiring: list[tuple[PlanSubscription, bool]] = []
         for old_sub in rows:
-            paid = old_sub.current_period_start is not None
+            paid = old_sub.id in paid_ids or old_sub.current_period_start is not None
             logger.info(
                 f"Superseding sub {old_sub.id} (provider {old_sub.provider_subscription_id}, "
                 f"tier {old_sub.tier}, paid={paid}) in favour of {exclude_sub_id}"
             )
             if await self._cancel_on_provider(old_sub):
-                retiring.append(old_sub)
-            elif paid:
+                retiring.append((old_sub, paid))
+            elif paid or old_sub.status in ACTIVE_STATUSES:
                 return False, None
 
         from_tier: str | None = None
-        for old_sub in retiring:
-            if old_sub.current_period_start is not None:
+        for old_sub, paid in retiring:
+            if paid:
                 from_tier = old_sub.tier
                 old_sub.status = "cancelled"
                 await self._log_event(old_sub, "cancelled_for_upgrade")
