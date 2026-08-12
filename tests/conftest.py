@@ -98,10 +98,19 @@ async def _schema():
 
 @pytest_asyncio.fixture
 async def db() -> AsyncSession:
-    """An AsyncSession wrapped in a transaction that is rolled back after each test."""
+    """An AsyncSession wrapped in a transaction that is rolled back after each test.
+
+    ``join_transaction_mode="create_savepoint"`` makes the session's own commit()/rollback()
+    ride a SAVEPOINT on top of ``trans`` instead of ending it — needed for code under test that
+    manages its own commit boundaries (e.g. a per-user commit/rollback loop); without it, a
+    mid-test ``rollback()`` tears down ``trans`` itself and later queries fail with
+    "transaction already deassociated from connection".
+    """
     async with _engine.connect() as conn:
         trans = await conn.begin()
-        session_maker = async_sessionmaker(bind=conn, expire_on_commit=False, class_=AsyncSession)
+        session_maker = async_sessionmaker(
+            bind=conn, expire_on_commit=False, class_=AsyncSession, join_transaction_mode="create_savepoint"
+        )
         async with session_maker() as session:
             yield session
         await trans.rollback()
