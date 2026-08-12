@@ -66,7 +66,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
-from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.subscription_tiers import PAID_TIERS, get_tier
@@ -1278,14 +1278,14 @@ class StatsService:
     ) -> GlobalLatestSubscribersStats:
         """Most recent plan subscriptions (all providers), newest first, with a display label per user.
 
-        ``statuses=None``/empty excludes ``pending`` rows (mostly abandoned checkouts); an ``all``
-        entry returns everything; otherwise filters to exactly the given statuses. ``limit=None``
+        ``statuses=None``/empty excludes unpaid-checkout rows (``pending``, ``pending_upgrade``); an
+        ``all`` entry returns everything; otherwise filters to exactly the given statuses. ``limit=None``
         returns every match; ``total`` always counts every match, ignoring ``limit``.
         """
         try:
             async with AsyncSessionLocal() as db:
                 if not statuses:
-                    condition = PlanSubscription.status != "pending"
+                    condition = PlanSubscription.status.notin_(UNPAID_CHECKOUT_STATUSES)
                 elif SubscriptionStatusFilter.all in statuses:
                     condition = None
                 else:
@@ -1775,7 +1775,7 @@ class StatsService:
                             await db.execute(
                                 select(PlanSubscription).where(
                                     PlanSubscription.user_id.in_(user_ids),
-                                    PlanSubscription.status != "pending",
+                                    PlanSubscription.status.notin_(UNPAID_CHECKOUT_STATUSES),
                                 )
                             )
                         )

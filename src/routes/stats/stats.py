@@ -110,7 +110,7 @@ async def get_chat_users_stats(
 async def get_latest_subscribers(
     limit: int | None = Query(20, ge=1, description="Max rows to return; omit for all matching"),
     status: str | None = Query(
-        None, description="Comma-separated subscription statuses; omitted = all except pending"
+        None, description="Comma-separated subscription statuses; omitted = all except unpaid checkouts"
     ),
 ) -> GlobalLatestSubscribersStats:
     statuses: list[SubscriptionStatusFilter] | None = None
