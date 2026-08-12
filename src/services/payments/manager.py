@@ -185,24 +185,43 @@ class PaymentManager:
         return True
 
     # ------------------------------------------------------------------ subscriptions
-    async def start_checkout(self, user: User, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+    async def _retire_unpaid_checkouts(self, user_id: uuid.UUID, statuses: tuple[str, ...]) -> None:
+        """Expire the user's never-paid checkout rows in ``statuses``.
+
+        Its own query, never ``_active_subscription``: that helper's ``scalar_one_or_none``
+        matches at most one row, and a mid-upgrade user legitimately has two. The status
+        write is gated on the provider cancel because ``_cancel_on_provider`` swallows
+        failures — writing ``expired`` after a failed cancel marks a row dead locally while
+        it stays live and payable at the provider.
+        """
+        rows = (
+            await self.db.execute(
+                select(PlanSubscription)
+                .where(
+                    PlanSubscription.user_id == user_id,
+                    PlanSubscription.status.in_(statuses),
+                    PlanSubscription.current_period_start.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalars().all()
+        for row in rows:
+            if not await self._cancel_on_provider(row):
+                continue
+            row.status = "expired"
+            await self._log_event(row, "expired_abandoned_checkout")
+        if rows:
+            await self.db.flush()
+
+    async def _open_checkout(
+        self, user: User, tier: str, redirect_url: str, currency: str, status: str
+    ) -> CheckoutResult:
         if tier not in PAID_TIERS:
             raise ValueError(f"Invalid paid tier: {tier}")
         if not self.provider.supports(PaymentCapability.subscription):
             raise UnsupportedCapability(f"{self.provider.id} does not support subscriptions")
         if not user.email:
             raise ValueError("User must have an email to subscribe")
-
-        existing = await self._active_subscription(user.id)
-        if existing:
-            if existing.status == "pending" and existing.current_period_end is None:
-                # Abandoned checkout — retire it so the one-active-sub index frees up.
-                await self._cancel_on_provider(existing)
-                existing.status = "expired"
-                await self._log_event(existing, "expired_abandoned_checkout")
-                await self.db.flush()
-            else:
-                raise ValueError("User already has an active subscription")
 
         prev_customer_id = (
             await self.db.execute(
@@ -223,11 +242,10 @@ class PaymentManager:
             redirect_url=redirect_url,
             provider_customer_id=prev_customer_id,
         )
-
         sub = PlanSubscription(
             user_id=user.id,
             tier=tier,
-            status="pending",
+            status=status,
             provider=self.provider.id,
             provider_subscription_id=result.provider_subscription_id,
             provider_customer_id=result.provider_customer_id,
@@ -239,24 +257,47 @@ class PaymentManager:
         try:
             await self.db.flush()
         except IntegrityError:
+            if status == "pending_upgrade":
+                raise ValueError("An upgrade checkout is already open")
             raise ValueError("User already has an active subscription")
         await self._log_event(sub, "created", metadata={"tier": tier})
         return result
 
+    async def start_checkout(self, user: User, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+        existing = await self._active_subscription(user.id)
+        if existing:
+            if existing.status == "pending" and existing.current_period_end is None:
+                await self._retire_unpaid_checkouts(user.id, ("pending",))
+            else:
+                raise ValueError("User already has an active subscription")
+        # An upgrade checkout is invisible to _active_subscription, so retire it explicitly:
+        # otherwise a user whose subscription lapsed mid-upgrade holds two payable checkouts.
+        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        return await self._open_checkout(user, tier, redirect_url, currency, "pending")
+
     async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
         if new_tier not in PAID_TIERS:
             raise ValueError(f"Invalid tier: {new_tier}")
-        current = await self.current_tier(user.id)
-        if not is_upgrade(current, new_tier):
-            raise ValueError(f"Cannot upgrade from {current} to {new_tier}")
+        # Validated against the live row's tier, not current_tier(): that returns "free" for
+        # anything not exactly "active", which would admit an upgrade from no subscription at
+        # all, and let an overdue higher-tier holder open a lower-tier "upgrade".
+        live = (
+            await self.db.execute(
+                select(PlanSubscription)
+                .where(
+                    PlanSubscription.user_id == user.id,
+                    PlanSubscription.status.in_(("active", "overdue")),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if not live:
+            raise ValueError("No active subscription")
+        if not is_upgrade(live.tier, new_tier):
+            raise ValueError(f"Cannot upgrade from {live.tier} to {new_tier}")
 
-        existing = await self._active_subscription(user.id)
-        if existing:
-            # Park the old sub — "upgrading" is excluded from the one-active-sub index.
-            existing.status = "upgrading"
-            await self._log_event(existing, "upgrading", metadata={"new_tier": new_tier})
-            await self.db.flush()
-        return await self.start_checkout(user, new_tier, redirect_url, currency)
+        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        return await self._open_checkout(user, new_tier, redirect_url, currency, "pending_upgrade")
 
     async def cancel(self, user: User) -> dict:
         """Schedule cancellation at period end. Cancellation is TERMINAL on Revolut, so the
@@ -334,13 +375,20 @@ class PaymentManager:
             "new_tier": new_tier,
         }
 
-    async def _cancel_on_provider(self, sub: PlanSubscription) -> None:
+    async def _cancel_on_provider(self, sub: PlanSubscription) -> bool:
+        """True when the provider-side subscription is known to be cancelled.
+
+        Callers gate their status write on this: a swallowed failure that still wrote
+        ``expired`` would leave a row dead locally while it stays payable at the provider.
+        """
         if sub.provider == "manual" or not sub.provider_subscription_id:
-            return
+            return True
         try:
             await self.provider.cancel_subscription(sub.provider_subscription_id)
+            return True
         except Exception:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
+            return False
 
     async def _cancel_upgrading_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> str | None:
         """Cancel any parked ``upgrading`` subs superseded by ``exclude_sub_id``'s activation.

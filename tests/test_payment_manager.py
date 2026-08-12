@@ -413,12 +413,12 @@ async def test_upgrade_parks_then_cancels_old(db):
     )
     assert await mgr.current_tier(user.id) == "go"
 
-    # Upgrade to plus -> parks old as "upgrading", new pending sub created.
+    # Upgrade to plus -> old sub stays active, new pending_upgrade checkout created.
     await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
     parked = (
         await db.execute(
             select(PlanSubscription).where(
-                PlanSubscription.user_id == user.id, PlanSubscription.status == "upgrading"
+                PlanSubscription.user_id == user.id, PlanSubscription.status == "active"
             )
         )
     ).scalar_one()
@@ -490,7 +490,13 @@ async def test_upgrade_threads_currency(db):
 
     await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="EUR")
     assert provider.sub_currencies == ["EUR", "EUR"]
-    new_sub = await mgr._active_subscription(user.id, lock=False)
+    new_sub = (
+        await db.execute(
+            select(PlanSubscription).where(
+                PlanSubscription.user_id == user.id, PlanSubscription.status == "pending_upgrade"
+            )
+        )
+    ).scalar_one()
     assert new_sub.tier == "plus"
     assert new_sub.currency == "EUR"
 
@@ -838,3 +844,102 @@ async def test_renewal_cycle_logs_renewed_not_activated(db):
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"
     assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]
+
+
+@pytest.mark.asyncio
+async def test_upgrade_leaves_paid_sub_active(db):
+    """The fix: an in-flight upgrade must not disturb the subscription being replaced."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    old = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    )
+    db.add(old)
+    await db.flush()
+
+    await manager.upgrade(user, "max", "http://redirect", "USD")
+
+    await db.refresh(old)
+    assert old.status == "active"
+    assert provider.cancelled == []
+    new = (await db.execute(
+        select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade")
+    )).scalar_one()
+    assert new.tier == "max"
+
+
+@pytest.mark.asyncio
+async def test_upgrade_requires_a_live_paid_subscription(db):
+    user = await _make_user(db)
+    manager = PaymentManager(FakeProvider(), db)
+    with pytest.raises(ValueError, match="No active subscription"):
+        await manager.upgrade(user, "max", "http://redirect", "USD")
+
+
+@pytest.mark.asyncio
+async def test_upgrade_validates_against_the_live_row_tier(db):
+    """current_tier() reports free for an overdue row; validating against it would let a
+    Max holder open a Go 'upgrade'."""
+    user = await _make_user(db)
+    manager = PaymentManager(FakeProvider(), db)
+    db.add(PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="overdue",
+        provider_subscription_id="psub_old",
+    ))
+    await db.flush()
+    with pytest.raises(ValueError, match="Cannot upgrade"):
+        await manager.upgrade(user, "go", "http://redirect", "USD")
+
+
+@pytest.mark.asyncio
+async def test_second_upgrade_retires_the_first_checkout(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    db.add(PlanSubscription(
+        user_id=user.id, tier="go", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    ))
+    await db.flush()
+
+    await manager.upgrade(user, "plus", "http://redirect", "USD")
+    first = (await db.execute(
+        select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade")
+    )).scalar_one()
+    first_id = first.provider_subscription_id
+
+    await manager.upgrade(user, "max", "http://redirect", "USD")
+
+    await db.refresh(first)
+    assert first.status == "expired"
+    assert first_id in provider.cancelled
+    events = (await db.execute(
+        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == first.id)
+    )).scalars().all()
+    assert "expired_abandoned_checkout" in events
+
+
+@pytest.mark.asyncio
+async def test_subscribe_retires_an_orphaned_upgrade_checkout(db):
+    """A user whose old sub lapsed mid-upgrade must not end up with two live checkouts."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    stale = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_stale",
+    )
+    db.add(stale)
+    await db.flush()
+
+    await manager.start_checkout(user, "plus", "http://redirect", "USD")
+
+    await db.refresh(stale)
+    assert stale.status == "expired"
+    assert "psub_stale" in provider.cancelled
