@@ -11,9 +11,12 @@ if TYPE_CHECKING:
     from src.models.plan_subscription_event import PlanSubscriptionEvent
     from src.models.user import User
 
-# Statuses a subscription can be in. ``upgrading`` parks an old sub while a higher
-# tier's checkout is pending (excluded from the one-active-sub index).
+# Statuses occupying the one-live-subscription index. ``pending_upgrade`` is deliberately
+# outside it: an unpaid upgrade checkout must coexist with the subscription it will replace,
+# which stays ``active`` and keeps its entitlement until the upgrade is paid.
 ACTIVE_STATUSES = ("pending", "active", "overdue")
+# Checkout rows that were never paid. Expiring one always logs ``expired_abandoned_checkout``.
+UNPAID_CHECKOUT_STATUSES = ("pending", "pending_upgrade")
 
 
 class PlanSubscription(Base):
@@ -55,6 +58,14 @@ class PlanSubscription(Base):
             "user_id",
             unique=True,
             postgresql_where=text("status IN ('pending', 'active', 'overdue')"),
+        ),
+        # At most one open upgrade checkout per user. Replaces the serialization the
+        # live-subscription index used to provide for concurrent checkout creation.
+        Index(
+            "uq_one_upgrade_checkout",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'pending_upgrade'"),
         ),
         Index("ix_plan_subscriptions_provider_subscription_id", "provider_subscription_id"),
     )
