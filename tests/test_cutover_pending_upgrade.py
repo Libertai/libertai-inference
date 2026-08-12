@@ -160,6 +160,67 @@ async def test_aborts_on_an_active_row_with_no_period_start(db):
 
 
 @pytest.mark.asyncio
+async def test_null_start_row_with_proof_of_payment_is_not_swept(db):
+    """A `_refresh_cycle_dates` failure can move status one hop (e.g. to "overdue") without
+    ever setting period dates. An `activated`/`renewed` event is independent proof of payment
+    the null-start heuristic alone cannot see — it must win over the heuristic."""
+    user = await _make_user(db)
+    paid_but_dateless = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="overdue",
+        provider_subscription_id="psub_paid_no_dates",
+    )
+    db.add(paid_but_dateless)
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=paid_but_dateless.id, event_type="activated"))
+    await db.flush()
+
+    counts = await cutover(db, FakeProvider())
+
+    await db.refresh(paid_but_dateless)
+    assert paid_but_dateless.status == "overdue"
+    assert counts["expired"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_strands_only_that_user(db):
+    """A legacy tier no longer in SUBSCRIPTION_TIERS makes `_credit_unused_remainder` raise
+    `ValueError` via `get_tier` — after the cancel already succeeded. That surprise must not
+    abort every user still queued behind this one; it must strand only this user, rolled back,
+    while the rest of the run still makes progress."""
+    bad_user = await _make_user(db)
+    ok_user = await _make_user(db)
+    live = PlanSubscription(
+        user_id=bad_user.id, tier="max", provider="fake", status="active",
+        provider_subscription_id="psub_live",
+        current_period_start=datetime.now() - timedelta(days=1),
+        current_period_end=datetime.now() + timedelta(days=29),
+    )
+    parked_legacy_tier = PlanSubscription(
+        user_id=bad_user.id, tier="legacy_retired_tier", provider="fake", status="upgrading",
+        provider_subscription_id="psub_parked",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    )
+    stale = PlanSubscription(
+        user_id=ok_user.id, tier="go", provider="fake", status="pending",
+        provider_subscription_id="psub_ok",
+    )
+    db.add_all([live, parked_legacy_tier, stale])
+    await db.flush()
+
+    counts = await cutover(db, FakeProvider())
+
+    await db.refresh(live)
+    await db.refresh(parked_legacy_tier)
+    await db.refresh(stale)
+    assert live.status == "active"
+    assert parked_legacy_tier.status == "upgrading"  # rolled back, not left half-cancelled
+    assert stale.status == "expired"  # the other user still made progress
+    assert counts["stranded"] == 1
+    assert counts["expired"] == 1
+
+
+@pytest.mark.asyncio
 async def test_a_failed_unpaid_cancel_strands_the_whole_user_not_just_that_row(db):
     """One unrelated checkout row failing to cancel must not cost the user their paid,
     parked subscription — nothing for that user is written until every cancel succeeds."""
