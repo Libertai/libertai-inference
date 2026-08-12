@@ -328,7 +328,8 @@ class GlobalTierEconomicsStats(BaseModel):
 
 class SubscriptionStatusFilter(str, Enum):
     """Status filter for the latest-subscribers list. ``all`` includes every status;
-    omitting the filter defaults to everything EXCEPT ``pending`` (abandoned checkouts)."""
+    omitting the filter defaults to everything EXCEPT unpaid checkouts (``pending``,
+    ``pending_upgrade``)."""
 
     all = "all"
     active = "active"
@@ -336,7 +337,7 @@ class SubscriptionStatusFilter(str, Enum):
     overdue = "overdue"
     cancelled = "cancelled"
     expired = "expired"
-    upgrading = "upgrading"
+    pending_upgrade = "pending_upgrade"
 
 
 class LatestSubscriber(BaseModel):

@@ -65,6 +65,20 @@ async def test_latest_subscribers_status_filtering():
     assert got == {"pending", "active"}
 
 
+async def test_latest_subscribers_default_hides_unpaid_checkouts():
+    async with AsyncSessionLocal() as db:
+        user = User(email="pending-upgrade@example.com")
+        db.add(user)
+        await db.flush()
+        sub = PlanSubscription(user_id=user.id, tier="max", provider="fake", status="pending_upgrade")
+        sub.created_at = datetime(2099, 3, 1)
+        db.add(sub)
+        await db.commit()
+
+    result = await StatsService.get_latest_subscribers(limit=50, statuses=None)
+    assert all(s.status != "pending_upgrade" for s in result.subscribers)
+
+
 async def test_latest_subscribers_total_counts_all_matching_ignoring_limit():
     async with AsyncSessionLocal() as db:
         for i in range(3):
