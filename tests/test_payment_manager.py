@@ -21,7 +21,7 @@ from src.services.payments.base import (
     ProviderDescriptor,
     SubscriptionInfo,
 )
-from src.services.payments.manager import PaymentManager, _topup_external_ref
+from src.services.payments.manager import PaymentManager, SupersedeFailed, _topup_external_ref
 
 
 class FakeProvider(PaymentProvider):
@@ -469,9 +469,10 @@ async def test_completed_upgrade_supersedes_and_prorates(db):
 
 
 @pytest.mark.asyncio
-async def test_activation_abandoned_when_the_paid_sub_cannot_be_cancelled(db):
+async def test_activation_raises_when_the_paid_sub_cannot_be_cancelled(db):
     """A paid row that will not cancel at the provider stays live, so activating on top of it
-    would put two rows in the one-live-subscription index. The activation gives up instead."""
+    would put two rows in the one-live-subscription index. The activation raises instead,
+    aborting the webhook transaction so the provider retries against unchanged state."""
 
     class UncancellableProvider(FakeProvider):
         async def cancel_subscription(self, provider_subscription_id: str) -> None:
@@ -493,21 +494,56 @@ async def test_activation_abandoned_when_the_paid_sub_cannot_be_cancelled(db):
     db.add_all([old, new])
     await db.flush()
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_1",
-        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
-    ))
+    with pytest.raises(SupersedeFailed):
+        await manager.handle_event(PaymentEvent(
+            provider="fake", type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            provider_subscription_id="psub_new", order_id="ord_1", metadata={},
+        ))
 
+    # Nothing was written before the raise, so the state the retry will see is untouched.
     await db.refresh(old)
     await db.refresh(new)
     assert old.status == "active"  # entitlement stays where it was paid for
-    assert new.status == "pending_upgrade"  # nothing half-applied
+    assert new.status == "pending_upgrade"
     assert await _balance(db, user.id) == 0.0  # no remainder credited for a cycle still running
     assert "activated" not in await _event_types(db, new.id)
-    # The session is still usable: the abandon happened before any write, not via a rollback.
-    new.tier = "plus"
-    await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_redelivery_caught_after_the_lock_when_the_early_read_misses(db, monkeypatch):
+    """Two redeliveries of one event can both clear the unlocked dedup read and then serialize
+    on the mutex. The suite's single pooled connection cannot express that concurrency, so the
+    second delivery's view is simulated by blinding its first read; the post-lock check is what
+    has to stop it before it re-runs as a renewal."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    event = PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
+                         provider_event_id="ORDER_COMPLETED:setup_1",
+                         provider_subscription_id="psub_1", order_id="setup_1",
+                         metadata={"order_id": "setup_1"})
+    await mgr.handle_event(event)
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    await db.refresh(sub)
+    events_before = await _event_types(db, sub.id)
+    period_end_before = sub.current_period_end
+
+    real_check = mgr._is_duplicate_event
+    calls = []
+
+    async def blind_first(evt):
+        calls.append(evt.provider_event_id)
+        return False if len(calls) == 1 else await real_check(evt)
+
+    monkeypatch.setattr(mgr, "_is_duplicate_event", blind_first)
+    await mgr.handle_event(event)  # must not raise
+
+    assert len(calls) == 2  # the post-lock read is what caught it
+    await db.refresh(sub)
+    assert await _event_types(db, sub.id) == events_before  # no second "renewed" logged
+    assert sub.current_period_end == period_end_before  # billing cycle not advanced twice
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,14 @@ logger = setup_logger(__name__)
 TOPUP_EXT_REF_PREFIX = "topup:"
 
 
+class SupersedeFailed(Exception):
+    """The paid subscription an activation replaces could not be cancelled at the provider.
+
+    Raised before anything is written, so the transaction it aborts leaves no partial state and
+    the provider's retry re-attempts the cancel from a clean slate.
+    """
+
+
 def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
 
@@ -458,6 +466,21 @@ class PaymentManager:
                 await self._log_event(old_sub, "expired_abandoned_checkout")
         return True, from_tier
 
+    async def _is_duplicate_event(self, event: PaymentEvent) -> bool:
+        """Has this exact provider event already been recorded against any subscription?"""
+        if not event.provider_event_id:
+            return False
+        existing = (
+            await self.db.execute(
+                select(PlanSubscriptionEvent.id).where(
+                    PlanSubscriptionEvent.provider_event_id == event.provider_event_id
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            logger.info(f"Duplicate event {event.provider_event_id}, skipping")
+        return existing is not None
+
     async def _is_retired_checkout(self, sub: PlanSubscription) -> bool:
         """Has this row already been retired in favour of another subscription?
 
@@ -552,19 +575,10 @@ class PaymentManager:
             logger.info(f"Ignoring payment event with no matching subscription: {event}")
             return
 
-        # Dedup subscription events. Ahead of the refusal checks below: a redelivery for a row
-        # that was legitimately superseded since is ordinary duplicate traffic, not an incident.
-        if event.provider_event_id:
-            existing = (
-                await self.db.execute(
-                    select(PlanSubscriptionEvent.id).where(
-                        PlanSubscriptionEvent.provider_event_id == event.provider_event_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing:
-                logger.info(f"Duplicate event {event.provider_event_id}, skipping")
-                return
+        # Ahead of the refusal checks below: a redelivery for a row that was legitimately
+        # superseded since is ordinary duplicate traffic, not an incident.
+        if await self._is_duplicate_event(event):
+            return
 
         activating = event.type == PaymentEventType.order_completed
         # Refused before anything is written: a refused row that carries an ``activated``
@@ -582,10 +596,16 @@ class PaymentManager:
         if not sub:
             return
 
-        # The check above ran on an unlocked read. What makes this one conclusive is the
-        # FOR UPDATE the re-resolve holds on the row: any transaction retiring it has to touch
-        # it too, so it has either already committed — and its event is visible here — or it
-        # cannot proceed until this one ends.
+        # Redeliveries arriving together both clear the unlocked check above and then serialize
+        # here. Without this second read the later one runs as a renewal — advancing the billing
+        # cycle for a single payment — before the unique index on provider_event_id rejects it.
+        if await self._is_duplicate_event(event):
+            return
+
+        # The refusal check above also ran on an unlocked read. What makes this one conclusive
+        # is the FOR UPDATE the re-resolve holds on the row: any transaction retiring it has to
+        # touch it too, so it has either already committed — and its event is visible here — or
+        # it cannot proceed until this one ends.
         if activating and await self._is_retired_checkout(sub):
             self._log_refused_activation(sub, event)
             return
@@ -605,12 +625,13 @@ class PaymentManager:
             ).scalar_one_or_none()
             superseded, upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
             if not superseded:
-                logger.error(
-                    f"Abandoning activation of sub {sub.id} (user {user.id}, order {event.order_id}): "
-                    f"the paid subscription it replaces could not be cancelled at the provider, "
-                    f"so both would be live at once — the payment needs manual resolution"
+                detail = (
+                    f"Cannot activate sub {sub.id} (user {user.id}, order {event.order_id}): the paid "
+                    f"subscription it replaces could not be cancelled at the provider, so both would "
+                    f"be live at once"
                 )
-                return
+                logger.error(detail)
+                raise SupersedeFailed(detail)
             await self.db.flush()
 
             if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
