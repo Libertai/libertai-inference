@@ -56,6 +56,15 @@ async def test_tiers_endpoint(async_client):
     assert {"free", "go", "plus", "max"} == names
 
 
+async def test_tiers_endpoint_hides_credit_allowances(async_client):
+    """Unauthenticated route: publishing a tier's credits would also undo the
+    percentage-only allowance reporting, since percent x limit recovers the spend."""
+    tiers = (await async_client.get("/payments/tiers")).json()
+    for tier in tiers:
+        assert "window_5h_credits" not in tier
+        assert "weekly_credits" not in tier
+
+
 async def test_region_eu_ip_returns_eur_with_vat(async_client, monkeypatch):
     monkeypatch.setattr("src.routes.payments.payments.resolve_currency", lambda request: "EUR")
     resp = await async_client.get("/payments/region")
@@ -518,6 +527,52 @@ async def test_subscription_exposes_allowed_and_source(async_client):
         assert body["allowed"] is True
         assert body["source"] == "tier"
     finally:
+        await _cleanup(user.id)
+
+
+async def test_subscription_reports_window_share_not_credits(async_client):
+    """Windows are reported as a percentage; the underlying spend and plan limit stay server-side."""
+    from datetime import datetime, timedelta
+
+    from src.models.entitlement_window import EntitlementWindow
+    from src.models.inference_call import InferenceCall
+    from src.subscription_tiers import get_tier
+
+    user, headers = await _auth_user()
+    now = datetime.now()
+    try:
+        async with AsyncSessionLocal() as db:
+            from src.interfaces.api_keys import ApiKeyType
+            from src.models.api_key import ApiKey as ApiKeyDB
+
+            key = ApiKeyDB(key=ApiKeyDB.generate_key(), name="pct", user_id=user.id, type=ApiKeyType.api)
+            db.add(key)
+            await db.flush()
+            for kind in ("5h", "weekly"):
+                db.add(
+                    EntitlementWindow(
+                        user_id=user.id, kind=kind, started_at=now - timedelta(hours=1),
+                        expires_at=now + timedelta(hours=4),
+                    )
+                )
+            spent = get_tier("free").window_5h_credits / 4
+            call = InferenceCall(api_key_id=key.id, credits_used=spent, model_name="m", tier_credits_used=spent)
+            call.used_at = now - timedelta(minutes=10)
+            db.add(call)
+            await db.commit()
+
+        body = (await async_client.get("/payments/subscription", headers=headers)).json()
+        assert body["window_5h_used_percent"] == 25.0
+        for dropped in ("window_5h_used", "window_5h_limit", "weekly_used", "weekly_limit"):
+            assert dropped not in body
+    finally:
+        async with AsyncSessionLocal() as db:
+            from src.models.api_key import ApiKey as ApiKeyDB
+            from src.models.entitlement_window import EntitlementWindow
+
+            await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user.id))
+            await db.execute(delete(ApiKeyDB).where(ApiKeyDB.user_id == user.id))
+            await db.commit()
         await _cleanup(user.id)
 
 

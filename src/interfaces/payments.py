@@ -1,21 +1,8 @@
-from datetime import datetime, timezone
 from typing import Annotated
 
-from pydantic import BaseModel, Field, PlainSerializer
+from pydantic import BaseModel, Field
 
-# Reset/period timestamps come from naive ``TIMESTAMP`` columns (naive UTC on our UTC
-# hosts). Serialize them as tz-aware UTC so clients get an unambiguous instant: a naive
-# ISO string carries no offset, and JS ``new Date(s)`` parses an offset-less datetime as
-# *browser-local* time — which skewed reset countdowns by the client's UTC offset and
-# showed "Resets now" while the window was still live.
-UtcDatetime = Annotated[
-    datetime,
-    PlainSerializer(
-        lambda dt: (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).isoformat(),
-        return_type=str,
-        when_used="json",
-    ),
-]
+from src.interfaces.common import UtcDatetime
 
 
 class PaymentProviderResponse(BaseModel):
@@ -29,11 +16,13 @@ class PaymentProviderResponse(BaseModel):
 
 
 class TierResponse(BaseModel):
+    """Public (unauthenticated) tier listing. Credit allowances are deliberately absent:
+    the plans are sold on qualitative copy, and publishing a limit would also recover a
+    user's spend from the percentages reported on their allowance windows."""
+
     name: str
     price_cents: int
     currency: str
-    window_5h_credits: float
-    weekly_credits: float
     is_paid: bool
 
 
@@ -87,12 +76,11 @@ class SubscriptionResponse(BaseModel):
     # Live gateway decision for the next call: lets the UI show the paywall directly.
     allowed: bool = True
     source: str = "tier"  # "tier" | "prepaid" | "blocked"
-    # Dual-window allowance snapshot (free tier by default, larger if subscribed).
-    window_5h_used: float = 0.0
-    window_5h_limit: float = 0.0
+    # Dual-window allowance snapshot, as the share of each window spent (0-100). The credit
+    # amounts behind it stay server-side; every consumer only ever renders the percentage.
+    window_5h_used_percent: float = 0.0
     window_5h_resets_at: UtcDatetime | None = None
-    weekly_used: float = 0.0
-    weekly_limit: float = 0.0
+    weekly_used_percent: float = 0.0
     weekly_resets_at: UtcDatetime | None = None
     prepaid_balance: float = 0.0
     # Monthly extra-credit spend cap (None = unlimited) and attempted overflow this calendar month.

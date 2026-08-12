@@ -29,7 +29,7 @@ from src.models.user import User
 from src.models.wallet_connection import WalletConnection
 from src.routes.payments import router
 from src.services.auth import get_current_user
-from src.services.entitlement import get_allowance_state
+from src.services.entitlement import get_allowance_state, used_percent
 from src.services.geo import resolve_currency, vat_rate_for_currency
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.credit_subscription import CreditSubscriptionService
@@ -138,8 +138,6 @@ async def list_tiers() -> list[TierResponse]:
             name=cfg.name,
             price_cents=cfg.price_cents,
             currency=cfg.currency,
-            window_5h_credits=cfg.window_5h_credits,
-            weekly_credits=cfg.weekly_credits,
             is_paid=cfg.is_paid,
         )
         for cfg in SUBSCRIPTION_TIERS.values()
@@ -431,11 +429,9 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         is_trial=sub.is_trial if sub else False,
         allowed=allowance.allowed,
         source=allowance.source,
-        window_5h_used=allowance.window_5h_used,
-        window_5h_limit=allowance.window_5h_limit,
+        window_5h_used_percent=used_percent(allowance.window_5h_used, allowance.window_5h_limit),
         window_5h_resets_at=allowance.window_5h_resets_at,
-        weekly_used=allowance.weekly_used,
-        weekly_limit=allowance.weekly_limit,
+        weekly_used_percent=used_percent(allowance.weekly_used, allowance.weekly_limit),
         weekly_resets_at=allowance.weekly_resets_at,
         prepaid_balance=allowance.prepaid_balance,
         monthly_extra_credit_cap=allowance.monthly_extra_credit_cap,
