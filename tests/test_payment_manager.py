@@ -774,6 +774,10 @@ async def test_wind_down_retires_the_open_upgrade_checkout(db, action, arg):
     await db.refresh(checkout)
     assert checkout.status == "expired"
     assert "psub_new" in provider.cancelled
+    if action == "downgrade" and arg == "go":
+        # Paid -> paid downgrade schedules the plan change at the provider on the OLD
+        # subscription, not the checkout being retired.
+        assert provider.plan_changes == [("psub_old", "go", "USD")]
 
 
 @pytest.mark.asyncio
