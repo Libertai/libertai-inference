@@ -31,6 +31,7 @@ class FakeProvider(PaymentProvider):
         self.order_seq = 0
         self.sub_seq = 0
         self.cancelled: list[str] = []
+        self.cancel_failures: set[str] = set()  # provider subscription ids whose cancel raises
         self.plan_changes: list[tuple[str, str]] = []
         self.sub_currencies: list[str] = []
         self.topups: list[tuple[float, str]] = []
@@ -63,6 +64,8 @@ class FakeProvider(PaymentProvider):
         )
 
     async def cancel_subscription(self, provider_subscription_id: str) -> None:
+        if provider_subscription_id in self.cancel_failures:
+            raise RuntimeError(f"provider refused to cancel {provider_subscription_id}")
         self.cancelled.append(provider_subscription_id)
 
     async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
@@ -882,6 +885,49 @@ async def test_wind_down_retires_the_open_upgrade_checkout(db, action, arg):
 
 
 @pytest.mark.asyncio
+async def test_wind_down_records_the_retirement_when_the_cancel_fails(db):
+    """The provider can refuse the cancel, leaving the link payable — but the retirement is
+    still recorded, so paying it is refused instead of building a renewing higher-tier sub."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    provider.cancel_failures.add("psub_new")
+    manager = PaymentManager(provider, db)
+    live = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old", currency="USD",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+    )
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add_all([live, checkout])
+    await db.flush()
+
+    await manager.cancel(user)
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"  # still live at the provider, so not marked dead
+    assert "expired_abandoned_checkout" in await _event_types(db, checkout.id)
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_late",
+        provider_subscription_id="psub_new", order_id="ord_late", metadata={},
+    ))
+
+    await db.refresh(live)
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
+    assert live.status == "active"
+    assert live.cancel_at_period_end is True  # the wind-down still stands
+    checkout_events = await _event_types(db, checkout.id)
+    assert "activated" not in checkout_events
+    assert "activation_refused" in checkout_events
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("currency", ["EUR", "USD"])
 async def test_start_checkout_threads_currency_to_provider_and_locks_row(db, currency):
     user = await _make_user(db)
@@ -1419,11 +1465,7 @@ async def test_sweep_leaves_row_alone_when_provider_cancel_fails(db):
     stays payable for up to 30 days."""
     user = await _make_user(db)
     provider = FakeProvider()
-
-    async def boom(provider_subscription_id: str) -> None:
-        raise RuntimeError("provider down")
-
-    provider.cancel_subscription = boom  # type: ignore[assignment]
+    provider.cancel_failures.add("psub_new")
     manager = PaymentManager(provider, db)
     checkout = PlanSubscription(
         user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
@@ -1441,3 +1483,5 @@ async def test_sweep_leaves_row_alone_when_provider_cancel_fails(db):
 
     await db.refresh(checkout)
     assert checkout.status == "pending_upgrade"
+    # Recorded anyway: paying the link the provider would not cancel must still be refused.
+    assert "expired_abandoned_checkout" in await _event_types(db, checkout.id)
