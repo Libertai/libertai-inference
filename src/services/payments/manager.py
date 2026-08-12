@@ -273,7 +273,8 @@ class PaymentManager:
             if row.id in paid_ids:
                 logger.warning(f"Sub {row.id} has a payment on record despite no period dates, not retiring it")
                 continue
-            await self._record_checkout_retired(row, cancelled=await self._cancel_on_provider(row))
+            cancelled = await self._cancel_on_provider(row)
+            await self._record_checkout_retired(row, cancelled=cancelled)
         if rows:
             await self.db.flush()
 
@@ -852,6 +853,8 @@ class PaymentManager:
                 ).scalar_one_or_none()
                 # The selection above read an unlocked snapshot: the row may have been paid,
                 # retired or replaced while this run worked through the users ahead of it.
+                # Every exit from here ends the transaction, writes or not — the user lock is
+                # held for its lifetime and the next candidate takes its own.
                 if sub is None or sub.status != "pending_upgrade" or sub.current_period_start is not None:
                     await self.db.rollback()
                     continue
