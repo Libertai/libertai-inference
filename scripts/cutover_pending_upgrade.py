@@ -8,13 +8,15 @@ Retires every never-paid checkout row (regardless of status: a ``subscription_ov
 can leave one at ``overdue``), revives the one paid row a user had parked in ``upgrading``, and
 gives an explicit disposition to parked rows that cannot be revived — nothing else in the
 codebase moves a row out of ``upgrading`` once the revert pass is deleted.
+
+Dry-run by default (rolls back instead of committing) — pass ``--apply`` to persist.
 """
 
+import argparse
 import asyncio
-import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
@@ -25,34 +27,76 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Rows this cutover can touch. Anything already terminal (expired/cancelled/finished) is left
-# alone. ``pending_upgrade``/``upgrading`` are the new/old parked-checkout shapes respectively.
+# Statuses the null-``current_period_start`` heuristic may read as an abandoned checkout.
+# ``active`` is deliberately excluded: ``_refresh_cycle_dates`` can write "active" without ever
+# setting period dates (its provider read swallows failures), and a hand-created ``manual``
+# grant has no periods either — both hold a real entitlement, never a checkout.
+_UNPAID_CANDIDATE_STATUSES = ("pending", "pending_upgrade", "overdue", "upgrading")
+# Everything this cutover can touch, unpaid or parked.
 _RELEVANT_STATUSES = (*ACTIVE_STATUSES, "pending_upgrade", "upgrading")
 
 
-async def cutover(db, provider) -> dict[str, int]:
+async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
     manager = PaymentManager(provider, db)
     counts = {"promoted": 0, "expired": 0, "stranded": 0}
 
-    rows = (
+    async def cancel_ok(sub: PlanSubscription) -> bool:
+        # A dry run must never issue a real provider cancel — that action is irreversible and
+        # is exactly what "dry run" promises not to do. Simulate success so the DB-side
+        # selection logic can still be previewed; failure paths (stranded) cannot be previewed.
+        if dry_run:
+            logger.info(f"cutover(dry-run): would cancel sub {sub.id} at the provider")
+            return True
+        return await manager._cancel_on_provider(sub)
+
+    # The null-start heuristic below only ever applies to checkout-shaped statuses. An "active"
+    # row with no period dates is a live entitlement the heuristic cannot tell apart from one —
+    # abort instead of guessing so it gets a human's attention.
+    unexplained_active = (
         await db.execute(
-            select(PlanSubscription)
-            .where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
-            .with_for_update()
+            select(func.count())
+            .select_from(PlanSubscription)
+            .where(PlanSubscription.status == "active", PlanSubscription.current_period_start.is_(None))
+        )
+    ).scalar_one()
+    if unexplained_active:
+        raise RuntimeError(
+            f"Aborting: {unexplained_active} row(s) are 'active' with no current_period_start. "
+            f"These cannot be told apart from an abandoned checkout — resolve by hand, then re-run."
+        )
+
+    user_ids = (
+        await db.execute(
+            select(PlanSubscription.user_id).distinct().where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
         )
     ).scalars().all()
-    by_user: dict[uuid.UUID, list[PlanSubscription]] = {}
-    for row in rows:
-        by_user.setdefault(row.user_id, []).append(row)
 
-    for subs in by_user.values():
-        # Never-paid rows, regardless of status — a failed provider cancel leaves the row as-is
-        # (the write is gated on the cancel) rather than expiring it locally while it stays
-        # live and payable at the provider.
-        unpaid = [s for s in subs if s.current_period_start is None]
+    for user_id in user_ids:
+        # Serializes against start_checkout/upgrade, which take this same lock before writing a
+        # new row for the user — without it, FOR UPDATE below only locks rows that already
+        # exist, not one inserted concurrently under the row we are about to promote.
+        await manager._lock_user(user_id)
+        subs = (
+            await db.execute(
+                select(PlanSubscription)
+                .where(PlanSubscription.user_id == user_id, PlanSubscription.status.in_(_RELEVANT_STATUSES))
+                .with_for_update()
+            )
+        ).scalars().all()
+
+        unpaid = [s for s in subs if s.current_period_start is None and s.status in _UNPAID_CANDIDATE_STATUSES]
+        failed = [s for s in unpaid if not await cancel_ok(s)]
+        if failed:
+            # A failed cancel on one checkout row must not cost the user their paid parked
+            # subscription: touch nothing for this user, not even the rows that did cancel
+            # cleanly, and leave everything for a re-run once the failure is understood.
+            for sub in failed:
+                logger.warning(f"cutover: sub {sub.id} (user {user_id}) would not cancel at the provider, skipping user")
+            counts["stranded"] += len(failed)
+            await db.rollback()
+            continue
+
         for sub in unpaid:
-            if not await manager._cancel_on_provider(sub):
-                continue
             sub.status = "expired"
             db.add(PlanSubscriptionEvent(subscription_id=sub.id, event_type="expired_abandoned_checkout"))
             counts["expired"] += 1
@@ -62,39 +106,43 @@ async def cutover(db, provider) -> dict[str, int]:
         # both would be valid once the whole transaction settles.
         await db.flush()
 
-        # Computed after the unpaid pass so a row that failed to cancel (and so is still
-        # sitting in an ACTIVE_STATUSES-shaped status) correctly counts as live and blocks the
-        # promote below — promoting anyway would collide with it on the one-live-subscription
-        # index at flush.
         has_live = any(s.status in ACTIVE_STATUSES for s in subs)
-
         parked = [s for s in subs if s.status == "upgrading" and s.current_period_start is not None]
-        # DESC on current_period_end, NULLS LAST, tie-broken by created_at DESC.
-        parked.sort(key=lambda s: (s.current_period_end or datetime.min, s.created_at), reverse=True)
+        # DESC on current_period_end, NULLS LAST, tie-broken by created_at DESC then id DESC.
+        parked.sort(key=lambda s: (s.current_period_end or datetime.min, s.created_at, s.id), reverse=True)
         for i, sub in enumerate(parked):
             if i == 0 and not has_live:
                 sub.status = "active"
                 db.add(PlanSubscriptionEvent(subscription_id=sub.id, event_type="upgrade_abandoned_reverted"))
                 counts["promoted"] += 1
                 continue
-            if not await manager._cancel_on_provider(sub):
+            if not await cancel_ok(sub):
                 counts["stranded"] += 1
+                logger.warning(f"cutover: parked sub {sub.id} (user {user_id}) would not cancel, left in upgrading")
                 continue
             sub.status = "cancelled"
             db.add(PlanSubscriptionEvent(subscription_id=sub.id, event_type="cancelled_for_upgrade"))
+            await manager._credit_unused_remainder(sub)
 
-        await db.flush()
+        # Committed per user: an abort partway through must not roll back users already
+        # resolved, whose provider cancels already happened and cannot be undone. A dry run
+        # rolls back instead, so nothing it touched is ever persisted.
+        if dry_run:
+            await db.rollback()
+        else:
+            await db.commit()
 
     logger.info(f"cutover: {counts}")
     return counts
 
 
-async def main() -> None:
+async def main(apply: bool) -> None:
     async with AsyncSessionLocal() as db:
-        counts = await cutover(db, payment_registry.get("revolut"))
-        await db.commit()
-    print(counts)
+        counts = await cutover(db, payment_registry.get("revolut"), dry_run=not apply)
+    print(("APPLIED " if apply else "DRY RUN ") + str(counts))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="Persist changes (default: dry run).")
+    asyncio.run(main(parser.parse_args().apply))
