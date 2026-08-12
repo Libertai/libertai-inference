@@ -755,6 +755,50 @@ class PaymentManager:
             logger.warning("Failed to fetch cycle dates", exc_info=True)
 
     # ------------------------------------------------------------------ periodic
+    ABANDONED_UPGRADE_CHECKOUT_AGE = timedelta(hours=24)
+
+    async def sweep_abandoned_upgrade_checkouts(self) -> list[uuid.UUID]:
+        """Retire upgrade checkouts the user never paid.
+
+        The provider leaves an abandoned subscription payable for 30 days before cancelling it
+        itself; paying one that late activates a stale row against whatever the user has live
+        by then. Cancelling here is the same action taken sooner. The provider state is checked
+        first so a checkout completed moments ago is left alone, and the status write is gated
+        on the cancel succeeding.
+        """
+        cutoff = datetime.now() - self.ABANDONED_UPGRADE_CHECKOUT_AGE
+        rows = (
+            await self.db.execute(
+                select(PlanSubscription)
+                .where(
+                    PlanSubscription.status == "pending_upgrade",
+                    PlanSubscription.updated_at < cutoff,
+                    # A paid row can never be swept: _cancel_on_provider's failures are
+                    # swallowed, so a mis-selected live row would be cancelled silently.
+                    PlanSubscription.current_period_start.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalars().all()
+        touched: list[uuid.UUID] = []
+        for sub in rows:
+            if sub.provider_subscription_id:
+                try:
+                    info = await self.provider.get_subscription(sub.provider_subscription_id)
+                    if info.state not in ("pending", "cancelled"):
+                        continue
+                except Exception:
+                    logger.warning(f"Could not read provider state for sub {sub.id}", exc_info=True)
+                    continue
+            if not await self._cancel_on_provider(sub):
+                continue
+            sub.status = "expired"
+            await self._log_event(sub, "expired_abandoned_checkout")
+            touched.append(sub.user_id)
+        if touched:
+            await self.db.flush()
+        return touched
+
     async def check_expirations(self) -> int:
         """Expire subscriptions past their period end (24h grace to avoid racing webhooks).
 

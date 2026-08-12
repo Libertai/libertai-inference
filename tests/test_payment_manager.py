@@ -34,6 +34,7 @@ class FakeProvider(PaymentProvider):
         self.plan_changes: list[tuple[str, str]] = []
         self.sub_currencies: list[str] = []
         self.topups: list[tuple[float, str]] = []
+        self.sub_state = "pending"  # provider-side state reported by get_subscription
 
     def descriptor(self) -> ProviderDescriptor:
         return ProviderDescriptor(
@@ -74,7 +75,7 @@ class FakeProvider(PaymentProvider):
         now = datetime.now(timezone.utc)
         return SubscriptionInfo(
             provider_subscription_id=provider_subscription_id,
-            state="active",
+            state=self.sub_state,
             current_cycle_start=(now - timedelta(days=10)).isoformat(),
             current_cycle_end=(now + timedelta(days=20)).isoformat(),
         )
@@ -1265,3 +1266,78 @@ async def test_subscribe_retires_an_orphaned_upgrade_checkout(db):
     await db.refresh(stale)
     assert stale.status == "expired"
     assert "psub_stale" in provider.cancelled
+
+
+@pytest.mark.asyncio
+async def test_sweep_expires_and_cancels_stale_upgrade_checkout(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+    await db.execute(
+        update(PlanSubscription)
+        .where(PlanSubscription.id == checkout.id)
+        .values(updated_at=datetime.now() - timedelta(hours=25))
+    )
+
+    await manager.sweep_abandoned_upgrade_checkouts()
+
+    await db.refresh(checkout)
+    assert checkout.status == "expired"
+    assert "psub_new" in provider.cancelled
+    events = (await db.execute(
+        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == checkout.id)
+    )).scalars().all()
+    assert "expired_abandoned_checkout" in events
+
+
+@pytest.mark.asyncio
+async def test_sweep_keeps_recent_checkout(db):
+    user = await _make_user(db)
+    manager = PaymentManager(FakeProvider(), db)
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+
+    await manager.sweep_abandoned_upgrade_checkouts()
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_row_alone_when_provider_cancel_fails(db):
+    """Writing `expired` after a failed cancel marks the row dead locally while the link
+    stays payable for up to 30 days."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+
+    async def boom(provider_subscription_id: str) -> None:
+        raise RuntimeError("provider down")
+
+    provider.cancel_subscription = boom  # type: ignore[assignment]
+    manager = PaymentManager(provider, db)
+    checkout = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add(checkout)
+    await db.flush()
+    await db.execute(
+        update(PlanSubscription)
+        .where(PlanSubscription.id == checkout.id)
+        .values(updated_at=datetime.now() - timedelta(hours=25))
+    )
+
+    await manager.sweep_abandoned_upgrade_checkouts()
+
+    await db.refresh(checkout)
+    assert checkout.status == "pending_upgrade"
