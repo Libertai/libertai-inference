@@ -598,7 +598,7 @@ async def _dateless_paid_pair(db) -> tuple[User, PlanSubscription, PlanSubscript
 async def test_supersede_treats_a_dateless_row_with_an_activation_as_paid(db):
     """Period dates are not proof of payment: an activated row that never got them must be
     cancelled and prorated like any paid sub, not expired as an abandoned checkout."""
-    user, old, new = await _dateless_paid_pair(db)
+    _user, old, new = await _dateless_paid_pair(db)
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
 
@@ -626,7 +626,7 @@ async def test_supersede_aborts_when_a_dateless_paid_row_cannot_be_cancelled(db)
         async def cancel_subscription(self, provider_subscription_id: str) -> None:
             raise RuntimeError("provider down")
 
-    user, old, new = await _dateless_paid_pair(db)
+    _user, old, new = await _dateless_paid_pair(db)
     manager = PaymentManager(UncancellableProvider(), db)
 
     with pytest.raises(SupersedeFailed):

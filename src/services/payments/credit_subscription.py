@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.plan_subscription import PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.services.credit import CreditService
 from src.subscription_tiers import (
@@ -80,7 +80,7 @@ class CreditSubscriptionService:
             await db.execute(
                 select(PlanSubscription).where(
                     PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(["pending", "active", "overdue"]),
+                    PlanSubscription.status.in_(ACTIVE_STATUSES),
                 )
             )
         ).scalar_one_or_none()
