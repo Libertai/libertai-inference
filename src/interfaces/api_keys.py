@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ApiKeyType(str, Enum):
@@ -82,12 +82,18 @@ class ApiKeyUpdate(BaseModel):
     monthly_limit: float | None = None
 
 
+# The usage counts below are self-reported by the caller, so they are untrusted input:
+# holding a valid key is enough to send any number. A negative count is never meaningful and
+# would subtract from the stats and billing totals, so it is refused at the boundary.
+UsageTokenCount = Annotated[int, Field(ge=0)]
+
+
 class TextInferenceCallData(BaseModel):
     key: str
     model_name: str
-    input_tokens: int
-    output_tokens: int
-    cached_tokens: int = 0
+    input_tokens: UsageTokenCount
+    output_tokens: UsageTokenCount
+    cached_tokens: UsageTokenCount = 0
     type: InferenceCallType | None = None  # Optional for backward compatibility
     payment_payload: str | None = None
     payment_requirements: str | None = None
@@ -96,7 +102,7 @@ class TextInferenceCallData(BaseModel):
 class ImageInferenceCallData(BaseModel):
     key: str
     model_name: str
-    image_count: int
+    image_count: int = Field(ge=0)
     type: InferenceCallType = InferenceCallType.image
     payment_payload: str | None = None
     payment_requirements: str | None = None
@@ -110,9 +116,9 @@ class AudioInferenceCallData(BaseModel):
 
     key: str
     model_name: str
-    input_tokens: int  # character count
-    output_tokens: int = 0
-    cached_tokens: int = 0
+    input_tokens: UsageTokenCount  # character count
+    output_tokens: UsageTokenCount = 0
+    cached_tokens: UsageTokenCount = 0
     type: Literal[InferenceCallType.audio]
     payment_payload: str | None = None
     payment_requirements: str | None = None
