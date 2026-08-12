@@ -17,6 +17,11 @@ POOL_RECONCILE_LOCK_ID = 911001
 LTAI_BASE_LOCK_ID = 911002
 LTAI_SOLANA_LOCK_ID = 911003
 
+# Classid for the two-argument ``pg_advisory_*(classid, objid)`` form, whose keyspace is
+# disjoint from the single-argument ids above. Its objid is derived per user, so the ids it
+# spans cannot be enumerated here (see ``PaymentManager._lock_user``).
+USER_SUBSCRIPTION_LOCK_CLASS = 911004
+
 T = TypeVar("T")
 
 

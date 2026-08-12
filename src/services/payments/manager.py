@@ -42,6 +42,7 @@ from src.subscription_tiers import (
     is_upgrade,
 )
 from src.utils.logger import setup_logger
+from src.utils.pg_locks import USER_SUBSCRIPTION_LOCK_CLASS
 
 logger = setup_logger(__name__)
 
@@ -55,8 +56,11 @@ def _topup_external_ref(provider_id: str, order_id: str) -> str:
 
 
 def _user_lock_key(user_id: uuid.UUID) -> int:
-    """Signed 64-bit advisory-lock key derived from a user id."""
-    return int.from_bytes(user_id.bytes[:8], "big", signed=True)
+    """Signed 32-bit objid derived from a user id, for ``USER_SUBSCRIPTION_LOCK_CLASS``.
+
+    Two user ids sharing an objid merely serialize against each other.
+    """
+    return int.from_bytes(user_id.bytes[:4], "big", signed=True)
 
 
 class PaymentManager:
@@ -81,7 +85,9 @@ class PaymentManager:
         lock: the webhook and the checkout paths acquire the live row and the checkout row in
         opposite orders, so row-level locking alone deadlocks them.
         """
-        await self.db.execute(select(func.pg_advisory_xact_lock(_user_lock_key(user_id))))
+        await self.db.execute(
+            select(func.pg_advisory_xact_lock(USER_SUBSCRIPTION_LOCK_CLASS, _user_lock_key(user_id)))
+        )
 
     async def current_tier(self, user_id: uuid.UUID) -> str:
         sub = await self._active_subscription(user_id, lock=False)
@@ -405,11 +411,15 @@ class PaymentManager:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
             return False
 
-    async def _supersede_other_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> str | None:
+    async def _supersede_other_subs(
+        self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID
+    ) -> tuple[bool, str | None]:
         """Retire the user's other live rows in favour of a just-paid subscription.
 
-        Returns the tier upgraded FROM when a paid row was superseded, so the caller can log a
-        single ``upgraded`` event linking the pair.
+        Returns ``(ok, from_tier)``. ``ok`` is False when a PAID row could not be cancelled at
+        the provider: it keeps its live status, so the caller cannot go on to activate a second
+        live row. ``from_tier`` is the tier upgraded FROM when a paid row was superseded, so the
+        caller can log a single ``upgraded`` event linking the pair.
 
         ``pending_upgrade`` is deliberately absent from the status set: ORDER_COMPLETED also
         fires for renewals of the live subscription, and including it would cancel the user's
@@ -425,12 +435,20 @@ class PaymentManager:
                 )
             )
         ).scalars().all()
-        from_tier: str | None = None
+
+        # Every provider cancel resolves before any local write, so that giving up leaves no
+        # half-applied supersede behind. An unpaid row that will not cancel is only skipped —
+        # it occupies no entitlement and nothing was charged for it.
+        retiring: list[PlanSubscription] = []
         for old_sub in rows:
-            paid = old_sub.current_period_start is not None
-            if not await self._cancel_on_provider(old_sub):
-                continue
-            if paid:
+            if await self._cancel_on_provider(old_sub):
+                retiring.append(old_sub)
+            elif old_sub.current_period_start is not None:
+                return False, None
+
+        from_tier: str | None = None
+        for old_sub in retiring:
+            if old_sub.current_period_start is not None:
                 from_tier = old_sub.tier
                 old_sub.status = "cancelled"
                 await self._log_event(old_sub, "cancelled_for_upgrade")
@@ -438,7 +456,7 @@ class PaymentManager:
             else:
                 old_sub.status = "expired"
                 await self._log_event(old_sub, "expired_abandoned_checkout")
-        return from_tier
+        return True, from_tier
 
     async def _is_retired_checkout(self, sub: PlanSubscription) -> bool:
         """Has this row already been retired in favour of another subscription?
@@ -534,6 +552,20 @@ class PaymentManager:
             logger.info(f"Ignoring payment event with no matching subscription: {event}")
             return
 
+        # Dedup subscription events. Ahead of the refusal checks below: a redelivery for a row
+        # that was legitimately superseded since is ordinary duplicate traffic, not an incident.
+        if event.provider_event_id:
+            existing = (
+                await self.db.execute(
+                    select(PlanSubscriptionEvent.id).where(
+                        PlanSubscriptionEvent.provider_event_id == event.provider_event_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                logger.info(f"Duplicate event {event.provider_event_id}, skipping")
+                return
+
         activating = event.type == PaymentEventType.order_completed
         # Refused before anything is written: a refused row that carries an ``activated``
         # event gets an open-ended paying span in the subscription replay, because
@@ -550,24 +582,13 @@ class PaymentManager:
         if not sub:
             return
 
-        # The check above read outside the mutex, so a retirement that committed while this
-        # call queued for it is only visible now — still before any write.
+        # The check above ran on an unlocked read. What makes this one conclusive is the
+        # FOR UPDATE the re-resolve holds on the row: any transaction retiring it has to touch
+        # it too, so it has either already committed — and its event is visible here — or it
+        # cannot proceed until this one ends.
         if activating and await self._is_retired_checkout(sub):
             self._log_refused_activation(sub, event)
             return
-
-        # Dedup subscription events.
-        if event.provider_event_id:
-            existing = (
-                await self.db.execute(
-                    select(PlanSubscriptionEvent.id).where(
-                        PlanSubscriptionEvent.provider_event_id == event.provider_event_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing:
-                logger.info(f"Duplicate event {event.provider_event_id}, skipping")
-                return
 
         user = (await self.db.execute(select(User).where(User.id == sub.user_id))).scalar_one()
 
@@ -582,7 +603,14 @@ class PaymentManager:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
+            superseded, upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
+            if not superseded:
+                logger.error(
+                    f"Abandoning activation of sub {sub.id} (user {user.id}, order {event.order_id}): "
+                    f"the paid subscription it replaces could not be cancelled at the provider, "
+                    f"so both would be live at once — the payment needs manual resolution"
+                )
+                return
             await self.db.flush()
 
             if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
@@ -592,8 +620,9 @@ class PaymentManager:
                 sub.tier = sub.pending_tier
                 sub.pending_tier = None
             await self._refresh_cycle_dates(sub)
-            # Last mutation of this row: two ``active`` rows at once violate the
-            # one-live-subscription index, which is enforced per statement.
+            # Last mutation of this row, and only reached once every row it replaces is flushed
+            # non-live: the one-live-subscription index is enforced per statement, so any flush
+            # while two rows are live fails.
             sub.status = "active"
             # First successful charge is "activated"; every later completed cycle is a renewal.
             await self._log_event(
@@ -727,13 +756,12 @@ class PaymentManager:
             await self._log_event(sub, "expired", metadata={"new_tier": sub.pending_tier or DEFAULT_TIER})
             count += 1
 
-        # Abandoned upgrades: ``upgrade()`` parks the old sub as "upgrading" until the
-        # new checkout's ORDER_COMPLETED cancels it. If the user never pays, the parked
-        # sub would stay "upgrading" forever — no entitlement, while the provider keeps
-        # billing it. Revert to "active" after 1h (no provider call: the old plan was
-        # never cancelled). Skip users who still have a live row (the new checkout's
-        # pending sub): reverting would violate the one-active-sub index, and that
-        # row's completion cancels the parked sub anyway.
+        # An "upgrading" row is a paid subscription holding no entitlement while the provider
+        # keeps billing it, so it is restored to "active" once it has sat untouched for 1h. No
+        # provider call: the plan was never cancelled there. Users who already hold a live row
+        # are skipped — reverting would put two rows in the one-active-sub index, and an
+        # activation on that row supersedes this one anyway. No current path writes this
+        # status; the pass drains the rows already carrying it.
         stale_cutoff = datetime.now() - timedelta(hours=1)
         stale = await self.db.execute(
             select(PlanSubscription)
