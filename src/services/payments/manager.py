@@ -292,6 +292,7 @@ class PaymentManager:
         return result
 
     async def start_checkout(self, user: User, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+        await self._lock_user(user.id)
         existing = await self._active_subscription(user.id)
         if existing:
             if existing.status == "pending" and existing.current_period_end is None:
@@ -304,9 +305,9 @@ class PaymentManager:
         return await self._open_checkout(user, tier, redirect_url, currency, "pending")
 
     async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
-        await self._lock_user(user.id)
         if new_tier not in PAID_TIERS:
             raise ValueError(f"Invalid tier: {new_tier}")
+        await self._lock_user(user.id)
         # Validated against the live row's tier, not current_tier(): that returns "free" for
         # anything not exactly "active", which would admit an upgrade from no subscription at
         # all, and let an overdue higher-tier holder open a lower-tier "upgrade".
@@ -332,12 +333,17 @@ class PaymentManager:
         """Schedule cancellation at period end. Cancellation is TERMINAL on Revolut, so the
         provider-side cancel is DEFERRED to just before renewal (see check_expirations) —
         until then the user can resume() for free. Cancel == downgrade to free."""
+        await self._lock_user(user.id)
         sub = await self._active_subscription(user.id)
         if not sub:
             raise ValueError("No active subscription")
         sub.cancel_at_period_end = True
         sub.pending_tier = DEFAULT_TIER
         await self._log_event(sub, "cancel_requested")
+        # A scheduled wind-down must not leave a payable upgrade link: paying it would build a
+        # fresh row that carries none of the wind-down state, silently converting the request
+        # into a renewing, more expensive subscription.
+        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
         await self.db.flush()
         return {
             "message": "Subscription will be cancelled at end of billing period",
@@ -375,6 +381,7 @@ class PaymentManager:
     async def request_downgrade(self, user: User, new_tier: str) -> dict:
         if new_tier not in PAID_TIERS and new_tier != DEFAULT_TIER:
             raise ValueError(f"Invalid tier: {new_tier}")
+        await self._lock_user(user.id)
         current = await self.current_tier(user.id)
         if not is_downgrade(current, new_tier):
             raise ValueError(f"Cannot downgrade from {current} to {new_tier}")
@@ -398,6 +405,10 @@ class PaymentManager:
             # The sub keeps renewing (on the new plan) — supersede any earlier cancel request.
             sub.cancel_at_period_end = False
         await self._log_event(sub, "downgrade_requested", metadata={"new_tier": new_tier})
+        # A scheduled wind-down must not leave a payable upgrade link: paying it would build a
+        # fresh row that carries none of the wind-down state, silently converting the request
+        # into a renewing, more expensive subscription.
+        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
         await self.db.flush()
         return {
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
