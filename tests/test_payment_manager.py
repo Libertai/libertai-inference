@@ -572,6 +572,74 @@ async def test_activation_raises_when_the_paid_sub_cannot_be_cancelled(db):
     assert "activated" not in await _event_types(db, new.id)
 
 
+async def _dateless_paid_pair(db) -> tuple[User, PlanSubscription, PlanSubscription]:
+    """A user whose live paid row lost its period dates (a swallowed provider read at
+    activation), plus the upgrade checkout about to be paid."""
+    user = await _make_user(db)
+    old = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="active",
+        provider_subscription_id="psub_old",
+    )
+    new = PlanSubscription(
+        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        provider_subscription_id="psub_new",
+    )
+    db.add_all([old, new])
+    await db.flush()
+    db.add(PlanSubscriptionEvent(subscription_id=old.id, event_type="activated"))
+    await db.flush()
+    return user, old, new
+
+
+@pytest.mark.asyncio
+async def test_supersede_treats_a_dateless_row_with_an_activation_as_paid(db):
+    """Period dates are not proof of payment: an activated row that never got them must be
+    cancelled and prorated like any paid sub, not expired as an abandoned checkout."""
+    user, old, new = await _dateless_paid_pair(db)
+    provider = FakeProvider()
+    manager = PaymentManager(provider, db)
+
+    await manager.handle_event(PaymentEvent(
+        provider="fake", type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_1",
+        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
+    ))
+
+    await db.refresh(old)
+    await db.refresh(new)
+    assert new.status == "active"
+    assert old.status == "cancelled"
+    old_events = await _event_types(db, old.id)
+    assert "cancelled_for_upgrade" in old_events
+    assert "expired_abandoned_checkout" not in old_events
+    assert "upgraded" in await _event_types(db, new.id)
+
+
+@pytest.mark.asyncio
+async def test_supersede_aborts_when_a_dateless_paid_row_cannot_be_cancelled(db):
+    """Same row, failing cancel: activating anyway would leave two rows live."""
+
+    class UncancellableProvider(FakeProvider):
+        async def cancel_subscription(self, provider_subscription_id: str) -> None:
+            raise RuntimeError("provider down")
+
+    user, old, new = await _dateless_paid_pair(db)
+    manager = PaymentManager(UncancellableProvider(), db)
+
+    with pytest.raises(SupersedeFailed):
+        await manager.handle_event(PaymentEvent(
+            provider="fake", type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            provider_subscription_id="psub_new", order_id="ord_1", metadata={},
+        ))
+
+    await db.refresh(old)
+    await db.refresh(new)
+    assert old.status == "active"
+    assert new.status == "pending_upgrade"
+    assert "expired_abandoned_checkout" not in await _event_types(db, old.id)
+
+
 @pytest.mark.asyncio
 async def test_redelivery_caught_after_the_lock_when_the_early_read_misses(db, monkeypatch):
     """Two redeliveries of one event can both clear the unlocked dedup read and then serialize

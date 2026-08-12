@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
-from src.services.payments.manager import PaymentManager
+from src.services.payments.manager import PaymentManager, paid_subscription_ids
 from src.services.payments.registry import payment_registry
 from src.utils.logger import setup_logger
 
@@ -109,21 +109,9 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
             candidates = [
                 s for s in subs if s.current_period_start is None and s.status in _UNPAID_CANDIDATE_STATUSES
             ]
-            # A null start is only a checkout heuristic, not proof either way: an "activated" or
-            # "renewed" event is positive proof the row WAS paid, even if _refresh_cycle_dates
-            # later failed to persist its dates. Sweeping it would destroy a real subscription.
-            proven_paid: set = set()
-            if candidates:
-                proven_paid = set(
-                    (
-                        await db.execute(
-                            select(PlanSubscriptionEvent.subscription_id).where(
-                                PlanSubscriptionEvent.subscription_id.in_([s.id for s in candidates]),
-                                PlanSubscriptionEvent.event_type.in_(("activated", "renewed")),
-                            )
-                        )
-                    ).scalars().all()
-                )
+            # A null start is only a checkout heuristic, not proof either way: sweeping a row
+            # that was in fact paid would destroy a real subscription.
+            proven_paid = await paid_subscription_ids(db, candidates)
             unpaid = [s for s in candidates if s.id not in proven_paid]
             for s in candidates:
                 if s.id in proven_paid:
