@@ -218,19 +218,20 @@ class CreditsConsumptionDay(BaseModel):
 
 
 class TierCreditsDay(BaseModel):
-    """Total credits consumed on a single day by users who were on one tier that day."""
+    """Entitlement-covered credits consumed on a single day by users who were on one tier that day."""
 
     date: str
     tier: str  # "free" | "go" | "plus" | "max"
-    credits: float
+    credits: float  # tier_credits_used: the portion the entitlement window covered
 
 
 class GlobalCreditsConsumptionStats(BaseModel):
     """Credit consumption over a date range (api/cli/chat keys), tier-covered vs prepaid.
 
-    ``daily_by_tier`` splits total consumption by the tier the user held THAT day (historical
-    attribution via subscription event replay), including a ``free`` bucket for users with no
-    paid subscription. It totals ``credits_used``, so prepaid spend is included.
+    ``daily_by_tier`` splits the tier-covered portion by the tier the user held THAT day
+    (historical attribution via subscription event replay), including a ``free`` bucket for users
+    with no paid subscription (free carries its own weekly entitlement). It totals
+    ``tier_credits_used``, so it sums to ``total_tier_credits`` and excludes prepaid spend.
     """
 
     total_credits: float

@@ -1034,6 +1034,9 @@ class StatsService:
 
         Totals are rolled up from ``_credits_by_user_day`` (already grouped per user-day) instead
         of a second per-day scan over inference_calls — same table, same join, same filters.
+
+        ``daily_by_tier`` counts only the tier-covered portion, so it sums to
+        ``total_tier_credits``, not to ``total_credits``.
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -1059,7 +1062,7 @@ class StatsService:
                     )
 
                 by_tier = StatsService._aggregate_credits_by_tier(
-                    [(d, uid, credits) for d, uid, credits, _tier_credits in user_day],
+                    [(d, uid, tier_credits) for d, uid, _credits, tier_credits in user_day],
                     timelines,
                     start_date,
                     end_date,

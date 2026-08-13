@@ -132,10 +132,10 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
             await db.commit()
 
 
-async def test_credits_consumption_and_tier_economics_use_different_columns(async_client):
-    """daily_by_tier (credits-consumption) is attributed by credits_used; tier-economics'
-    per-tier credits is attributed by tier_credits_used. Adjacent tuple positions in the
-    service layer -- a swap between them must turn this test red."""
+async def test_credits_consumption_per_tier_excludes_prepaid(async_client):
+    """daily_by_tier counts only tier_credits_used, so it sums to total_tier_credits while
+    total_credits keeps the prepaid overflow. credits_used sits next to tier_credits_used in the
+    service-layer tuple -- picking the wrong position must turn this test red."""
     day = "2099-08-10"
     ts = datetime(2099, 8, 10, 12, 0, 0)
     event_ts = datetime(2099, 8, 1)
@@ -172,8 +172,11 @@ async def test_credits_consumption_and_tier_economics_use_different_columns(asyn
             f"/stats/global/credits-consumption?start_date={day}&end_date={day}", headers=headers
         )
         assert resp.status_code == 200, resp.text
-        by_tier = {d["tier"]: d["credits"] for d in resp.json()["daily_by_tier"]}
-        assert by_tier["plus"] == pytest.approx(5.0)  # credits_used
+        body = resp.json()
+        by_tier = {d["tier"]: d["credits"] for d in body["daily_by_tier"]}
+        assert by_tier["plus"] == pytest.approx(2.0)  # tier_credits_used, not the 5.0 spent
+        assert body["total_credits"] == pytest.approx(5.0)
+        assert sum(d["credits"] for d in body["daily_by_tier"]) == pytest.approx(body["total_tier_credits"])
 
         resp2 = await async_client.get(
             f"/stats/global/subscriptions/tier-economics?start_date={day}&end_date={day}", headers=headers
