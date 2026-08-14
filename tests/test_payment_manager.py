@@ -36,6 +36,9 @@ class FakeProvider(PaymentProvider):
         self.sub_currencies: list[str] = []
         self.topups: list[tuple[float, str]] = []
         self.sub_state = "pending"  # provider-side state reported by get_subscription
+        self.orders: dict[str, dict] = {}  # order_id -> payload returned by get_order
+        self.cycle_end_days: float = 20.0  # provider-side cycle end, days from now
+        self.sub_read_failures: set[str] = set()  # provider sub ids whose get_subscription raises
 
     def descriptor(self) -> ProviderDescriptor:
         return ProviderDescriptor(
@@ -83,16 +86,18 @@ class FakeProvider(PaymentProvider):
         # Dynamic 30-day cycle: 10 days in, 20 days left (keeps remainder math stable over time).
         from datetime import datetime, timedelta, timezone
 
+        if provider_subscription_id in self.sub_read_failures:
+            raise RuntimeError(f"provider read failed for {provider_subscription_id}")
         now = datetime.now(timezone.utc)
         return SubscriptionInfo(
             provider_subscription_id=provider_subscription_id,
             state=self.sub_state,
             current_cycle_start=(now - timedelta(days=10)).isoformat(),
-            current_cycle_end=(now + timedelta(days=20)).isoformat(),
+            current_cycle_end=(now + timedelta(days=self.cycle_end_days)).isoformat(),
         )
 
     async def get_order(self, order_id: str) -> dict:
-        return {}
+        return self.orders.get(order_id, {})
 
 
 async def _make_user(db) -> User:
@@ -1500,6 +1505,7 @@ async def test_deferred_provider_cancel_runs_before_renewal(db):
     from datetime import datetime, timedelta
 
     provider = FakeProvider()
+    provider.cycle_end_days = 1 / 24  # provider agrees the cycle ends within the hour
     user, mgr = await _active_plus_sub(db, provider)
     await mgr.cancel(user)
     assert provider.cancelled == []
@@ -1513,6 +1519,88 @@ async def test_deferred_provider_cancel_runs_before_renewal(db):
     assert "psub_1" in provider.cancelled
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"  # entitlement holds until the expiry pass (24h grace)
+
+
+@pytest.mark.asyncio
+async def test_deferred_cancel_refuses_a_stale_local_period_end(db):
+    """The provider-side cancel is terminal and makes the provider refund the running cycle, so
+    a local period end that is merely stale must never authorise it.
+
+    ``_refresh_cycle_dates`` leaves the previous value untouched whenever a provider read fails,
+    so a row can sit at last cycle's end while the provider has long since billed the next one.
+    Cancelling on that refunds a customer mid-cycle and hands them the remainder free."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(user)
+
+    # Stale: local says the cycle ended an hour ago, the provider says 20 days left.
+    sub = await mgr._active_subscription(user.id, lock=False)
+    sub.current_period_end = datetime.now() - timedelta(hours=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+
+    assert provider.cancelled == []  # nothing cancelled, so nothing refunded
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"
+    assert sub.current_period_end > datetime.now()  # and the stale date was healed
+
+
+@pytest.mark.asyncio
+async def test_deferred_cancel_skips_when_the_provider_cannot_be_read(db):
+    """An unverifiable period end is not a licence to cancel. Deferring costs at most one more
+    cycle, which is refundable; cancelling early is terminal and is not."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(user)
+    provider.sub_read_failures.add("psub_1")
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    sub.current_period_end = datetime.now() + timedelta(hours=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_refund_order_is_not_booked_as_a_renewal(db):
+    """A refund settles as its own order and the provider announces it with the same
+    ORDER_COMPLETED event a payment uses, under a new order id — so event-id dedup cannot see
+    it. Booking it as a renewal credits a cycle the money was handed back for and pushes the
+    period end forward, which is what hid an early cancellation until the ledger was read."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    sub = await mgr._active_subscription(user.id, lock=False)
+    original_end = datetime.now() + timedelta(days=20)
+    sub.current_period_end = original_end
+    await db.flush()
+    await mgr._log_event(sub, "activated", "ORDER_COMPLETED:ord_paid")
+    await db.flush()
+
+    provider.orders["ord_refund"] = {"type": "refund", "state": "completed"}
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_refund",
+            provider_subscription_id="psub_1",
+            order_id="ord_refund",
+            metadata={},
+        )
+    )
+
+    types = await _event_types(db, sub.id)
+    assert "renewed" not in types
+    assert "refunded" in types
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.current_period_end == original_end  # the cycle was not pushed forward
 
 
 @pytest.mark.asyncio

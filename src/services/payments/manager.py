@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -62,6 +62,15 @@ class SupersedeFailed(Exception):
 
 def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
+
+
+def _naive_utc(value: str) -> datetime:
+    """Provider timestamps carry an offset; the period columns are naive UTC and get compared
+    against ``datetime.now()``, which a mixed-awareness value would raise on."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscription]) -> set[uuid.UUID]:
@@ -646,6 +655,13 @@ class PaymentManager:
         if await self._is_duplicate_event(event):
             return
 
+        # Every check below would read a refund as a paid cycle, logging a renewal and pushing
+        # the period end forward on money that was handed back.
+        if event.type == PaymentEventType.order_completed and await self._is_refund_order(event.order_id):
+            await self._log_event(sub, "refunded", event.provider_event_id, event.metadata)
+            await self.db.flush()
+            return
+
         activating = event.type == PaymentEventType.order_completed
         # Refused before anything is written: a refused row that carries an ``activated``
         # event gets an open-ended paying span in the subscription replay, because
@@ -800,17 +816,34 @@ class PaymentManager:
                 logger.warning(f"Failed to resolve order {event.order_id} to subscription", exc_info=True)
         return None
 
-    async def _refresh_cycle_dates(self, sub: PlanSubscription) -> None:
+    async def _refresh_cycle_dates(self, sub: PlanSubscription) -> bool:
+        """Pull the cycle window from the provider onto ``sub``. False means unknown, not
+        unchanged: a failure leaves the previous cycle's dates in place, still looking current.
+        """
         if not sub.provider_subscription_id:
-            return
+            return False
         try:
             info = await self.provider.get_subscription(sub.provider_subscription_id)
             if info.current_cycle_start:
-                sub.current_period_start = datetime.fromisoformat(info.current_cycle_start)
+                sub.current_period_start = _naive_utc(info.current_cycle_start)
             if info.current_cycle_end:
-                sub.current_period_end = datetime.fromisoformat(info.current_cycle_end)
+                sub.current_period_end = _naive_utc(info.current_cycle_end)
+            return info.current_cycle_end is not None
         except Exception:
             logger.warning("Failed to fetch cycle dates", exc_info=True)
+            return False
+
+    async def _is_refund_order(self, order_id: str | None) -> bool:
+        """A refund is announced with the same completed-order event as a payment, under its own
+        order id, so neither the event map nor event-id dedup separates them — only ``type``."""
+        if not order_id:
+            return False
+        try:
+            order = await self.provider.get_order(order_id)
+        except Exception:
+            logger.warning(f"Failed to read order {order_id} to classify it", exc_info=True)
+            return False
+        return (order or {}).get("type") == "refund"
 
     # ------------------------------------------------------------------ periodic
     ABANDONED_UPGRADE_CHECKOUT_AGE = timedelta(hours=24)
@@ -892,9 +925,10 @@ class PaymentManager:
         # locally (Revolut cancellation is terminal, which would make resume impossible) —
         # the actual provider cancel happens here, shortly before the renewal would bill.
         # Repeat calls on an already-cancelled provider sub are swallowed by _cancel_on_provider.
-        # Read without FOR UPDATE: the pass writes nothing locally, and locking the whole match
-        # set would hold rows across a provider round trip each, blocking every subscription
-        # mutation of every user matched for the length of the pass.
+        # Read without FOR UPDATE: locking the whole match set would hold rows across a provider
+        # round trip each, blocking every subscription mutation of every user matched for the
+        # length of the pass. The only local write is the cycle refresh below, and its values
+        # come from the provider, so a concurrent webhook writing them too is not a conflict.
         pre_cutoff = datetime.now() + timedelta(hours=2)
         pending_cancel = await self.db.execute(
             select(PlanSubscription).where(
@@ -904,6 +938,18 @@ class PaymentManager:
             )
         )
         for sub in pending_cancel.scalars().all():
+            # Cancelling is terminal and refunds the cycle it lands in, so a stale stored end
+            # would refund a customer mid-cycle. Deferring costs one more cycle, which is
+            # refundable; cancelling early is not.
+            if not await self._refresh_cycle_dates(sub):
+                logger.warning(
+                    f"Deferring provider cancel for sub {sub.id}: cycle dates unreadable, so the "
+                    f"stored period end cannot authorise a terminal cancel"
+                )
+                continue
+            if sub.current_period_end and sub.current_period_end > pre_cutoff:
+                logger.info(f"Deferring provider cancel for sub {sub.id}: provider cycle still running")
+                continue
             await self._cancel_on_provider(sub)
 
         cutoff = datetime.now() - timedelta(hours=24)
