@@ -36,9 +36,7 @@ def single_runner(lock_id: int, skip_result: Any = None) -> Callable:
             from src.models.base import async_engine
 
             async with async_engine.connect() as conn:
-                acquired = (
-                    await conn.execute(text("SELECT pg_try_advisory_lock(:id)"), {"id": lock_id})
-                ).scalar()
+                acquired = (await conn.execute(text("SELECT pg_try_advisory_lock(:id)"), {"id": lock_id})).scalar()
                 if not acquired:
                     return skip_result
                 try:

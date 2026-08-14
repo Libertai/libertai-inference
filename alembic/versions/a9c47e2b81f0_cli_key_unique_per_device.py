@@ -45,8 +45,7 @@ def upgrade() -> None:
     # INVALID index enforcing nothing if the build failed.
     op.execute(DEDUP)
     op.execute(
-        f"CREATE UNIQUE INDEX {INDEX_NAME} ON api_keys (user_id, name) "
-        "WHERE type = 'cli' AND deleted_at IS NULL"
+        f"CREATE UNIQUE INDEX {INDEX_NAME} ON api_keys (user_id, name) WHERE type = 'cli' AND deleted_at IS NULL"
     )
 
 

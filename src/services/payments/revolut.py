@@ -262,11 +262,14 @@ class RevolutProvider(PaymentProvider):
             raise ValueError("Webhook timestamp too old or too far in the future")
 
         payload_to_sign = f"v1.{timestamp}.{body.decode('utf-8')}"
-        expected_sig = "v1=" + hmac.new(
-            self.webhook_secret.encode("utf-8"),
-            msg=payload_to_sign.encode("utf-8"),
-            digestmod=hashlib.sha256,
-        ).hexdigest()
+        expected_sig = (
+            "v1="
+            + hmac.new(
+                self.webhook_secret.encode("utf-8"),
+                msg=payload_to_sign.encode("utf-8"),
+                digestmod=hashlib.sha256,
+            ).hexdigest()
+        )
 
         provided_sigs = [s.strip() for s in signature_header.split(",")]
         if not any(hmac.compare_digest(expected_sig, sig) for sig in provided_sigs):

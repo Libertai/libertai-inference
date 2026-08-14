@@ -64,12 +64,16 @@ async def verify_magic_link(
     if email and code:
         email = email.strip().lower()
         link = (
-            await db.execute(
-                select(MagicLink)
-                .where(MagicLink.email == email, MagicLink.used_at.is_(None))
-                .order_by(MagicLink.created_at.desc())
+            (
+                await db.execute(
+                    select(MagicLink)
+                    .where(MagicLink.email == email, MagicLink.used_at.is_(None))
+                    .order_by(MagicLink.created_at.desc())
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if link is None or link.expires_at < now or link.code_hash is None:
             return None
         if link.attempts >= _MAX_CODE_ATTEMPTS:

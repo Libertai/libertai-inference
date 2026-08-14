@@ -24,7 +24,7 @@ from src.topup_packs import TOPUP_PACKS
 async def _auth_user() -> tuple[User, dict]:
     """Email/OAuth user with no wallet connection (fiat rail)."""
     async with AsyncSessionLocal() as db:
-        user = User(email=f"pay-route-{int(time.time()*1000)}@example.com")
+        user = User(email=f"pay-route-{int(time.time() * 1000)}@example.com")
         db.add(user)
         await db.commit()
         await db.refresh(user)
@@ -259,11 +259,7 @@ async def test_topup_eur_region_charges_pack_eur_credits_pack_usd(async_client, 
         assert seen["currency"] == "EUR"
 
         async with AsyncSessionLocal() as db:
-            tx = (
-                await db.execute(
-                    select(CreditTransaction).where(CreditTransaction.user_id == user.id)
-                )
-            ).scalar_one()
+            tx = (await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == user.id))).scalar_one()
         assert tx.status == CreditTransactionStatus.pending
         assert float(tx.amount) == pack.usd_credits
         assert float(tx.amount_left) == pack.usd_credits
@@ -278,9 +274,7 @@ async def test_topup_eur_region_without_pack_id_rejected(async_client, monkeypat
     _stub_topup_provider(monkeypatch, seen, f"ord_eur_nopack_{user.id}")
 
     try:
-        resp = await async_client.post(
-            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
-        )
+        resp = await async_client.post("/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers)
         assert resp.status_code == 400, resp.text
         assert "pack" in resp.json()["detail"].lower()
         assert seen.get("calls", 0) == 0
@@ -329,19 +323,13 @@ async def test_topup_usd_region_charges_arbitrary_amount_one_to_one(async_client
     _stub_topup_provider(monkeypatch, seen, f"ord_usd_{user.id}")
 
     try:
-        resp = await async_client.post(
-            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
-        )
+        resp = await async_client.post("/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers)
         assert resp.status_code == 200, resp.text
         assert seen["amount"] == 20.0
         assert seen["currency"] == "USD"
 
         async with AsyncSessionLocal() as db:
-            tx = (
-                await db.execute(
-                    select(CreditTransaction).where(CreditTransaction.user_id == user.id)
-                )
-            ).scalar_one()
+            tx = (await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == user.id))).scalar_one()
         assert float(tx.amount) == 20.0
     finally:
         await _cleanup(user.id)
@@ -551,7 +539,9 @@ async def test_subscription_reports_window_share_not_credits(async_client):
             for kind in ("5h", "weekly"):
                 db.add(
                     EntitlementWindow(
-                        user_id=user.id, kind=kind, started_at=now - timedelta(hours=1),
+                        user_id=user.id,
+                        kind=kind,
+                        started_at=now - timedelta(hours=1),
                         expires_at=now + timedelta(hours=4),
                     )
                 )
@@ -725,9 +715,7 @@ async def test_topup_revolut_rejected_for_wallet_user(async_client, monkeypatch)
     seen: dict = {}
     _stub_topup_provider(monkeypatch, seen, f"ord_wallet_{user.id}")
     try:
-        resp = await async_client.post(
-            "/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers
-        )
+        resp = await async_client.post("/payments/topup", json={"provider": "revolut", "amount": 20}, headers=headers)
         assert resp.status_code == 400, resp.text
         assert "on-chain" in resp.json()["detail"].lower()
         assert seen.get("calls", 0) == 0

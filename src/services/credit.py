@@ -92,12 +92,16 @@ class CreditService:
             async with AsyncSessionLocal() as db:
                 if external_reference:
                     existing = (
-                        await db.execute(
-                            select(CreditTransaction).where(
-                                CreditTransaction.external_reference == external_reference
+                        (
+                            await db.execute(
+                                select(CreditTransaction).where(
+                                    CreditTransaction.external_reference == external_reference
+                                )
                             )
                         )
-                    ).scalars().first()
+                        .scalars()
+                        .first()
+                    )
                     if existing:
                         logger.warning(f"Transaction {external_reference} already processed, skipping")
                         return False

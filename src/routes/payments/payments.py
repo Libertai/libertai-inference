@@ -89,9 +89,7 @@ def _checkout_redirect(redirect_base: str | None) -> str:
 async def _user_wallet_chains(db, user_id) -> list[str]:
     """Chains of the user's connected wallets; empty for email/OAuth-only accounts."""
     return list(
-        (
-            await db.execute(select(WalletConnection.chain).where(WalletConnection.user_id == user_id))
-        ).scalars().all()
+        (await db.execute(select(WalletConnection.chain).where(WalletConnection.user_id == user_id))).scalars().all()
     )
 
 
@@ -153,8 +151,7 @@ async def region(request: Request) -> RegionResponse:
 @router.get("/topup-packs", description="Fixed EUR top-up packs (gross EUR charge -> USD credits)")  # type: ignore
 async def topup_packs() -> list[TopupPackResponse]:
     return [
-        TopupPackResponse(id=p.id, usd_credits=p.usd_credits, eur_charge=p.eur_charge)
-        for p in TOPUP_PACKS.values()
+        TopupPackResponse(id=p.id, usd_credits=p.usd_credits, eur_charge=p.eur_charge) for p in TOPUP_PACKS.values()
     ]
 
 
@@ -406,15 +403,19 @@ async def resume(user: User = Depends(get_current_user)) -> ResumeResponse:
 async def get_subscription(user: User = Depends(get_current_user)) -> SubscriptionResponse:
     async with AsyncSessionLocal() as db:
         sub = (
-            await db.execute(
-                select(PlanSubscription)
-                .where(
-                    PlanSubscription.user_id == user.id,
-                    PlanSubscription.status.in_(ACTIVE_STATUSES),
+            (
+                await db.execute(
+                    select(PlanSubscription)
+                    .where(
+                        PlanSubscription.user_id == user.id,
+                        PlanSubscription.status.in_(ACTIVE_STATUSES),
+                    )
+                    .order_by(PlanSubscription.created_at.desc())
                 )
-                .order_by(PlanSubscription.created_at.desc())
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         allowance = await get_allowance_state(db, user.id)
 
     has_sub = sub is not None

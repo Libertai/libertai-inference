@@ -39,3 +39,5 @@ jobs:
         run: poetry install --only dev --no-root
       - name: Run Ruff
         run: poetry run ruff check --output-format=github
+      - name: Check formatting
+        run: poetry run ruff format --check --diff

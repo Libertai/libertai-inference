@@ -5,13 +5,14 @@ Revises: 483879ab11ca
 Create Date: 2026-06-02 14:42:19.774463
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '2bccd793c8f4'
-down_revision: str | None = '483879ab11ca'
+revision: str = "2bccd793c8f4"
+down_revision: str | None = "483879ab11ca"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

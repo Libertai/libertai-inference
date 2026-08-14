@@ -38,17 +38,23 @@ async def verify_signature(db: AsyncSession, address: str, signature: str) -> bo
     """Verify a signature against the latest unexpired challenge for the address (single-use)."""
     now = datetime.now()
     challenge = (
-        await db.execute(
-            select(WalletChallenge)
-            .where(WalletChallenge.address == address.lower())
-            .order_by(WalletChallenge.created_at.desc())
+        (
+            await db.execute(
+                select(WalletChallenge)
+                .where(WalletChallenge.address == address.lower())
+                .order_by(WalletChallenge.created_at.desc())
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if challenge is None or challenge.expires_at < now:
         return False
 
     try:
-        recovered = Account.recover_message(encode_defunct(text=_message_for_nonce(challenge.nonce)), signature=signature)
+        recovered = Account.recover_message(
+            encode_defunct(text=_message_for_nonce(challenge.nonce)), signature=signature
+        )
     except Exception:
         return False
 

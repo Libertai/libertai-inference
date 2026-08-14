@@ -21,9 +21,7 @@ class User(Base):
     __tablename__ = "users"
 
     # One account per canonical address: NULL emails are unconstrained (NULLs are distinct).
-    __table_args__ = (
-        Index("uq_users_email_canonical", canonical_email_expression(), unique=True),
-    )
+    __table_args__ = (Index("uq_users_email_canonical", canonical_email_expression(), unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     email: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
@@ -53,9 +51,7 @@ class User(Base):
     oauth_connections: Mapped[list["OAuthConnection"]] = relationship(
         "OAuthConnection", back_populates="user", cascade="all, delete-orphan"
     )
-    sessions: Mapped[list["Session"]] = relationship(
-        "Session", back_populates="user", cascade="all, delete-orphan"
-    )
+    sessions: Mapped[list["Session"]] = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     plan_subscriptions: Mapped[list["PlanSubscription"]] = relationship(
         "PlanSubscription", back_populates="user", cascade="all, delete-orphan"
     )

@@ -103,8 +103,12 @@ async def test_credits_consumption_splits_tier_and_prepaid(async_client):
         # (credits_used, tier_credits_used) -> prepaid = credits - tier
         for credits, tier in ((1.0, 0.5), (0.3, 0.3)):
             ic = InferenceCall(
-                api_key_id=key_id, credits_used=credits, tier_credits_used=tier,
-                input_tokens=1, output_tokens=1, model_name="m",
+                api_key_id=key_id,
+                credits_used=credits,
+                tier_credits_used=tier,
+                input_tokens=1,
+                output_tokens=1,
+                model_name="m",
             )
             ic.used_at = _TS
             db.add(ic)
@@ -157,8 +161,12 @@ async def test_credits_consumption_per_tier_excludes_prepaid(async_client):
 
         key_id = await _mk_key(db, user_id=user, type_=ApiKeyType.api)
         ic = InferenceCall(
-            api_key_id=key_id, credits_used=5.0, tier_credits_used=2.0,
-            input_tokens=1, output_tokens=1, model_name="m",
+            api_key_id=key_id,
+            credits_used=5.0,
+            tier_credits_used=2.0,
+            input_tokens=1,
+            output_tokens=1,
+            model_name="m",
         )
         ic.used_at = ts
         db.add(ic)
@@ -347,8 +355,12 @@ async def test_calls_by_segment_splits_free_paid(async_client):
         for key_id, n in ((free_key, 2), (paid_key, 4)):
             for _ in range(n):
                 ic = InferenceCall(
-                    api_key_id=key_id, credits_used=0.0, tier_credits_used=0.0,
-                    input_tokens=1, output_tokens=1, model_name="m",
+                    api_key_id=key_id,
+                    credits_used=0.0,
+                    tier_credits_used=0.0,
+                    input_tokens=1,
+                    output_tokens=1,
+                    model_name="m",
                 )
                 ic.used_at = _TS
                 db.add(ic)

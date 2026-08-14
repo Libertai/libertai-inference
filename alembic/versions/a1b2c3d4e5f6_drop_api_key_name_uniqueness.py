@@ -23,6 +23,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.create_unique_constraint(
-        "unique_api_key_name_per_user", "api_keys", ["user_address", "name"]
-    )
+    op.create_unique_constraint("unique_api_key_name_per_user", "api_keys", ["user_address", "name"])

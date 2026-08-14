@@ -9,7 +9,9 @@ from src.services.users import (
 )
 
 
-def _oauth_info(provider="google", provider_id="oauth-1", email="oauth1@example.com", avatar_url="http://avatar", name="OAuth User"):
+def _oauth_info(
+    provider="google", provider_id="oauth-1", email="oauth1@example.com", avatar_url="http://avatar", name="OAuth User"
+):
     return OAuthUserInfo(
         provider=provider,
         provider_id=provider_id,
@@ -21,9 +23,7 @@ def _oauth_info(provider="google", provider_id="oauth-1", email="oauth1@example.
 
 async def _wallet_count(db, user_id) -> int:
     return (
-        await db.execute(
-            select(func.count()).select_from(WalletConnection).where(WalletConnection.user_id == user_id)
-        )
+        await db.execute(select(func.count()).select_from(WalletConnection).where(WalletConnection.user_id == user_id))
     ).scalar()
 
 
@@ -100,9 +100,7 @@ async def test_oauth_login_does_not_clobber_custom_display_name():
         user.display_name = "My Chosen Name"
         await db.commit()
 
-        user2, _ = await get_or_create_user_by_oauth(
-            db, _oauth_info(provider_id="name-1", name="Provider Name")
-        )
+        user2, _ = await get_or_create_user_by_oauth(db, _oauth_info(provider_id="name-1", name="Provider Name"))
         await db.commit()
         assert user2.display_name == "My Chosen Name"
 
@@ -115,9 +113,7 @@ async def test_oauth_login_keeps_avatar_when_provider_sends_none():
         await db.commit()
         assert user.avatar_url == "http://avatar"
 
-        user2, _ = await get_or_create_user_by_oauth(
-            db, _oauth_info(provider_id="avatar-3", avatar_url=None)
-        )
+        user2, _ = await get_or_create_user_by_oauth(db, _oauth_info(provider_id="avatar-3", avatar_url=None))
         await db.commit()
         assert user2.avatar_url == "http://avatar"
 

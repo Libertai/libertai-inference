@@ -27,9 +27,7 @@ class PlanSubscriptionEvent(Base):
 
     subscription: Mapped["PlanSubscription"] = relationship("PlanSubscription", back_populates="events")
 
-    __table_args__ = (
-        UniqueConstraint("provider_event_id", name="uq_plan_subscription_event_provider_event_id"),
-    )
+    __table_args__ = (UniqueConstraint("provider_event_id", name="uq_plan_subscription_event_provider_event_id"),)
 
     def __init__(
         self,

@@ -70,9 +70,7 @@ async def consume(db: AsyncSession, ip: str, now: datetime | None = None) -> Ano
         .values(id=uuid.uuid4(), ip=ip, window_started_at=now, count=0, week_started_at=now, week_count=0)
         .on_conflict_do_nothing(index_elements=["ip"])
     )
-    row = (
-        await db.execute(select(AnonChatUsage).where(AnonChatUsage.ip == ip).with_for_update())
-    ).scalar_one()
+    row = (await db.execute(select(AnonChatUsage).where(AnonChatUsage.ip == ip).with_for_update())).scalar_one()
 
     if row.window_started_at + ANON_WINDOW <= now:
         row.window_started_at = now

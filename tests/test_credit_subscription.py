@@ -27,6 +27,7 @@ from src.subscription_tiers import get_tier
 
 # ------------------------------------------------------------------ helpers
 
+
 async def _make_user(db: AsyncSession) -> User:
     user = User(email=f"{uuid.uuid4().hex}@example.com")
     db.add(user)
@@ -54,6 +55,7 @@ async def _balance(db: AsyncSession, user_id: uuid.UUID) -> float:
 
 
 # ------------------------------------------------------------------ subscribe
+
 
 async def test_subscribe_funded_creates_active_sub(db):
     user = await _make_user(db)
@@ -85,9 +87,7 @@ async def test_subscribe_unfunded_raises_no_sub_created(db):
 
     # No subscription row should exist.
     count = (
-        await db.execute(
-            select(func.count()).select_from(PlanSubscription).where(PlanSubscription.user_id == user.id)
-        )
+        await db.execute(select(func.count()).select_from(PlanSubscription).where(PlanSubscription.user_id == user.id))
     ).scalar()
     assert count == 0
 
@@ -106,6 +106,7 @@ async def test_subscribe_twice_raises_already_subscribed(db):
 
 
 # ------------------------------------------------------------------ process_renewals
+
 
 async def test_process_renewals_funded_renews(db):
     user = await _make_user(db)
@@ -189,6 +190,7 @@ async def test_process_renewals_just_below_price_expires_no_free_renewal(db):
 
 # ------------------------------------------------------------------ cancel + renewal
 
+
 async def test_cancel_sets_flag_then_renewal_expires_no_charge(db):
     user = await _make_user(db)
     go_price = get_tier("go").price_cents / 100
@@ -218,9 +220,10 @@ async def test_cancel_sets_flag_then_renewal_expires_no_charge(db):
 
 # ------------------------------------------------------------------ upgrade
 
+
 async def test_upgrade_go_to_plus_charges_prorated_diff(db):
     user = await _make_user(db)
-    go_price = get_tier("go").price_cents / 100    # 8.0
+    go_price = get_tier("go").price_cents / 100  # 8.0
     plus_price = get_tier("plus").price_cents / 100  # 20.0
     await _add_credits(db, user.id, 50.0)
 
@@ -266,6 +269,7 @@ async def test_upgrade_insufficient_credits_raises_no_change(db):
 
 
 # ------------------------------------------------------------------ downgrade + renewal
+
 
 async def test_downgrade_plus_to_go_then_renewal_charges_go_price(db):
     user = await _make_user(db)
@@ -396,7 +400,7 @@ async def test_upgrade_on_lapsed_period_renews_inline_then_charges_full_diff(db)
     free: the sub renews inline (old tier price), then the upgrade charges the
     (nearly) full tier difference against the fresh period."""
     user = await _make_user(db)
-    go_price = get_tier("go").price_cents / 100    # 8.0
+    go_price = get_tier("go").price_cents / 100  # 8.0
     plus_price = get_tier("plus").price_cents / 100  # 20.0
     await _add_credits(db, user.id, 60.0)
 

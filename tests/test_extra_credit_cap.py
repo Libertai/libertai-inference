@@ -58,8 +58,10 @@ async def _setup(*, prepaid=0.0, cap=None, overflow_calls=(), exhaust_windows=Fa
             for kind in (WINDOW_5H, WINDOW_WEEKLY):
                 db.add(
                     EntitlementWindow(
-                        user_id=user.id, kind=kind,
-                        started_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=4),
+                        user_id=user.id,
+                        kind=kind,
+                        started_at=now - timedelta(hours=1),
+                        expires_at=now + timedelta(hours=4),
                     )
                 )
             call = InferenceCall(api_key_id=key.id, credits_used=10.0, model_name="m", tier_credits_used=10.0)
@@ -67,7 +69,9 @@ async def _setup(*, prepaid=0.0, cap=None, overflow_calls=(), exhaust_windows=Fa
             db.add(call)
         for credits_used, tier_credits_used, used_at in overflow_calls:
             call = InferenceCall(
-                api_key_id=key.id, credits_used=credits_used, model_name="m",
+                api_key_id=key.id,
+                credits_used=credits_used,
+                model_name="m",
                 tier_credits_used=tier_credits_used,
             )
             call.used_at = used_at
@@ -75,8 +79,11 @@ async def _setup(*, prepaid=0.0, cap=None, overflow_calls=(), exhaust_windows=Fa
         if prepaid:
             db.add(
                 CreditTransaction(
-                    user_id=user.id, amount=prepaid, amount_left=prepaid,
-                    provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+                    user_id=user.id,
+                    amount=prepaid,
+                    amount_left=prepaid,
+                    provider=CreditTransactionProvider.revolut,
+                    status=CreditTransactionStatus.completed,
                 )
             )
         await db.commit()
@@ -133,7 +140,9 @@ async def test_month_overflow_empty_input():
 async def test_allowance_state_cap_reached_blocks_prepaid():
     now = datetime.now()
     user_id, _ = await _setup(
-        prepaid=50.0, cap=2.0, exhaust_windows=True,
+        prepaid=50.0,
+        cap=2.0,
+        exhaust_windows=True,
         overflow_calls=[(3.0, 0.0, now - timedelta(minutes=5))],  # 3.0 overflow >= 2.0 cap
     )
     try:
@@ -153,7 +162,9 @@ async def test_allowance_state_include_cap_false_skips_cap():
     # Billing-split callers only consume window fields; the cap must not run its queries there.
     now = datetime.now()
     user_id, _ = await _setup(
-        prepaid=50.0, cap=2.0, exhaust_windows=True,
+        prepaid=50.0,
+        cap=2.0,
+        exhaust_windows=True,
         overflow_calls=[(3.0, 0.0, now - timedelta(minutes=5))],
     )
     try:
@@ -170,7 +181,9 @@ async def test_allowance_state_include_cap_false_skips_cap():
 async def test_allowance_state_cap_not_reached_allows_prepaid():
     now = datetime.now()
     user_id, _ = await _setup(
-        prepaid=50.0, cap=10.0, exhaust_windows=True,
+        prepaid=50.0,
+        cap=10.0,
+        exhaust_windows=True,
         overflow_calls=[(3.0, 0.0, now - timedelta(minutes=5))],
     )
     try:
@@ -231,7 +244,9 @@ async def test_month_overflow_excludes_shared_chat_key():
 async def test_allowance_state_no_cap_unchanged():
     now = datetime.now()
     user_id, _ = await _setup(
-        prepaid=50.0, cap=None, exhaust_windows=True,
+        prepaid=50.0,
+        cap=None,
+        exhaust_windows=True,
         overflow_calls=[(999.0, 0.0, now - timedelta(minutes=5))],
     )
     try:
@@ -290,8 +305,10 @@ async def test_update_user_profile_partial():
 
 def test_subscription_response_carries_cap_fields():
     resp = SubscriptionResponse(
-        tier="free", has_subscription=False,
-        monthly_extra_credit_cap=20.0, extra_credits_used_this_month=3.5,
+        tier="free",
+        has_subscription=False,
+        monthly_extra_credit_cap=20.0,
+        extra_credits_used_this_month=3.5,
     )
     assert resp.monthly_extra_credit_cap == 20.0
     assert resp.extra_credits_used_this_month == 3.5

@@ -30,8 +30,10 @@ async def test_legacy_wallet_token_resolves_to_wallet_user():
 
     async with AsyncSessionLocal() as db:
         wallet = (
-            await db.execute(select(WalletConnection).where(WalletConnection.user_id == resolved.id))
-        ).scalars().first()
+            (await db.execute(select(WalletConnection).where(WalletConnection.user_id == resolved.id)))
+            .scalars()
+            .first()
+        )
         assert wallet is not None  # legacy address token created/linked a wallet user
 
 

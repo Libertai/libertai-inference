@@ -29,17 +29,11 @@ def _scratch_url() -> str:
 
 
 def _admin_conninfo(url) -> str:
-    return (
-        f"host={url.host} port={url.port or 5432} "
-        f"user={url.username} password={url.password} dbname=postgres"
-    )
+    return f"host={url.host} port={url.port or 5432} user={url.username} password={url.password} dbname=postgres"
 
 
 def _libpq_conninfo(url) -> str:
-    return (
-        f"host={url.host} port={url.port or 5432} "
-        f"user={url.username} password={url.password} dbname={url.database}"
-    )
+    return f"host={url.host} port={url.port or 5432} user={url.username} password={url.password} dbname={url.database}"
 
 
 @pytest.fixture
@@ -93,12 +87,10 @@ def test_migration_a_backfills_identity(scratch_db):
         assert conn.execute("SELECT count(*) FROM users WHERE id IS NULL").fetchone()[0] == 0
 
         # one wallet_connection per address, with the chain inferred from the prefix
-        chain_base = conn.execute(
-            "SELECT chain FROM wallet_connections WHERE address = %s", (BASE_ADDR,)
-        ).fetchone()[0]
-        chain_sol = conn.execute(
-            "SELECT chain FROM wallet_connections WHERE address = %s", (SOL_ADDR,)
-        ).fetchone()[0]
+        chain_base = conn.execute("SELECT chain FROM wallet_connections WHERE address = %s", (BASE_ADDR,)).fetchone()[
+            0
+        ]
+        chain_sol = conn.execute("SELECT chain FROM wallet_connections WHERE address = %s", (SOL_ADDR,)).fetchone()[0]
         assert chain_base == "base"
         assert chain_sol == "solana"
         assert conn.execute("SELECT count(*) FROM wallet_connections WHERE is_primary").fetchone()[0] == 2
@@ -107,8 +99,7 @@ def test_migration_a_backfills_identity(scratch_db):
         assert conn.execute("SELECT count(*) FROM credit_transactions WHERE user_id IS NULL").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM api_keys WHERE user_id IS NULL").fetchone()[0] == 0
         mismatched = conn.execute(
-            "SELECT count(*) FROM credit_transactions c JOIN users u ON c.address = u.address "
-            "WHERE c.user_id <> u.id"
+            "SELECT count(*) FROM credit_transactions c JOIN users u ON c.address = u.address WHERE c.user_id <> u.id"
         ).fetchone()[0]
         assert mismatched == 0
 

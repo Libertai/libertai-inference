@@ -21,6 +21,7 @@ async def health() -> dict[str, str]:
     """Liveness probe for the orchestrator's healthcheck (deploy gating + rollback)."""
     return {"status": "ok"}
 
+
 # Add security scheme to OpenAPI documentation
 app.openapi_components = {  # type: ignore
     "securitySchemes": {"CookieAuth": {"type": "apiKey", "in": "cookie", "name": "libertai_auth"}}

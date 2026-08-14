@@ -248,9 +248,7 @@ def test_registry_available_for_chains_splits_fiat_and_crypto_by_wallet():
 def test_registry_hides_disabled_providers():
     registry = PaymentRegistry()
     # No creds -> revolut disabled; crypto with no contract -> disabled.
-    registry.register(
-        RevolutProvider(secret_key="", webhook_secret="", api_url="https://x", api_version="v")
-    )
+    registry.register(RevolutProvider(secret_key="", webhook_secret="", api_url="https://x", api_version="v"))
     registry.register(ThirdwebPaymentProvider(contract_address=None))
     assert registry.available_for_chains([]) == []
     assert registry.available_for_chains(["base"]) == []

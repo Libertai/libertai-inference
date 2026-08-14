@@ -170,18 +170,22 @@ async def get_user_from_api_key(authorization: str | None = Header(default=None)
     now = datetime.now()
     async with AsyncSessionLocal() as db:
         api_key = (
-            await db.execute(
-                select(ApiKeyDB)
-                .options(joinedload(ApiKeyDB.user))
-                .where(
-                    ApiKeyDB.key == key,
-                    ApiKeyDB.type.in_(USER_OWNED_KEY_TYPES),
-                    ApiKeyDB.deleted_at.is_(None),
-                    ApiKeyDB.is_active == True,
-                    or_(ApiKeyDB.expires_at.is_(None), ApiKeyDB.expires_at > now),
+            (
+                await db.execute(
+                    select(ApiKeyDB)
+                    .options(joinedload(ApiKeyDB.user))
+                    .where(
+                        ApiKeyDB.key == key,
+                        ApiKeyDB.type.in_(USER_OWNED_KEY_TYPES),
+                        ApiKeyDB.deleted_at.is_(None),
+                        ApiKeyDB.is_active == True,
+                        or_(ApiKeyDB.expires_at.is_(None), ApiKeyDB.expires_at > now),
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
     if api_key is None or api_key.user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")

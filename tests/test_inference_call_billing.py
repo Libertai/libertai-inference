@@ -43,16 +43,12 @@ async def test_per_user_chat_window_then_overflow_to_prepaid():
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
     # First call stays within the free window (5h cap 0.5, weekly cap 2.0): covered by tier.
-    ok = await ApiKeyService.register_inference_call(
-        key=chat_key.full_key, credits_used=0.4, model_name="test-model"
-    )
+    ok = await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=0.4, model_name="test-model")
     assert ok is True
     assert await _balance(user_id) == pytest.approx(10.0)  # within free window — not charged
 
     # Second call pushes cumulative usage past the free window -> overflow draws from prepaid.
-    ok = await ApiKeyService.register_inference_call(
-        key=chat_key.full_key, credits_used=2.0, model_name="test-model"
-    )
+    ok = await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=2.0, model_name="test-model")
     assert ok is True
     assert await _balance(user_id) < 10.0  # overflow charged to prepaid
 
@@ -66,14 +62,10 @@ async def test_call_within_tighter_window_then_split_charge():
 
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="split", user_address=address)
 
-    await ApiKeyService.register_inference_call(
-        key=api_key.full_key, credits_used=0.5, model_name="test-model"
-    )
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.5, model_name="test-model")
     assert await _balance(user_id) == pytest.approx(10.0)  # exactly fills the 5h window, nothing overflows
 
-    await ApiKeyService.register_inference_call(
-        key=api_key.full_key, credits_used=1.0, model_name="test-model"
-    )
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=1.0, model_name="test-model")
     assert await _balance(user_id) == pytest.approx(9.0)  # 5h window full -> whole 1.0 overflows to prepaid
 
 
@@ -88,7 +80,9 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
     # is no longer "tier" — i.e. a per-user key in this state would now draw from prepaid.
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="primer", user_address=address)
     ok = await ApiKeyService.register_inference_call(
-        key=api_key.full_key, credits_used=2.5, model_name="test-model"  # > free weekly cap 2.0
+        key=api_key.full_key,
+        credits_used=2.5,
+        model_name="test-model",  # > free weekly cap 2.0
     )
     assert ok is True
     balance_after_priming = await _balance(user_id)
@@ -97,9 +91,7 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
     # Now route a call through the shared free key: it must NOT deduct despite source != "tier".
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
     monkeypatch.setattr(config, "LIBERTAI_CHAT_API_KEY", chat_key.full_key)
-    ok = await ApiKeyService.register_inference_call(
-        key=chat_key.full_key, credits_used=5.0, model_name="test-model"
-    )
+    ok = await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=5.0, model_name="test-model")
     assert ok is True
     assert await _balance(user_id) == balance_after_priming  # shared free key is never charged
 
@@ -114,9 +106,7 @@ async def test_api_key_usage_beyond_free_window_charges_only_overflow():
 
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="std", user_address=address)
 
-    ok = await ApiKeyService.register_inference_call(
-        key=api_key.full_key, credits_used=3.0, model_name="test-model"
-    )
+    ok = await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=3.0, model_name="test-model")
 
     assert ok is True
     assert await _balance(user_id) == pytest.approx(7.5)
@@ -216,9 +206,7 @@ async def test_blocked_chat_key_drops_from_whitelist():
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
     # Drain past the free weekly window (2.0) with zero prepaid -> blocked.
-    await ApiKeyService.register_inference_call(
-        key=chat_key.full_key, credits_used=2.5, model_name="m"
-    )
+    await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=2.5, model_name="m")
     whitelist = (await ApiKeyService.get_admin_all_api_keys()).valid
     assert chat_key.full_key not in whitelist
 

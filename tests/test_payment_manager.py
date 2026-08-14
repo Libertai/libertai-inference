@@ -47,7 +47,15 @@ class FakeProvider(PaymentProvider):
         )
 
     async def create_topup(
-        self, *, amount, currency, redirect_url, user_email=None, metadata=None, vat_rate=0.0, item_name="Prepaid credits"
+        self,
+        *,
+        amount,
+        currency,
+        redirect_url,
+        user_email=None,
+        metadata=None,
+        vat_rate=0.0,
+        item_name="Prepaid credits",
     ):
         self.order_seq += 1
         self.topups.append((amount, currency))
@@ -120,8 +128,10 @@ async def test_topup_completes_once_and_dedups(db):
     assert await _balance(db, user.id) == 0.0
 
     event = PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_1", order_id="ord_1",
+        provider="fake",
+        type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:ord_1",
+        order_id="ord_1",
     )
     await mgr.handle_event(event)
     assert await _balance(db, user.id) == 10.0
@@ -138,8 +148,12 @@ async def test_topup_failure_voids_pending(db):
     await mgr.start_topup(user, redirect_url="http://x", usd_credits=5.0, charge_amount=5.0, charge_currency="USD")
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_FAILED:ord_1", order_id="ord_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_FAILED:ord_1",
+            order_id="ord_1",
+        )
     )
     tx = (
         await db.execute(
@@ -165,14 +179,22 @@ async def test_topup_declined_then_captured_on_retry_credits_in_full(db):
 
     for i in range(3):
         await mgr.handle_event(
-            PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                         provider_event_id=f"ORDER_PAYMENT_DECLINED:ord_1:{i}", order_id="ord_1")
+            PaymentEvent(
+                provider="fake",
+                type=PaymentEventType.order_failed,
+                provider_event_id=f"ORDER_PAYMENT_DECLINED:ord_1:{i}",
+                order_id="ord_1",
+            )
         )
     assert await _balance(db, user.id) == 0.0
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:ord_1", order_id="ord_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            order_id="ord_1",
+        )
     )
 
     tx = (
@@ -196,12 +218,20 @@ async def test_late_decline_does_not_confiscate_completed_topup(db):
     await mgr.start_topup(user, redirect_url="http://x", usd_credits=10.0, charge_amount=10.0, charge_currency="USD")
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:ord_1", order_id="ord_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            order_id="ord_1",
+        )
     )
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_DECLINED:ord_1", order_id="ord_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:ord_1",
+            order_id="ord_1",
+        )
     )
     assert await _balance(db, user.id) == 10.0
 
@@ -249,11 +279,14 @@ async def test_topup_usd_charges_and_records_same_amount(db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kwargs", [
-    {"usd_credits": 0.0, "charge_amount": 12.0, "charge_currency": "EUR"},
-    {"usd_credits": 10.0, "charge_amount": 0.0, "charge_currency": "EUR"},
-    {"usd_credits": -1.0, "charge_amount": 12.0, "charge_currency": "EUR"},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"usd_credits": 0.0, "charge_amount": 12.0, "charge_currency": "EUR"},
+        {"usd_credits": 10.0, "charge_amount": 0.0, "charge_currency": "EUR"},
+        {"usd_credits": -1.0, "charge_amount": 12.0, "charge_currency": "EUR"},
+    ],
+)
 async def test_topup_rejects_non_positive_amounts(db, kwargs):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
@@ -272,9 +305,13 @@ async def test_subscribe_activates_tier(db):
     assert await mgr.current_tier(user.id) == "free"  # not active yet
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
     )
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"
@@ -288,17 +325,21 @@ async def test_subscription_event_dedup(db):
     mgr = PaymentManager(FakeProvider(), db)
     await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
 
-    event = PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                         provider_event_id="ORDER_COMPLETED:setup_1",
-                         provider_subscription_id="psub_1", order_id="setup_1")
+    event = PaymentEvent(
+        provider="fake",
+        type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:setup_1",
+        provider_subscription_id="psub_1",
+        order_id="setup_1",
+    )
     await mgr.handle_event(event)
     await mgr.handle_event(event)  # replay
 
     activated = (
         await db.execute(
-            select(func.count()).select_from(PlanSubscriptionEvent).where(
-                PlanSubscriptionEvent.event_type == "activated"
-            )
+            select(func.count())
+            .select_from(PlanSubscriptionEvent)
+            .where(PlanSubscriptionEvent.event_type == "activated")
         )
     ).scalar()
     assert activated == 1
@@ -328,10 +369,14 @@ async def test_declined_card_at_checkout_keeps_sub_pending(db):
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "pending"
@@ -339,10 +384,14 @@ async def test_declined_card_at_checkout_keeps_sub_pending(db):
 
     # Retry on the same order succeeds -> normal activation.
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"
@@ -357,17 +406,25 @@ async def test_late_failure_for_completed_order_does_not_revoke_sub(db):
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
     # The earlier declined attempt on the SAME order arrives late.
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
 
     sub = await mgr._active_subscription(user.id, lock=False)
@@ -383,17 +440,25 @@ async def test_renewal_failure_marks_overdue(db):
     mgr = PaymentManager(FakeProvider(), db)
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_FAILED:renew_1",
-                     provider_subscription_id="psub_1", order_id="renew_1",
-                     metadata={"order_id": "renew_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_FAILED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
     )
 
     sub = await mgr._active_subscription(user.id, lock=False)
@@ -410,24 +475,36 @@ async def test_declined_card_on_upgrade_checkout_stays_pending_upgrade(db):
     """
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    db.add(PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
-        provider_subscription_id="psub_old",
-        current_period_start=datetime.now() - timedelta(days=5),
-        current_period_end=datetime.now() + timedelta(days=25),
-    ))
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="plus",
+            provider="fake",
+            status="active",
+            provider_subscription_id="psub_old",
+            current_period_start=datetime.now() - timedelta(days=5),
+            current_period_end=datetime.now() + timedelta(days=25),
+        )
+    )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
     await db.flush()
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_DECLINED:ord_9",
-                     provider_subscription_id="psub_new", order_id="ord_9",
-                     metadata={"order_id": "ord_9"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:ord_9",
+            provider_subscription_id="psub_new",
+            order_id="ord_9",
+            metadata={"order_id": "ord_9"},
+        )
     )
 
     await db.refresh(checkout)
@@ -445,17 +522,24 @@ async def test_subscription_overdue_ignored_on_unpaid_checkout(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
     await db.flush()
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.subscription_overdue,
-                     provider_event_id="SUBSCRIPTION_OVERDUE:",
-                     provider_subscription_id="psub_new", order_id=None,
-                     metadata={"raw_event": "SUBSCRIPTION_OVERDUE"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_overdue,
+            provider_event_id="SUBSCRIPTION_OVERDUE:",
+            provider_subscription_id="psub_new",
+            order_id=None,
+            metadata={"raw_event": "SUBSCRIPTION_OVERDUE"},
+        )
     )
 
     await db.refresh(checkout)
@@ -472,9 +556,13 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     # Active go sub.
     await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
     )
     assert await mgr.current_tier(user.id) == "go"
 
@@ -482,18 +570,20 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
     live = (
         await db.execute(
-            select(PlanSubscription).where(
-                PlanSubscription.user_id == user.id, PlanSubscription.status == "active"
-            )
+            select(PlanSubscription).where(PlanSubscription.user_id == user.id, PlanSubscription.status == "active")
         )
     ).scalar_one()
     assert live.tier == "go"
 
     # Pay the new sub -> activates plus, old gets cancelled.
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_2",
-                     provider_subscription_id="psub_2", order_id="setup_2")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_2",
+            provider_subscription_id="psub_2",
+            order_id="setup_2",
+        )
     )
     assert await mgr.current_tier(user.id) == "plus"
     assert "psub_1" in provider.cancelled
@@ -507,23 +597,34 @@ async def test_completed_upgrade_supersedes_and_prorates(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     old = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_old",
         current_period_start=datetime.now() - timedelta(days=10),
         current_period_end=datetime.now() + timedelta(days=20),
     )
     new = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add_all([old, new])
     await db.flush()
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_1",
-        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            provider_subscription_id="psub_new",
+            order_id="ord_1",
+            metadata={},
+        )
+    )
 
     await db.refresh(old)
     await db.refresh(new)
@@ -547,24 +648,35 @@ async def test_activation_raises_when_the_paid_sub_cannot_be_cancelled(db):
     provider = UncancellableProvider()
     manager = PaymentManager(provider, db)
     old = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_old",
         current_period_start=datetime.now() - timedelta(days=10),
         current_period_end=datetime.now() + timedelta(days=20),
     )
     new = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add_all([old, new])
     await db.flush()
 
     with pytest.raises(SupersedeFailed):
-        await manager.handle_event(PaymentEvent(
-            provider="fake", type=PaymentEventType.order_completed,
-            provider_event_id="ORDER_COMPLETED:ord_1",
-            provider_subscription_id="psub_new", order_id="ord_1", metadata={},
-        ))
+        await manager.handle_event(
+            PaymentEvent(
+                provider="fake",
+                type=PaymentEventType.order_completed,
+                provider_event_id="ORDER_COMPLETED:ord_1",
+                provider_subscription_id="psub_new",
+                order_id="ord_1",
+                metadata={},
+            )
+        )
 
     # Nothing was written before the raise, so the state the retry will see is untouched.
     await db.refresh(old)
@@ -580,11 +692,17 @@ async def _dateless_paid_pair(db) -> tuple[User, PlanSubscription, PlanSubscript
     activation), plus the upgrade checkout about to be paid."""
     user = await _make_user(db)
     old = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_old",
     )
     new = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add_all([old, new])
@@ -602,11 +720,16 @@ async def test_supersede_treats_a_dateless_row_with_an_activation_as_paid(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_1",
-        provider_subscription_id="psub_new", order_id="ord_1", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            provider_subscription_id="psub_new",
+            order_id="ord_1",
+            metadata={},
+        )
+    )
 
     await db.refresh(old)
     await db.refresh(new)
@@ -630,11 +753,16 @@ async def test_supersede_aborts_when_a_dateless_paid_row_cannot_be_cancelled(db)
     manager = PaymentManager(UncancellableProvider(), db)
 
     with pytest.raises(SupersedeFailed):
-        await manager.handle_event(PaymentEvent(
-            provider="fake", type=PaymentEventType.order_completed,
-            provider_event_id="ORDER_COMPLETED:ord_1",
-            provider_subscription_id="psub_new", order_id="ord_1", metadata={},
-        ))
+        await manager.handle_event(
+            PaymentEvent(
+                provider="fake",
+                type=PaymentEventType.order_completed,
+                provider_event_id="ORDER_COMPLETED:ord_1",
+                provider_subscription_id="psub_new",
+                order_id="ord_1",
+                metadata={},
+            )
+        )
 
     await db.refresh(old)
     await db.refresh(new)
@@ -652,10 +780,14 @@ async def test_redelivery_caught_after_the_lock_when_the_early_read_misses(db, m
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
-    event = PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                         provider_event_id="ORDER_COMPLETED:setup_1",
-                         provider_subscription_id="psub_1", order_id="setup_1",
-                         metadata={"order_id": "setup_1"})
+    event = PaymentEvent(
+        provider="fake",
+        type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:setup_1",
+        provider_subscription_id="psub_1",
+        order_id="setup_1",
+        metadata={"order_id": "setup_1"},
+    )
     await mgr.handle_event(event)
 
     sub = await mgr._active_subscription(user.id, lock=False)
@@ -686,13 +818,19 @@ async def test_renewal_does_not_retire_an_open_upgrade_checkout(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     old = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_old",
         current_period_start=datetime.now() - timedelta(days=30),
         current_period_end=datetime.now(),
     )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add_all([old, checkout])
@@ -700,11 +838,16 @@ async def test_renewal_does_not_retire_an_open_upgrade_checkout(db):
     db.add(PlanSubscriptionEvent(subscription_id=old.id, event_type="activated"))
     await db.flush()
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_renew",
-        provider_subscription_id="psub_old", order_id="ord_renew", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_renew",
+            provider_subscription_id="psub_old",
+            order_id="ord_renew",
+            metadata={},
+        )
+    )
 
     await db.refresh(checkout)
     assert checkout.status == "pending_upgrade"
@@ -718,13 +861,19 @@ async def test_refuses_to_activate_a_retired_checkout(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     live = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="active",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     retired = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="expired",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="expired",
         provider_subscription_id="psub_retired",
     )
     db.add_all([live, retired])
@@ -732,20 +881,31 @@ async def test_refuses_to_activate_a_retired_checkout(db):
     db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
     await db.flush()
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_stale",
-        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_stale",
+            provider_subscription_id="psub_retired",
+            order_id="ord_stale",
+            metadata={},
+        )
+    )
 
     await db.refresh(live)
     await db.refresh(retired)
     assert live.status == "active"
     assert retired.status == "expired"
     assert provider.cancelled == []
-    events = (await db.execute(
-        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == retired.id)
-    )).scalars().all()
+    events = (
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == retired.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert "activated" not in events  # a refused row must never carry an activation
 
 
@@ -757,7 +917,10 @@ async def test_refused_activation_is_recorded_as_an_audit_event(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     retired = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="expired",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="expired",
         provider_subscription_id="psub_retired",
     )
     db.add(retired)
@@ -765,19 +928,25 @@ async def test_refused_activation_is_recorded_as_an_audit_event(db):
     db.add(PlanSubscriptionEvent(subscription_id=retired.id, event_type="expired_abandoned_checkout"))
     await db.flush()
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_stale",
-        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
-    ))
-
-    refusal = (await db.execute(
-        select(PlanSubscriptionEvent)
-        .where(
-            PlanSubscriptionEvent.subscription_id == retired.id,
-            PlanSubscriptionEvent.event_type == "activation_refused",
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_stale",
+            provider_subscription_id="psub_retired",
+            order_id="ord_stale",
+            metadata={},
         )
-    )).scalar_one()
+    )
+
+    refusal = (
+        await db.execute(
+            select(PlanSubscriptionEvent).where(
+                PlanSubscriptionEvent.subscription_id == retired.id,
+                PlanSubscriptionEvent.event_type == "activation_refused",
+            )
+        )
+    ).scalar_one()
     assert refusal.metadata_json == {"order_id": "ord_stale"}
 
 
@@ -788,7 +957,10 @@ async def test_redelivered_refusal_is_recorded_once(db):
     user = await _make_user(db)
     manager = PaymentManager(FakeProvider(), db)
     retired = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="expired",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="expired",
         provider_subscription_id="psub_retired",
     )
     db.add(retired)
@@ -797,9 +969,12 @@ async def test_redelivered_refusal_is_recorded_once(db):
     await db.flush()
 
     event = PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
+        provider="fake",
+        type=PaymentEventType.order_completed,
         provider_event_id="ORDER_COMPLETED:ord_stale",
-        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
+        provider_subscription_id="psub_retired",
+        order_id="ord_stale",
+        metadata={},
     )
     await manager.handle_event(event)
     await manager.handle_event(event)
@@ -815,13 +990,19 @@ async def test_refusal_survives_a_retirement_committed_during_the_lock_wait(db, 
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     live = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="active",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     retired = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="expired",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="expired",
         provider_subscription_id="psub_retired",
     )
     db.add_all([live, retired])
@@ -838,11 +1019,16 @@ async def test_refusal_survives_a_retirement_committed_during_the_lock_wait(db, 
 
     monkeypatch.setattr(manager, "_is_retired_checkout", blind_first)
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_stale",
-        provider_subscription_id="psub_retired", order_id="ord_stale", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_stale",
+            provider_subscription_id="psub_retired",
+            order_id="ord_stale",
+            metadata={},
+        )
+    )
 
     assert len(calls) == 2  # the post-lock read is what refused it
     await db.refresh(live)
@@ -860,9 +1046,13 @@ async def test_cancel_sets_period_end_flag(db):
     mgr = PaymentManager(provider, db)
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
     )
 
     res = await mgr.cancel(user)
@@ -883,14 +1073,23 @@ async def test_wind_down_retires_the_open_upgrade_checkout(db, action, arg):
     user = await _make_user(db)
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
-    db.add(PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
-        provider_subscription_id="psub_old", currency="USD",
-        current_period_start=datetime.now() - timedelta(days=5),
-        current_period_end=datetime.now() + timedelta(days=25),
-    ))
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="plus",
+            provider="fake",
+            status="active",
+            provider_subscription_id="psub_old",
+            currency="USD",
+            current_period_start=datetime.now() - timedelta(days=5),
+            current_period_end=datetime.now() + timedelta(days=25),
+        )
+    )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
@@ -919,13 +1118,20 @@ async def test_wind_down_records_the_retirement_when_the_cancel_fails(db):
     provider.cancel_failures.add("psub_new")
     manager = PaymentManager(provider, db)
     live = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
-        provider_subscription_id="psub_old", currency="USD",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
+        provider_subscription_id="psub_old",
+        currency="USD",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add_all([live, checkout])
@@ -937,11 +1143,16 @@ async def test_wind_down_records_the_retirement_when_the_cancel_fails(db):
     assert checkout.status == "pending_upgrade"  # still live at the provider, so not marked dead
     assert "expired_abandoned_checkout" in await _event_types(db, checkout.id)
 
-    await manager.handle_event(PaymentEvent(
-        provider="fake", type=PaymentEventType.order_completed,
-        provider_event_id="ORDER_COMPLETED:ord_late",
-        provider_subscription_id="psub_new", order_id="ord_late", metadata={},
-    ))
+    await manager.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_late",
+            provider_subscription_id="psub_new",
+            order_id="ord_late",
+            metadata={},
+        )
+    )
 
     await db.refresh(live)
     await db.refresh(checkout)
@@ -1076,9 +1287,13 @@ async def test_check_expirations_skips_revert_while_new_checkout_pending(db):
 
 
 def _paid_event(seq: int) -> PaymentEvent:
-    return PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                        provider_event_id=f"ORDER_COMPLETED:cycle_{seq}",
-                        provider_subscription_id="psub_1", order_id=f"cycle_{seq}")
+    return PaymentEvent(
+        provider="fake",
+        type=PaymentEventType.order_completed,
+        provider_event_id=f"ORDER_COMPLETED:cycle_{seq}",
+        provider_subscription_id="psub_1",
+        order_id=f"cycle_{seq}",
+    )
 
 
 async def _active_plus_sub(db, provider) -> tuple:
@@ -1087,9 +1302,13 @@ async def _active_plus_sub(db, provider) -> tuple:
     mgr = PaymentManager(provider, db)
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
     )
     return user, mgr
 
@@ -1185,15 +1404,23 @@ async def test_upgrade_credits_unused_remainder_of_old_cycle(db):
 
     await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+        )
     )
     await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_2",
-                     provider_subscription_id="psub_2", order_id="setup_2")
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_2",
+            provider_subscription_id="psub_2",
+            order_id="setup_2",
+        )
     )
 
     balance = await _balance(db, user.id)
@@ -1202,9 +1429,7 @@ async def test_upgrade_credits_unused_remainder_of_old_cycle(db):
     # Replays / direct re-runs must not double-credit (per-subscription tx hash).
     old_sub = (
         await db.execute(
-            select(PlanSubscription).where(
-                PlanSubscription.user_id == user.id, PlanSubscription.status == "cancelled"
-            )
+            select(PlanSubscription).where(PlanSubscription.user_id == user.id, PlanSubscription.status == "cancelled")
         )
     ).scalar_one()
     await mgr._credit_unused_remainder(old_sub)
@@ -1218,8 +1443,14 @@ async def test_upgrade_remainder_skipped_without_cycle_dates(db):
     mgr = PaymentManager(provider, db)
     user = await _make_user(db)
 
-    sub = PlanSubscription(user_id=user.id, tier="go", status="upgrading", provider="fake",
-                           provider_subscription_id="psub_x", currency="USD")
+    sub = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        status="upgrading",
+        provider="fake",
+        provider_subscription_id="psub_x",
+        currency="USD",
+    )
     db.add(sub)
     await db.flush()
 
@@ -1314,27 +1545,39 @@ async def test_renewal_cycle_logs_renewed_not_activated(db):
     await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:setup_1",
-                     provider_subscription_id="psub_1", order_id="setup_1",
-                     metadata={"order_id": "setup_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
     )
     # Next billing cycle completes on a new order -> renewed, not a second activated.
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_completed,
-                     provider_event_id="ORDER_COMPLETED:ren_1",
-                     provider_subscription_id="psub_1", order_id="ren_1",
-                     metadata={"order_id": "ren_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ren_1",
+            provider_subscription_id="psub_1",
+            order_id="ren_1",
+            metadata={"order_id": "ren_1"},
+        )
     )
     sub = await mgr._active_subscription(user.id, lock=False)
     assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]
 
     # Out-of-order decline for the already-paid renewal order is ignored (sub stays active).
     await mgr.handle_event(
-        PaymentEvent(provider="fake", type=PaymentEventType.order_failed,
-                     provider_event_id="ORDER_PAYMENT_DECLINED:ren_1",
-                     provider_subscription_id="psub_1", order_id="ren_1",
-                     metadata={"order_id": "ren_1"})
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:ren_1",
+            provider_subscription_id="psub_1",
+            order_id="ren_1",
+            metadata={"order_id": "ren_1"},
+        )
     )
     sub = await mgr._active_subscription(user.id, lock=False)
     assert sub.status == "active"
@@ -1348,7 +1591,10 @@ async def test_upgrade_leaves_paid_sub_active(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     old = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="active",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_old",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
@@ -1361,9 +1607,7 @@ async def test_upgrade_leaves_paid_sub_active(db):
     await db.refresh(old)
     assert old.status == "active"
     assert provider.cancelled == []
-    new = (await db.execute(
-        select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade")
-    )).scalar_one()
+    new = (await db.execute(select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade"))).scalar_one()
     assert new.tier == "max"
 
 
@@ -1381,10 +1625,15 @@ async def test_upgrade_validates_against_the_live_row_tier(db):
     Max holder open a Go 'upgrade'."""
     user = await _make_user(db)
     manager = PaymentManager(FakeProvider(), db)
-    db.add(PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="overdue",
-        provider_subscription_id="psub_old",
-    ))
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="max",
+            provider="fake",
+            status="overdue",
+            provider_subscription_id="psub_old",
+        )
+    )
     await db.flush()
     with pytest.raises(ValueError, match="Cannot upgrade"):
         await manager.upgrade(user, "go", "http://redirect", "USD")
@@ -1395,18 +1644,23 @@ async def test_second_upgrade_retires_the_first_checkout(db):
     user = await _make_user(db)
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
-    db.add(PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="active",
-        provider_subscription_id="psub_old",
-        current_period_start=datetime.now() - timedelta(days=5),
-        current_period_end=datetime.now() + timedelta(days=25),
-    ))
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="go",
+            provider="fake",
+            status="active",
+            provider_subscription_id="psub_old",
+            current_period_start=datetime.now() - timedelta(days=5),
+            current_period_end=datetime.now() + timedelta(days=25),
+        )
+    )
     await db.flush()
 
     await manager.upgrade(user, "plus", "http://redirect", "USD")
-    first = (await db.execute(
-        select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade")
-    )).scalar_one()
+    first = (
+        await db.execute(select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade"))
+    ).scalar_one()
     first_id = first.provider_subscription_id
 
     await manager.upgrade(user, "max", "http://redirect", "USD")
@@ -1414,9 +1668,15 @@ async def test_second_upgrade_retires_the_first_checkout(db):
     await db.refresh(first)
     assert first.status == "expired"
     assert first_id in provider.cancelled
-    events = (await db.execute(
-        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == first.id)
-    )).scalars().all()
+    events = (
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == first.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert "expired_abandoned_checkout" in events
 
 
@@ -1427,7 +1687,10 @@ async def test_subscribe_retires_an_orphaned_upgrade_checkout(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     stale = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_stale",
     )
     db.add(stale)
@@ -1446,7 +1709,10 @@ async def test_sweep_expires_and_cancels_stale_upgrade_checkout(db):
     provider = FakeProvider()
     manager = PaymentManager(provider, db)
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
@@ -1462,9 +1728,15 @@ async def test_sweep_expires_and_cancels_stale_upgrade_checkout(db):
     await db.refresh(checkout)
     assert checkout.status == "expired"
     assert "psub_new" in provider.cancelled
-    events = (await db.execute(
-        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == checkout.id)
-    )).scalars().all()
+    events = (
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == checkout.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert "expired_abandoned_checkout" in events
 
 
@@ -1473,7 +1745,10 @@ async def test_sweep_keeps_recent_checkout(db):
     user = await _make_user(db)
     manager = PaymentManager(FakeProvider(), db)
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
@@ -1494,7 +1769,10 @@ async def test_sweep_leaves_row_alone_when_provider_cancel_fails(db):
     provider.cancel_failures.add("psub_new")
     manager = PaymentManager(provider, db)
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new",
     )
     db.add(checkout)
@@ -1529,8 +1807,11 @@ async def test_sweep_isolates_a_failing_row_from_the_rest(db):
     broken, healthy = None, None
     for name in ("psub_broken", "psub_ok"):
         sub = PlanSubscription(
-            user_id=(await _make_user(db)).id, tier="max", provider="fake",
-            status="pending_upgrade", provider_subscription_id=name,
+            user_id=(await _make_user(db)).id,
+            tier="max",
+            provider="fake",
+            status="pending_upgrade",
+            provider_subscription_id=name,
         )
         db.add(sub)
         await db.flush()

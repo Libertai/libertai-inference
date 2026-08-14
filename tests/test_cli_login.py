@@ -64,7 +64,9 @@ async def test_cli_code_exchange_with_pkce(async_client, monkeypatch):
         assert exchanged.json()["access_token"]
 
         # Single-use: the code is gone.
-        assert (await async_client.post("/auth/exchange", json={"code": code, "verifier": verifier})).status_code == 400
+        assert (
+            await async_client.post("/auth/exchange", json={"code": code, "verifier": verifier})
+        ).status_code == 400
     finally:
         await _cleanup(user.id)
 
@@ -135,8 +137,11 @@ async def test_expired_cli_key_excluded_from_gateway(async_client):
         # Prepaid balance so the key is otherwise eligible.
         db.add(
             CreditTransaction(
-                user_id=user.id, amount=5.0, amount_left=5.0,
-                provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+                user_id=user.id,
+                amount=5.0,
+                amount_left=5.0,
+                provider=CreditTransactionProvider.revolut,
+                status=CreditTransactionStatus.completed,
             )
         )
         await db.commit()
@@ -163,9 +168,7 @@ async def test_duplicate_live_cli_name_rejected():
     try:
         async with AsyncSessionLocal() as db:
             db.add(
-                ApiKeyDB(
-                    key=ApiKeyDB.generate_key(), name="libertai-cli@dup", user_id=user.id, type=ApiKeyType.cli
-                )
+                ApiKeyDB(key=ApiKeyDB.generate_key(), name="libertai-cli@dup", user_id=user.id, type=ApiKeyType.cli)
             )
             await db.commit()
 
@@ -237,7 +240,9 @@ async def test_cli_key_list_reports_last_used():
 
         async with AsyncSessionLocal() as db:
             for when in (datetime(2026, 1, 1, 9, 0), datetime(2026, 1, 2, 9, 0)):
-                call = InferenceCall(api_key_id=key.id, credits_used=0.0, model_name="m", input_tokens=0, output_tokens=0)
+                call = InferenceCall(
+                    api_key_id=key.id, credits_used=0.0, model_name="m", input_tokens=0, output_tokens=0
+                )
                 call.used_at = when
                 db.add(call)
             await db.commit()

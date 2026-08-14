@@ -64,9 +64,7 @@ async def test_email_magic_link_verify(async_client, monkeypatch):
         _token, code = await create_magic_link(db, "ml-route@example.com")
         await db.commit()
 
-    resp = await async_client.post(
-        "/auth/verify-magic-link", json={"email": "ml-route@example.com", "code": code}
-    )
+    resp = await async_client.post("/auth/verify-magic-link", json={"email": "ml-route@example.com", "code": code})
     assert resp.status_code == 200
     assert resp.json()["access_token"]
 
@@ -178,9 +176,7 @@ async def test_auth_status_returns_wallet_address_not_user_id(async_client):
         )
     ).json()
 
-    status = await async_client.get(
-        "/auth/status", headers={"Authorization": f"Bearer {tokens['access_token']}"}
-    )
+    status = await async_client.get("/auth/status", headers={"Authorization": f"Bearer {tokens['access_token']}"})
     assert status.status_code == 200
     body = status.json()
     assert body["authenticated"] is True

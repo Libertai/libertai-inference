@@ -44,9 +44,7 @@ async def create_api_key(api_key_create: ApiKeyCreate, user: User = Depends(get_
         return full_api_key
     except Exception:
         logger.error("Error creating API key", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create API key"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create API key")
 
 
 @router.get("")  # type: ignore
@@ -70,9 +68,7 @@ async def get_chat_api_key(user: User = Depends(get_current_user)) -> ChatApiKey
 
 
 @router.post("/cli")  # type: ignore
-async def create_cli_api_key(
-    cli_create: CliApiKeyCreate, user: User = Depends(get_current_user)
-) -> FullApiKey:
+async def create_cli_api_key(cli_create: CliApiKeyCreate, user: User = Depends(get_current_user)) -> FullApiKey:
     """Mint (or rotate in place) the CLI API key for the caller's device.
 
     Final step of the CLI browser-SSO login: the CLI calls this with the freshly

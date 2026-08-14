@@ -83,13 +83,17 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
     # Ordered so a dry run and the real run that follows it process users identically, and so a
     # partial-failure post-mortem can be reconstructed from the logs in a known order.
     user_ids = (
-        await db.execute(
-            select(PlanSubscription.user_id)
-            .distinct()
-            .where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
-            .order_by(PlanSubscription.user_id)
+        (
+            await db.execute(
+                select(PlanSubscription.user_id)
+                .distinct()
+                .where(PlanSubscription.status.in_(_RELEVANT_STATUSES))
+                .order_by(PlanSubscription.user_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     for user_id in user_ids:
         try:
@@ -99,16 +103,18 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
             # promote.
             await manager._lock_user(user_id)
             subs = (
-                await db.execute(
-                    select(PlanSubscription)
-                    .where(PlanSubscription.user_id == user_id, PlanSubscription.status.in_(_RELEVANT_STATUSES))
-                    .with_for_update()
+                (
+                    await db.execute(
+                        select(PlanSubscription)
+                        .where(PlanSubscription.user_id == user_id, PlanSubscription.status.in_(_RELEVANT_STATUSES))
+                        .with_for_update()
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
-            candidates = [
-                s for s in subs if s.current_period_start is None and s.status in _UNPAID_CANDIDATE_STATUSES
-            ]
+            candidates = [s for s in subs if s.current_period_start is None and s.status in _UNPAID_CANDIDATE_STATUSES]
             # A null start is only a checkout heuristic, not proof either way: sweeping a row
             # that was in fact paid would destroy a real subscription.
             proven_paid = await paid_subscription_ids(db, candidates)
@@ -127,7 +133,9 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
                 # subscription: touch nothing for this user, not even the rows that did cancel
                 # cleanly, and leave everything for a re-run once the failure is understood.
                 for sub in failed:
-                    logger.warning(f"cutover: sub {sub.id} (user {user_id}) would not cancel at the provider, skipping user")
+                    logger.warning(
+                        f"cutover: sub {sub.id} (user {user_id}) would not cancel at the provider, skipping user"
+                    )
                 counts["stranded"] += len(failed)
                 await db.rollback()
                 continue
@@ -154,7 +162,9 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
                     continue
                 if not await cancel_ok(sub):
                     counts["stranded"] += 1
-                    logger.warning(f"cutover: parked sub {sub.id} (user {user_id}) would not cancel, left in upgrading")
+                    logger.warning(
+                        f"cutover: parked sub {sub.id} (user {user_id}) would not cancel, left in upgrading"
+                    )
                     continue
                 sub.status = "cancelled"
                 db.add(PlanSubscriptionEvent(subscription_id=sub.id, event_type="cancelled_for_upgrade"))

@@ -82,7 +82,9 @@ async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscriptio
                     PlanSubscriptionEvent.event_type.in_(("activated", "renewed")),
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -258,16 +260,20 @@ class PaymentManager:
         never paid.
         """
         rows = (
-            await self.db.execute(
-                select(PlanSubscription)
-                .where(
-                    PlanSubscription.user_id == user_id,
-                    PlanSubscription.status.in_(statuses),
-                    PlanSubscription.current_period_start.is_(None),
+            (
+                await self.db.execute(
+                    select(PlanSubscription)
+                    .where(
+                        PlanSubscription.user_id == user_id,
+                        PlanSubscription.status.in_(statuses),
+                        PlanSubscription.current_period_start.is_(None),
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         paid_ids = await paid_subscription_ids(self.db, rows)
         for row in rows:
             if row.id in paid_ids:
@@ -467,9 +473,7 @@ class PaymentManager:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
             return False
 
-    async def _supersede_other_subs(
-        self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID
-    ) -> tuple[bool, str | None]:
+    async def _supersede_other_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> tuple[bool, str | None]:
         """Retire the user's other live rows in favour of a just-paid subscription.
 
         Returns ``(ok, from_tier)``. ``ok`` is False when a row that must not be left behind —
@@ -484,14 +488,18 @@ class PaymentManager:
         parked by the previous release.
         """
         rows = (
-            await self.db.execute(
-                select(PlanSubscription).where(
-                    PlanSubscription.user_id == user_id,
-                    PlanSubscription.status.in_((*ACTIVE_STATUSES, "upgrading")),
-                    PlanSubscription.id != exclude_sub_id,
+            (
+                await self.db.execute(
+                    select(PlanSubscription).where(
+                        PlanSubscription.user_id == user_id,
+                        PlanSubscription.status.in_((*ACTIVE_STATUSES, "upgrading")),
+                        PlanSubscription.id != exclude_sub_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Every provider cancel resolves before any local write, so that giving up leaves no
         # half-applied supersede behind. Only a row outside the one-live-subscription index
@@ -548,9 +556,7 @@ class PaymentManager:
                 select(PlanSubscriptionEvent.id)
                 .where(
                     PlanSubscriptionEvent.subscription_id == sub.id,
-                    PlanSubscriptionEvent.event_type.in_(
-                        ("cancelled_for_upgrade", "expired_abandoned_checkout")
-                    ),
+                    PlanSubscriptionEvent.event_type.in_(("cancelled_for_upgrade", "expired_abandoned_checkout")),
                 )
                 .limit(1)
             )
@@ -567,9 +573,7 @@ class PaymentManager:
         )
         # Carries the provider event id like any other recorded event, so a redelivery of the
         # same payment dedups against it instead of adding a row and an error log per delivery.
-        await self._log_event(
-            sub, "activation_refused", event.provider_event_id, {"order_id": event.order_id}
-        )
+        await self._log_event(sub, "activation_refused", event.provider_event_id, {"order_id": event.order_id})
 
     async def _credit_unused_remainder(self, old_sub: PlanSubscription) -> None:
         """Refund the unused time of an upgraded-away cycle as prepaid (USD) credits.
@@ -603,9 +607,7 @@ class PaymentManager:
         # idempotent via the per-subscription hash.
         tx_hash = f"upgrade_remainder:{old_sub.id}"
         existing = (
-            await self.db.execute(
-                select(CreditTransaction.id).where(CreditTransaction.external_reference == tx_hash)
-            )
+            await self.db.execute(select(CreditTransaction.id).where(CreditTransaction.external_reference == tx_hash))
         ).scalar_one_or_none()
         if existing:
             return
@@ -792,9 +794,7 @@ class PaymentManager:
                 channel = order.get("channel_data") or {}
                 rev_sub_id = channel.get("subscription_id")
                 if rev_sub_id:
-                    stmt = select(PlanSubscription).where(
-                        PlanSubscription.provider_subscription_id == rev_sub_id
-                    )
+                    stmt = select(PlanSubscription).where(PlanSubscription.provider_subscription_id == rev_sub_id)
                     return (await self.db.execute(stmt.with_for_update() if lock else stmt)).scalar_one_or_none()
             except Exception:
                 logger.warning(f"Failed to resolve order {event.order_id} to subscription", exc_info=True)
@@ -912,8 +912,7 @@ class PaymentManager:
             .where(
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.current_period_end < cutoff,
-                (PlanSubscription.cancel_at_period_end == True)
-                | (PlanSubscription.is_trial == True),
+                (PlanSubscription.cancel_at_period_end == True) | (PlanSubscription.is_trial == True),
             )
             .with_for_update()
         )

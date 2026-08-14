@@ -30,9 +30,7 @@ def _resolve_test_db_url() -> str:
         return os.path.expandvars(explicit)
     base = os.environ.get("DATABASE_URL")
     if not base:
-        raise RuntimeError(
-            "DATABASE_URL not set. Start the dev DB (scripts/dev.sh) or set TEST_DATABASE_URL."
-        )
+        raise RuntimeError("DATABASE_URL not set. Start the dev DB (scripts/dev.sh) or set TEST_DATABASE_URL.")
     url = make_url(os.path.expandvars(base))
     return url.set(database=f"{url.database}_test").render_as_string(hide_password=False)
 
@@ -46,13 +44,10 @@ def _ensure_test_database_exists() -> None:
     url = make_url(TEST_DATABASE_URL)
     admin = url.set(drivername="postgresql")  # plain libpq for the sync psycopg connect
     conninfo = (
-        f"host={admin.host} port={admin.port or 5432} "
-        f"user={admin.username} password={admin.password} dbname=postgres"
+        f"host={admin.host} port={admin.port or 5432} user={admin.username} password={admin.password} dbname=postgres"
     )
     with psycopg.connect(conninfo, autocommit=True) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM pg_database WHERE datname = %s", (url.database,)
-        ).fetchone()
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (url.database,)).fetchone()
         if not exists:
             conn.execute(f'CREATE DATABASE "{url.database}"')
 

@@ -59,8 +59,11 @@ async def _use(db, api_key_id, credits, when: datetime):
 async def _credit(db, user_id, amount):
     db.add(
         CreditTransaction(
-            user_id=user_id, amount=amount, amount_left=amount,
-            provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+            user_id=user_id,
+            amount=amount,
+            amount_left=amount,
+            provider=CreditTransactionProvider.revolut,
+            status=CreditTransactionStatus.completed,
         )
     )
     await db.flush()
@@ -160,14 +163,18 @@ async def test_open_windows_creates_resets_and_preserves(db):
     # 2. An active window is left untouched (same start) on a later message.
     await open_windows(db, user.id, now=NOW + timedelta(hours=1))
     w5_active = (
-        await db.execute(select(EntitlementWindow).where(EntitlementWindow.user_id == user.id, EntitlementWindow.kind == WINDOW_5H))
+        await db.execute(
+            select(EntitlementWindow).where(EntitlementWindow.user_id == user.id, EntitlementWindow.kind == WINDOW_5H)
+        )
     ).scalar_one()
     assert w5_active.started_at == NOW  # unchanged
 
     # 3. An expired window is reset to the new message time.
     await open_windows(db, user.id, now=NOW + timedelta(hours=6))
     w5_reset = (
-        await db.execute(select(EntitlementWindow).where(EntitlementWindow.user_id == user.id, EntitlementWindow.kind == WINDOW_5H))
+        await db.execute(
+            select(EntitlementWindow).where(EntitlementWindow.user_id == user.id, EntitlementWindow.kind == WINDOW_5H)
+        )
     ).scalar_one()
     assert w5_reset.started_at == NOW + timedelta(hours=6)
     assert w5_reset.expires_at == NOW + timedelta(hours=11)

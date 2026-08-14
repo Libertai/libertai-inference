@@ -77,7 +77,12 @@ def upgrade() -> None:
     op.drop_constraint("check_provider_choices", "credit_transactions", type_="check")
 
     credit_transaction_provider = sa.Enum(
-        "ltai_base", "ltai_solana", "thirdweb", "voucher", "sol_solana", "revolut",
+        "ltai_base",
+        "ltai_solana",
+        "thirdweb",
+        "voucher",
+        "sol_solana",
+        "revolut",
         name="credittransactionprovider",
     )
     # Move column to text, drop old enum, recreate with the new member, move back.
@@ -113,7 +118,11 @@ def downgrade() -> None:
     op.execute("DELETE FROM credit_transactions WHERE provider::text = 'revolut';")
 
     credit_transaction_provider = sa.Enum(
-        "ltai_base", "ltai_solana", "thirdweb", "voucher", "sol_solana",
+        "ltai_base",
+        "ltai_solana",
+        "thirdweb",
+        "voucher",
+        "sol_solana",
         name="credittransactionprovider",
     )
     op.execute("ALTER TABLE credit_transactions ALTER COLUMN provider TYPE text USING provider::text;")

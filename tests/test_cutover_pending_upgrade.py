@@ -37,17 +37,26 @@ def _fail_for(provider: FakeProvider, *ids: str) -> None:
 async def test_promotes_the_paid_parked_row_and_expires_the_rest(db):
     user = await _make_user(db)
     paid = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_paid",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     unpaid_parked = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_parked",
     )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending",
         provider_subscription_id="psub_checkout",
     )
     db.add_all([paid, unpaid_parked, checkout])
@@ -69,7 +78,10 @@ async def test_expired_rows_carry_the_abandoned_checkout_event(db):
     """Plain `expired` would register as churn and disarm the activation refusal."""
     user = await _make_user(db)
     stale = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="pending",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="pending",
         provider_subscription_id="psub_stale",
     )
     db.add(stale)
@@ -77,9 +89,15 @@ async def test_expired_rows_carry_the_abandoned_checkout_event(db):
 
     await cutover(db, FakeProvider())
 
-    events = (await db.execute(
-        select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == stale.id)
-    )).scalars().all()
+    events = (
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == stale.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert events == ["expired_abandoned_checkout"]
 
 
@@ -87,13 +105,19 @@ async def test_expired_rows_carry_the_abandoned_checkout_event(db):
 async def test_user_with_a_live_row_is_not_promoted(db):
     user = await _make_user(db)
     live = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="active",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
         current_period_start=datetime.now() - timedelta(days=1),
         current_period_end=datetime.now() + timedelta(days=29),
     )
     parked = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_parked",
         current_period_start=datetime.now() - timedelta(days=40),
         current_period_end=datetime.now() - timedelta(days=10),
@@ -116,13 +140,19 @@ async def test_disposed_parked_row_credits_its_unused_remainder(db):
     forfeit that, same as any other upgrade-away cancellation (`_supersede_other_subs`)."""
     user = await _make_user(db)
     live = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="active",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
         current_period_start=datetime.now() - timedelta(days=1),
         current_period_end=datetime.now() + timedelta(days=29),
     )
     parked = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_parked",
         current_period_start=datetime.now() - timedelta(days=15),
         current_period_end=datetime.now() + timedelta(days=15),  # half the cycle left
@@ -134,9 +164,7 @@ async def test_disposed_parked_row_credits_its_unused_remainder(db):
 
     await db.refresh(parked)
     assert parked.status == "cancelled"
-    credited = (
-        await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == user.id))
-    ).scalar_one()
+    credited = (await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == user.id))).scalar_one()
     assert credited.amount > 0
 
 
@@ -146,7 +174,10 @@ async def test_aborts_on_an_active_row_with_no_period_start(db):
     null-start heuristic must never mistake that live row for an abandoned checkout."""
     user = await _make_user(db)
     live_but_unexplained = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="active",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
     )
     db.add(live_but_unexplained)
@@ -166,7 +197,10 @@ async def test_null_start_row_with_proof_of_payment_is_not_swept(db):
     the null-start heuristic alone cannot see — it must win over the heuristic."""
     user = await _make_user(db)
     paid_but_dateless = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="overdue",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="overdue",
         provider_subscription_id="psub_paid_no_dates",
     )
     db.add(paid_but_dateless)
@@ -190,19 +224,28 @@ async def test_an_unexpected_error_strands_only_that_user(db):
     bad_user = await _make_user(db)
     ok_user = await _make_user(db)
     live = PlanSubscription(
-        user_id=bad_user.id, tier="max", provider="fake", status="active",
+        user_id=bad_user.id,
+        tier="max",
+        provider="fake",
+        status="active",
         provider_subscription_id="psub_live",
         current_period_start=datetime.now() - timedelta(days=1),
         current_period_end=datetime.now() + timedelta(days=29),
     )
     parked_legacy_tier = PlanSubscription(
-        user_id=bad_user.id, tier="legacy_retired_tier", provider="fake", status="upgrading",
+        user_id=bad_user.id,
+        tier="legacy_retired_tier",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_parked",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     stale = PlanSubscription(
-        user_id=ok_user.id, tier="go", provider="fake", status="pending",
+        user_id=ok_user.id,
+        tier="go",
+        provider="fake",
+        status="pending",
         provider_subscription_id="psub_ok",
     )
     db.add_all([live, parked_legacy_tier, stale])
@@ -233,13 +276,19 @@ async def test_a_failed_unpaid_cancel_strands_the_whole_user_not_just_that_row(d
     _fail_for(provider, "psub_checkout")
 
     paid = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_paid",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending",
         provider_subscription_id="psub_checkout",
     )
     db.add_all([paid, checkout])
@@ -261,13 +310,19 @@ async def test_a_null_end_parked_row_sorts_last(db):
     """current_period_end DESC NULLS LAST: a null end must never outrank a real one."""
     user = await _make_user(db)
     real_end = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_real",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=1),
     )
     null_end = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_null",
         current_period_start=datetime.now() - timedelta(days=1),
         current_period_end=None,
@@ -293,13 +348,19 @@ async def test_stranded_counts_a_parked_row_that_cannot_cancel(db):
     _fail_for(provider, "psub_loser")
 
     winner = PlanSubscription(
-        user_id=user.id, tier="plus", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="plus",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_winner",
         current_period_start=datetime.now() - timedelta(days=5),
         current_period_end=datetime.now() + timedelta(days=25),
     )
     loser = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="upgrading",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="upgrading",
         provider_subscription_id="psub_loser",
         current_period_start=datetime.now() - timedelta(days=40),
         current_period_end=datetime.now() - timedelta(days=10),
@@ -320,7 +381,10 @@ async def test_stranded_counts_a_parked_row_that_cannot_cancel(db):
 async def test_pending_upgrade_row_is_swept_like_a_legacy_pending_row(db):
     user = await _make_user(db)
     checkout = PlanSubscription(
-        user_id=user.id, tier="max", provider="fake", status="pending_upgrade",
+        user_id=user.id,
+        tier="max",
+        provider="fake",
+        status="pending_upgrade",
         provider_subscription_id="psub_new_checkout",
     )
     db.add(checkout)
@@ -338,7 +402,10 @@ async def test_dry_run_touches_nothing_and_never_calls_the_provider(db):
     user = await _make_user(db)
     provider = FakeProvider()
     checkout = PlanSubscription(
-        user_id=user.id, tier="go", provider="fake", status="pending",
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="pending",
         provider_subscription_id="psub_stale",
     )
     db.add(checkout)

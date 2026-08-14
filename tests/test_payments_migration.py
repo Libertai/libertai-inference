@@ -50,9 +50,7 @@ def test_migration_creates_tables_and_enforces_one_active_sub(scratch_db):
     with psycopg.connect(_libpq_conninfo(scratch_db), autocommit=True) as conn:
         # Tables exist.
         for table in ("plan_subscriptions", "plan_subscription_events"):
-            assert conn.execute(
-                "SELECT to_regclass(%s)", (f"public.{table}",)
-            ).fetchone()[0] is not None
+            assert conn.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone()[0] is not None
 
         # revolut is a valid credit provider, with no block number required.
         user_id = uuid.uuid4()

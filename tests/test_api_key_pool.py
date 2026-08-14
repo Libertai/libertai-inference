@@ -23,9 +23,7 @@ async def _pool_count() -> int:
     async with AsyncSessionLocal() as db:
         return int(
             (
-                await db.execute(
-                    select(func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool)
-                )
+                await db.execute(select(func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool))
             ).scalar()
             or 0
         )
@@ -111,18 +109,14 @@ async def test_claim_returns_none_when_no_ready_pool_key():
     # Fresh pool key (age 0) is younger than the warm threshold -> not claimable.
     await _add_pool_key(age_seconds=0)
     async with AsyncSessionLocal() as db:
-        row = await ApiKeyPoolService.claim_warm_key(
-            db, target_type=ApiKeyType.api, user_id=uuid.uuid4(), name="x"
-        )
+        row = await ApiKeyPoolService.claim_warm_key(db, target_type=ApiKeyType.api, user_id=uuid.uuid4(), name="x")
         await db.rollback()
         assert row is None
 
 
 async def test_claim_returns_none_when_pool_empty():
     async with AsyncSessionLocal() as db:
-        row = await ApiKeyPoolService.claim_warm_key(
-            db, target_type=ApiKeyType.api, user_id=uuid.uuid4(), name="x"
-        )
+        row = await ApiKeyPoolService.claim_warm_key(db, target_type=ApiKeyType.api, user_id=uuid.uuid4(), name="x")
         await db.rollback()
         assert row is None
 
@@ -139,9 +133,7 @@ async def test_concurrent_claims_get_distinct_rows():
 
     async def _claim_one(name: str) -> str | None:
         async with AsyncSessionLocal() as db:
-            row = await ApiKeyPoolService.claim_warm_key(
-                db, target_type=ApiKeyType.api, user_id=user_id, name=name
-            )
+            row = await ApiKeyPoolService.claim_warm_key(db, target_type=ApiKeyType.api, user_id=user_id, name=name)
             await db.commit()
             return row.key if row else None
 

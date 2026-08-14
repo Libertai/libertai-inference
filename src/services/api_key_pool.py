@@ -39,9 +39,7 @@ class ApiKeyPoolService:
                 count = int(
                     (
                         await db.execute(
-                            select(sql_func.count())
-                            .select_from(ApiKeyDB)
-                            .where(ApiKeyDB.type == ApiKeyType.pool)
+                            select(sql_func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool)
                         )
                     ).scalar()
                     or 0

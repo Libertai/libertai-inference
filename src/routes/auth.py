@@ -199,9 +199,7 @@ async def get_me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
 
 
 @router.patch("/me")
-async def update_me(
-    request: UpdateProfileRequest, user: User = Depends(get_current_user)
-) -> CurrentUserResponse:
+async def update_me(request: UpdateProfileRequest, user: User = Depends(get_current_user)) -> CurrentUserResponse:
     """Update the authenticated user's editable profile (display name, monthly extra-credit cap)."""
     async with AsyncSessionLocal() as db:
         updated = await update_user_profile(
@@ -257,18 +255,14 @@ async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTa
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
         await db.commit()
-    background_tasks.add_task(
-        magic_link.send_magic_link_email, request.email, token, code, request.redirect_base
-    )
+    background_tasks.add_task(magic_link.send_magic_link_email, request.email, token, code, request.redirect_base)
 
 
 @router.post("/verify-magic-link")
 async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fastapi.Response) -> TokenPairResponse:
     """Verify a magic link (by token or email+code) and return a token pair."""
     async with AsyncSessionLocal() as db:
-        email = await magic_link.verify_magic_link(
-            db, token=request.token, email=request.email, code=request.code
-        )
+        email = await magic_link.verify_magic_link(db, token=request.token, email=request.email, code=request.code)
         if email is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
         try:
@@ -366,8 +360,8 @@ async def exchange_code(request: ExchangeRequest, response: fastapi.Response) ->
     """Exchange a one-time OAuth code for the token pair (single-use)."""
     async with AsyncSessionLocal() as db:
         auth_code = (
-            await db.execute(select(AuthCode).where(AuthCode.code_hash == _hash(request.code)))
-        ).scalars().first()
+            (await db.execute(select(AuthCode).where(AuthCode.code_hash == _hash(request.code)))).scalars().first()
+        )
         if auth_code is None or auth_code.expires_at < datetime.now():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
         # PKCE-bound codes (CLI loopback) require the matching verifier; OAuth codes don't.

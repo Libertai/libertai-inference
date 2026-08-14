@@ -18,9 +18,7 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 # Liberclaw net window usage: grant-paid overflow must not drain the rolling allowance.
-LIBERCLAW_NET_CREDITS = InferenceCall.credits_used - sql_func.coalesce(
-    InferenceCall.liberclaw_extra_credits_used, 0.0
-)
+LIBERCLAW_NET_CREDITS = InferenceCall.credits_used - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
 
 
 class LiberclawService:
@@ -266,9 +264,7 @@ class LiberclawService:
                 )
             )
             await db.commit()
-            logger.info(
-                f"Granted {amount} extra credits to liberclaw user {lc_user.id} ({external_reference})"
-            )
+            logger.info(f"Granted {amount} extra credits to liberclaw user {lc_user.id} ({external_reference})")
             return amount
 
     @staticmethod

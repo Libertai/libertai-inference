@@ -63,7 +63,12 @@ class AlephService:
         return None
 
     async def calculate_price(
-        self, model_id: str, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0, image_count: int = 0
+        self,
+        model_id: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        image_count: int = 0,
     ) -> float:
         """
         Calculate the price for a given model

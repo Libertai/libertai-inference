@@ -173,9 +173,7 @@ class ApiKeyService:
                         set_={"key": new_key, "expires_at": expires_at, "is_active": True},
                     )
                 )
-                api_key = (
-                    (await db.execute(select(ApiKeyDB).from_statement(stmt.returning(ApiKeyDB)))).scalars().one()
-                )
+                api_key = (await db.execute(select(ApiKeyDB).from_statement(stmt.returning(ApiKeyDB)))).scalars().one()
                 key = api_key.key
                 await db.commit()
 
@@ -572,7 +570,9 @@ class ApiKeyService:
                             valid.append(key.key)
                         continue
                     # Ownership-broken keys are unusable but not user-explainable -> generic 401.
-                    if key.type == ApiKeyType.liberclaw and (key.liberclaw_user_id is None or key.liberclaw_user is None):
+                    if key.type == ApiKeyType.liberclaw and (
+                        key.liberclaw_user_id is None or key.liberclaw_user is None
+                    ):
                         continue
                     if key.type in chargeable_api_types and not key.user_id:
                         continue
@@ -656,7 +656,9 @@ class ApiKeyService:
                 # Pre-fetch liberclaw rolling-window usage, grouped per distinct window, to avoid
                 # an N+1 SUM over inference_calls for every liberclaw key.
                 liberclaw_keys = [
-                    k for k in candidates if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
+                    k
+                    for k in candidates
+                    if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
                 ]
                 liberclaw_usage: dict[uuid.UUID, float] = {}
                 liberclaw_extra: dict[uuid.UUID, float] = {}
@@ -859,9 +861,7 @@ class ApiKeyService:
                                         sql_func.coalesce(
                                             sql_func.sum(
                                                 InferenceCall.credits_used
-                                                - sql_func.coalesce(
-                                                    InferenceCall.liberclaw_extra_credits_used, 0.0
-                                                )
+                                                - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
                                             ),
                                             0.0,
                                         )

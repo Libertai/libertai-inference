@@ -5,6 +5,7 @@ Revises: 2bccd793c8f4
 Create Date: 2026-06-02 15:01:14.478776
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -12,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = 'ce9e82ee761a'
-down_revision: str | None = '2bccd793c8f4'
+revision: str = "ce9e82ee761a"
+down_revision: str | None = "2bccd793c8f4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -30,9 +31,7 @@ def upgrade() -> None:
     op.alter_column("users", "id", nullable=False)
     op.create_unique_constraint("uq_users_id", "users", ["id"])
     op.add_column("users", sa.Column("email", sa.String(), nullable=True))
-    op.add_column(
-        "users", sa.Column("email_verified", sa.Boolean(), nullable=False, server_default=sa.text("false"))
-    )
+    op.add_column("users", sa.Column("email_verified", sa.Boolean(), nullable=False, server_default=sa.text("false")))
     op.add_column("users", sa.Column("display_name", sa.String(), nullable=True))
     op.add_column("users", sa.Column("avatar_url", sa.String(), nullable=True))
     op.create_unique_constraint("uq_users_email", "users", ["email"])
@@ -134,9 +133,7 @@ def upgrade() -> None:
 
     op.add_column("api_keys", sa.Column("user_id", sa.UUID(), nullable=True))
     op.execute("UPDATE api_keys a SET user_id = u.id FROM users u WHERE a.user_address = u.address")
-    op.create_foreign_key(
-        "fk_api_keys_user_id", "api_keys", "users", ["user_id"], ["id"], ondelete="CASCADE"
-    )
+    op.create_foreign_key("fk_api_keys_user_id", "api_keys", "users", ["user_id"], ["id"], ondelete="CASCADE")
 
 
 def downgrade() -> None:

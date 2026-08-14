@@ -176,10 +176,14 @@ async def test_liberclaw_create_uses_warm_pool_key(monkeypatch):
     finally:
         async with AsyncSessionLocal() as db:
             lc = (
-                await db.execute(
-                    __import__("sqlalchemy").select(LiberclawUser).where(LiberclawUser.user_id == user_id)
+                (
+                    await db.execute(
+                        __import__("sqlalchemy").select(LiberclawUser).where(LiberclawUser.user_id == user_id)
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if lc is not None:
                 await db.execute(delete(ApiKeyDB).where(ApiKeyDB.liberclaw_user_id == lc.id))
                 await db.execute(delete(LiberclawUser).where(LiberclawUser.id == lc.id))
@@ -192,9 +196,7 @@ async def _pool_count_cli_helper() -> int:
     async with AsyncSessionLocal() as db:
         return int(
             (
-                await db.execute(
-                    select(func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool)
-                )
+                await db.execute(select(func.count()).select_from(ApiKeyDB).where(ApiKeyDB.type == ApiKeyType.pool))
             ).scalar()
             or 0
         )

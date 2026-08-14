@@ -77,9 +77,7 @@ async def _inference_call_count(api_key_id) -> int:
 async def _chat_request_count(api_key_id) -> int:
     async with AsyncSessionLocal() as db:
         count = (
-            await db.execute(
-                select(func.count()).select_from(ChatRequest).where(ChatRequest.api_key_id == api_key_id)
-            )
+            await db.execute(select(func.count()).select_from(ChatRequest).where(ChatRequest.api_key_id == api_key_id))
         ).scalar()
     return int(count or 0)
 
@@ -249,14 +247,10 @@ async def test_shared_chat_key_no_inference_call_no_deduction(monkeypatch, async
         assert await _chat_request_count(key_id) == cr_before + 1
 
         # InferenceCall MUST NOT be created for the shared key.
-        assert await _inference_call_count(key_id) == ic_before, (
-            "Shared key must not write an InferenceCall row"
-        )
+        assert await _inference_call_count(key_id) == ic_before, "Shared key must not write an InferenceCall row"
 
         # Balance MUST NOT change.
-        assert await _balance(user_id) == initial_balance, (
-            "Shared key must not deduct from prepaid balance"
-        )
+        assert await _balance(user_id) == initial_balance, "Shared key must not deduct from prepaid balance"
 
     finally:
         await _cleanup(user_id)

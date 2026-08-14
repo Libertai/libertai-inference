@@ -51,10 +51,10 @@ async def test_wallet_expired_challenge_rejected(db):
     await create_challenge(db, account.address)
     # Force the stored challenge to be expired.
     challenge = (await db.execute(WalletChallenge.__table__.select())).first()
-    await db.execute(
-        WalletChallenge.__table__.update().values(expires_at=datetime.now() - timedelta(minutes=1))
+    await db.execute(WalletChallenge.__table__.update().values(expires_at=datetime.now() - timedelta(minutes=1)))
+    signed = Account.sign_message(
+        encode_defunct(text=f"Sign in to LibertAI.\n\nNonce: {challenge.nonce}"), account.key
     )
-    signed = Account.sign_message(encode_defunct(text=f"Sign in to LibertAI.\n\nNonce: {challenge.nonce}"), account.key)
     assert await verify_signature(db, account.address, signed.signature) is False
 
 

@@ -43,9 +43,7 @@ def upgrade() -> None:
         sa.CheckConstraint("amount > 0", name="check_liberclaw_grant_amount_positive"),
         sa.CheckConstraint("amount_left >= 0", name="check_liberclaw_grant_amount_left_non_negative"),
     )
-    op.create_index(
-        "ix_liberclaw_credit_grants_user_id", "liberclaw_credit_grants", ["liberclaw_user_id"]
-    )
+    op.create_index("ix_liberclaw_credit_grants_user_id", "liberclaw_credit_grants", ["liberclaw_user_id"])
 
     op.add_column(
         "inference_calls",
@@ -59,9 +57,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "check_liberclaw_extra_credits_used_non_negative", "inference_calls", type_="check"
-    )
+    op.drop_constraint("check_liberclaw_extra_credits_used_non_negative", "inference_calls", type_="check")
     op.drop_column("inference_calls", "liberclaw_extra_credits_used")
     op.drop_index("ix_liberclaw_credit_grants_user_id", table_name="liberclaw_credit_grants")
     op.drop_table("liberclaw_credit_grants")

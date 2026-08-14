@@ -23,8 +23,8 @@ from src.services.users import get_or_create_user_by_wallet
 async def _user_for_address(address: str) -> User:
     async with AsyncSessionLocal() as db:
         wallet = (
-            await db.execute(select(WalletConnection).where(WalletConnection.address == address))
-        ).scalars().first()
+            (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
+        )
         assert wallet is not None
         user = await db.get(User, wallet.user_id)
         assert user is not None
@@ -37,15 +37,17 @@ async def test_add_credits_creates_user_wallet_and_balance():
 
     async with AsyncSessionLocal() as db:
         wallet = (
-            await db.execute(select(WalletConnection).where(WalletConnection.address == address))
-        ).scalars().first()
+            (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
+        )
         assert wallet is not None
         assert wallet.chain == "base"
         assert wallet.is_primary is True
 
         tx = (
-            await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == wallet.user_id))
-        ).scalars().first()
+            (await db.execute(select(CreditTransaction).where(CreditTransaction.user_id == wallet.user_id)))
+            .scalars()
+            .first()
+        )
         assert tx is not None
         assert tx.address == address  # legacy column still populated
 

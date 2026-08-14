@@ -31,9 +31,7 @@ async def get_or_create_user_by_wallet(db: AsyncSession, address: str, chain: st
     """
     chain = chain or infer_chain(address)
 
-    wallet = (
-        await db.execute(select(WalletConnection).where(WalletConnection.address == address))
-    ).scalars().first()
+    wallet = (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
     if wallet is not None:
         user = await db.get(User, wallet.user_id)
         if user is not None:
@@ -91,12 +89,16 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
     Email/OAuth users never get a wallet. Returns (user, created).
     """
     existing = (
-        await db.execute(
-            select(OAuthConnection).where(
-                OAuthConnection.provider == info.provider, OAuthConnection.provider_id == info.provider_id
+        (
+            await db.execute(
+                select(OAuthConnection).where(
+                    OAuthConnection.provider == info.provider, OAuthConnection.provider_id == info.provider_id
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing is not None:
         user = await db.get(User, existing.user_id)
         if user is not None:
@@ -133,12 +135,16 @@ def _refresh_avatar(user: User, info: "OAuthUserInfo") -> None:
 async def link_oauth(db: AsyncSession, user: User, info: "OAuthUserInfo") -> None:
     """Attach an OAuth identity to a user (no-op if already linked)."""
     existing = (
-        await db.execute(
-            select(OAuthConnection).where(
-                OAuthConnection.provider == info.provider, OAuthConnection.provider_id == info.provider_id
+        (
+            await db.execute(
+                select(OAuthConnection).where(
+                    OAuthConnection.provider == info.provider, OAuthConnection.provider_id == info.provider_id
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing is not None:
         return
     db.add(
@@ -153,8 +159,8 @@ async def link_wallet(db: AsyncSession, user: User, address: str, chain: str | N
     """Attach a wallet to a user (used when a fiat user later connects crypto)."""
     chain = chain or infer_chain(address)
     existing = (
-        await db.execute(select(WalletConnection).where(WalletConnection.address == address))
-    ).scalars().first()
+        (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
+    )
     if existing is not None:
         return existing
     has_primary = (

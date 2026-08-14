@@ -162,13 +162,17 @@ async def _active_window(db: AsyncSession, user_id: uuid.UUID, kind: str, now: d
 
 async def get_active_tier(db: AsyncSession, user_id: uuid.UUID) -> str:
     sub = (
-        await db.execute(
-            select(PlanSubscription.tier).where(
-                PlanSubscription.user_id == user_id,
-                PlanSubscription.status == "active",
+        (
+            await db.execute(
+                select(PlanSubscription.tier).where(
+                    PlanSubscription.user_id == user_id,
+                    PlanSubscription.status == "active",
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     return sub or DEFAULT_TIER
 
 
@@ -242,9 +246,7 @@ async def window_usage_by_users(
     return {row[0]: float(row[1]) for row in rows}
 
 
-async def month_overflow_by_users(
-    db: AsyncSession, user_ids: set[uuid.UUID], now: datetime
-) -> dict[uuid.UUID, float]:
+async def month_overflow_by_users(db: AsyncSession, user_ids: set[uuid.UUID], now: datetime) -> dict[uuid.UUID, float]:
     """Batched attempted-overflow spend (credits_used - tier_credits_used) per user this
     calendar month, across chargeable keys. Rows record full overflow even when the partial
     deduction captured less, so this is conservative. Absent users => 0.

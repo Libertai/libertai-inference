@@ -28,9 +28,7 @@ async def _user_with_key(*, suspended: bool = False, key_active: bool = True):
             user.suspension_reason = "test"
         db.add(user)
         await db.flush()
-        key = ApiKeyDB(
-            key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api
-        )
+        key = ApiKeyDB(key=ApiKeyDB.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api)
         key.is_active = key_active
         db.add(key)
         await db.commit()

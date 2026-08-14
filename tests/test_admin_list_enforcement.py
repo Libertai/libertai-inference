@@ -49,9 +49,17 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None, cap=Non
         await db.flush()
         if usage:
             if window == "active":
-                started, expires, used_at = now - timedelta(hours=1), now + timedelta(hours=4), now - timedelta(minutes=30)
+                started, expires, used_at = (
+                    now - timedelta(hours=1),
+                    now + timedelta(hours=4),
+                    now - timedelta(minutes=30),
+                )
             else:  # expired
-                started, expires, used_at = now - timedelta(hours=6), now - timedelta(hours=1), now - timedelta(hours=5)
+                started, expires, used_at = (
+                    now - timedelta(hours=6),
+                    now - timedelta(hours=1),
+                    now - timedelta(hours=5),
+                )
             db.add(EntitlementWindow(user_id=user.id, kind=WINDOW_5H, started_at=started, expires_at=expires))
             # Seeded usage simulates tier-covered calls (counts against the window).
             call = InferenceCall(api_key_id=key.id, credits_used=usage, model_name="m", tier_credits_used=usage)
@@ -64,8 +72,11 @@ async def _setup(*, usage=None, window="active", prepaid=0.0, tier=None, cap=Non
         if prepaid:
             db.add(
                 CreditTransaction(
-                    user_id=user.id, amount=prepaid, amount_left=prepaid,
-                    provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+                    user_id=user.id,
+                    amount=prepaid,
+                    amount_left=prepaid,
+                    provider=CreditTransactionProvider.revolut,
+                    status=CreditTransactionStatus.completed,
                 )
             )
         if tier:

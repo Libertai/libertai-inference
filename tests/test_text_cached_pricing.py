@@ -76,8 +76,6 @@ async def test_no_cached_rate_falls_back_to_input_rate(model_without_cached_rate
 @pytest.mark.asyncio
 async def test_cached_clamped_to_input(model_with_cached_rate):
     # cached > input must not produce negative full-rate input
-    price = await aleph_service.calculate_price(
-        model_id="glm", input_tokens=100, output_tokens=0, cached_tokens=1000
-    )
+    price = await aleph_service.calculate_price(model_id="glm", input_tokens=100, output_tokens=0, cached_tokens=1000)
     # clamped to 100 cached tokens at cached rate 1.0
     assert price == round(100 / 1_000_000 * 1.0, 5)

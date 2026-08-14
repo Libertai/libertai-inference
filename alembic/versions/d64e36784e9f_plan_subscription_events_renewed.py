@@ -7,6 +7,7 @@ Create Date: 2026-07-24 16:29:20.644992
 ``activated`` means a subscription's first successful charge; each later billing cycle is a
 ``renewed`` event. Ties on created_at break by id so exactly one row per sub stays activated.
 """
+
 from collections.abc import Sequence
 
 from alembic import op
