@@ -93,7 +93,7 @@ def test_mrr_from_timelines():
     assert [(d.date, d.mrr) for d in daily] == [
         ("2026-01-01", 20.0),
         ("2026-01-02", 20.0),
-        ("2026-01-03", 0.0),   # ended_on is exclusive: terminated that day
+        ("2026-01-03", 0.0),  # ended_on is exclusive: terminated that day
         ("2026-01-04", 0.0),
     ]
 
@@ -172,8 +172,11 @@ async def test_topups_daily_widens_but_total_topups_stays_in_range(async_client)
 
         for day, amount in ((before_range, 15.0), (in_range, 25.0)):
             txn = CreditTransaction(
-                user_id=user.id, amount=amount, amount_left=amount,
-                provider=CreditTransactionProvider.revolut, status=CreditTransactionStatus.completed,
+                user_id=user.id,
+                amount=amount,
+                amount_left=amount,
+                provider=CreditTransactionProvider.revolut,
+                status=CreditTransactionStatus.completed,
             )
             txn.created_at = datetime.combine(day, datetime.min.time().replace(hour=12))
             db.add(txn)
@@ -196,6 +199,62 @@ async def test_topups_daily_widens_but_total_topups_stays_in_range(async_client)
     finally:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(CreditTransaction).where(CreditTransaction.id.in_(txn_ids)))
+            await db.execute(delete(User).where(User.id.in_(user_ids)))
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_paid_credits_subscriptions_excludes_granted_and_staff():
+    """The credits rail bills by deducting credits, so a granted balance yields MRR nobody paid.
+    Vouchers dominate it in practice -- one voucher-funded ``max`` sub outweighs twelve real ``go``
+    subscribers -- so a miss here is not a rounding error.
+
+    Asserts on subscriber identity rather than a summed MRR: the totals move with whatever else
+    the suite has left in the database, the membership of this set does not."""
+    user_ids: list[uuid.UUID] = []
+
+    async with AsyncSessionLocal() as db:
+        paid = User(email=f"credits-paid-{uuid.uuid4().hex}@example.com")
+        vouchered = User(email=f"credits-voucher-{uuid.uuid4().hex}@example.com")
+        staff = User(email=f"credits-staff-{uuid.uuid4().hex}@example.com")
+        staff.is_libertai_staff = True
+        fiat = User(email=f"credits-fiat-{uuid.uuid4().hex}@example.com")
+        db.add_all([paid, vouchered, staff, fiat])
+        await db.flush()
+        user_ids += [paid.id, vouchered.id, staff.id, fiat.id]
+
+        for owner in (paid, vouchered, staff):
+            db.add(PlanSubscription(user_id=owner.id, tier="plus", provider="credits", status="active"))
+        # A voucher on a card subscriber must not touch the fiat rail: there the cash is the charge.
+        db.add(PlanSubscription(user_id=fiat.id, tier="plus", provider="revolut", status="active"))
+
+        # The staff account is voucher-free on purpose: it must be excluded on its own merits,
+        # not because it happens to hold a grant.
+        for owner, provider in (
+            (paid, CreditTransactionProvider.thirdweb),
+            (vouchered, CreditTransactionProvider.voucher),
+            (fiat, CreditTransactionProvider.voucher),
+        ):
+            db.add(
+                CreditTransaction(
+                    user_id=owner.id,
+                    amount=20.0,
+                    amount_left=0.0,
+                    provider=provider,
+                    status=CreditTransactionStatus.completed,
+                )
+            )
+        await db.commit()
+
+    try:
+        async with AsyncSessionLocal() as db:
+            selected = {s.user_id for s in await StatsService._paid_credits_subscriptions(db)}
+        assert paid.id in selected
+        assert vouchered.id not in selected
+        assert staff.id not in selected
+        assert fiat.id not in selected  # revolut row: never on this rail regardless of its voucher
+    finally:
+        async with AsyncSessionLocal() as db:
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()
 
@@ -226,25 +285,78 @@ async def _seed_topups():
 
         rows = [
             # (user, amount, amount_left, provider, status, ref, day)
-            (user, 10.0, 4.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
-             "revolut:test-table-1", date(2020, 2, 1)),
-            (user, 20.0, 20.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
-             "revolut:test-table-2", date(2020, 2, 2)),
-            (user, 99.0, 99.0, CreditTransactionProvider.revolut, CreditTransactionStatus.pending,
-             "revolut:test-table-3", date(2020, 2, 3)),
-            (user, 50.0, 50.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
-             "upgrade_remainder:test-x", date(2020, 2, 4)),
-            (user, 30.0, 30.0, CreditTransactionProvider.voucher, CreditTransactionStatus.completed,
-             "voucher:test-table-5", date(2020, 2, 5)),
-            (user_past, 5.0, 0.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
-             "revolut:test-table-6", date(2020, 2, 6)),
-            (user_never, 1.0, 1.0, CreditTransactionProvider.revolut, CreditTransactionStatus.completed,
-             "revolut:test-table-7", date(2020, 2, 7)),
+            (
+                user,
+                10.0,
+                4.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.completed,
+                "revolut:test-table-1",
+                date(2020, 2, 1),
+            ),
+            (
+                user,
+                20.0,
+                20.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.completed,
+                "revolut:test-table-2",
+                date(2020, 2, 2),
+            ),
+            (
+                user,
+                99.0,
+                99.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.pending,
+                "revolut:test-table-3",
+                date(2020, 2, 3),
+            ),
+            (
+                user,
+                50.0,
+                50.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.completed,
+                "upgrade_remainder:test-x",
+                date(2020, 2, 4),
+            ),
+            (
+                user,
+                30.0,
+                30.0,
+                CreditTransactionProvider.voucher,
+                CreditTransactionStatus.completed,
+                "voucher:test-table-5",
+                date(2020, 2, 5),
+            ),
+            (
+                user_past,
+                5.0,
+                0.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.completed,
+                "revolut:test-table-6",
+                date(2020, 2, 6),
+            ),
+            (
+                user_never,
+                1.0,
+                1.0,
+                CreditTransactionProvider.revolut,
+                CreditTransactionStatus.completed,
+                "revolut:test-table-7",
+                date(2020, 2, 7),
+            ),
         ]
         for owner, amount, amount_left, provider, status, ref, day in rows:
             txn = CreditTransaction(
-                user_id=owner.id, amount=amount, amount_left=amount_left,
-                provider=provider, status=status, external_reference=ref,
+                user_id=owner.id,
+                amount=amount,
+                amount_left=amount_left,
+                provider=provider,
+                status=status,
+                external_reference=ref,
             )
             txn.created_at = datetime.combine(day, datetime.min.time().replace(hour=12))
             db.add(txn)

@@ -69,6 +69,7 @@ from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.payments.credit_subscription import CREDITS_PROVIDER
 from src.subscription_tiers import PAID_TIERS, get_tier
 from src.utils.logger import setup_logger
 
@@ -1265,9 +1266,7 @@ class StatsService:
                 return GlobalTierEconomicsStats(
                     daily=daily,
                     tier_prices=[
-                        TierPrice(
-                            tier=t, monthly_price=_tier_price(t), weekly_credits=get_tier(t).weekly_credits
-                        )
+                        TierPrice(tier=t, monthly_price=_tier_price(t), weekly_credits=get_tier(t).weekly_credits)
                         for t in sorted(PAID_TIERS, key=_tier_price)
                     ],
                 )
@@ -1322,9 +1321,7 @@ class StatsService:
                             is_trial=sub.is_trial,
                             cancel_at_period_end=sub.cancel_at_period_end,
                             created_at=sub.created_at.isoformat(),
-                            current_period_end=sub.current_period_end.isoformat()
-                            if sub.current_period_end
-                            else None,
+                            current_period_end=sub.current_period_end.isoformat() if sub.current_period_end else None,
                         )
                     )
                 return GlobalLatestSubscribersStats(subscribers=subscribers, total=total)
@@ -1371,9 +1368,7 @@ class StatsService:
         try:
             async with AsyncSessionLocal() as db:
                 wanted = set(types) if types else set(SubscriptionActivityType)
-                raw_types = [
-                    raw for raw, mapped in StatsService._ACTIVITY_TYPE_MAP.items() if mapped in wanted
-                ]
+                raw_types = [raw for raw, mapped in StatsService._ACTIVITY_TYPE_MAP.items() if mapped in wanted]
 
                 paired_upgrade = aliased(PlanSubscriptionEvent)
                 is_upgrade_activation = and_(
@@ -1388,9 +1383,7 @@ class StatsService:
                 condition = and_(PlanSubscriptionEvent.event_type.in_(raw_types), ~is_upgrade_activation)
 
                 total = (
-                    await db.execute(
-                        select(func.count()).select_from(PlanSubscriptionEvent).where(condition)
-                    )
+                    await db.execute(select(func.count()).select_from(PlanSubscriptionEvent).where(condition))
                 ).scalar_one()
 
                 rows = (
@@ -1467,8 +1460,7 @@ class StatsService:
                     downgrades.append((day, e.metadata_json["to"]))
                 elif e.event_type == "downgraded":
                     logger.warning(
-                        f"downgraded event {e.id} (subscription {sub.id}) missing tier metadata; "
-                        "MRR keeps prior tier"
+                        f"downgraded event {e.id} (subscription {sub.id}) missing tier metadata; MRR keeps prior tier"
                     )
                 elif e.event_type in StatsService._TERMINAL_EVENTS and ended_on is None:
                     ended_on = day
@@ -1592,24 +1584,11 @@ class StatsService:
         return [(r.date, r.user_id, float(r.credits or 0.0), float(r.tier_credits or 0.0)) for r in rows]
 
     @staticmethod
-    async def _all_subscription_timelines(db) -> list[dict]:
-        """Replayed timelines for every subscription, ALL providers (trials excluded).
-
-        The MRR path is Revolut-only because it measures cash; tier attribution is not — a
-        credits-rail subscriber still holds a tier and burns credits against it.
-        """
-        subs = (
-            (await db.execute(select(PlanSubscription).where(PlanSubscription.is_trial.is_(False))))
-            .scalars()
-            .all()
-        )
+    async def _timelines_for(db, subs) -> list[dict]:
+        """Load the event logs of ``subs`` and replay them into timelines."""
         sub_ids = [s.id for s in subs]
         events = (
-            (
-                await db.execute(
-                    select(PlanSubscriptionEvent).where(PlanSubscriptionEvent.subscription_id.in_(sub_ids))
-                )
-            )
+            (await db.execute(select(PlanSubscriptionEvent).where(PlanSubscriptionEvent.subscription_id.in_(sub_ids))))
             .scalars()
             .all()
             if sub_ids
@@ -1619,6 +1598,58 @@ class StatsService:
         for e in events:
             events_by_sub.setdefault(e.subscription_id, []).append(e)
         return StatsService._replay_subscription_timelines(subs, events_by_sub)
+
+    @staticmethod
+    async def _all_subscription_timelines(db) -> list[dict]:
+        """Replayed timelines for every subscription, ALL providers (trials excluded).
+
+        Tier attribution spans both rails, unlike either MRR series: a credits-rail subscriber
+        still holds a tier and burns credits against it, whoever funded them.
+        """
+        subs = (await db.execute(select(PlanSubscription).where(PlanSubscription.is_trial.is_(False)))).scalars().all()
+        return await StatsService._timelines_for(db, subs)
+
+    @staticmethod
+    async def _paid_credits_subscriptions(db):
+        """Credits-rail subscriptions whose credits were bought rather than granted.
+
+        Both exclusions are properties of the subscriber, not of the subscription:
+
+        - **Ever granted a voucher.** Credits are fungible and ``use_credits`` drains them
+          ``expired_at`` first, so while a grant lasts it is what pays the subscription. Nothing
+          records which transaction funded a given charge — ``use_credits`` mutates ``amount_left``
+          without writing a ledger row — so the account is the finest grain available. Deliberately
+          blunt in one direction: a paying customer handed a goodwill voucher leaves MRR for good.
+        - **Staff.** Excluded outright. Leaving it to the voucher rule would only catch a staff
+          account for as long as it happened to hold a grant.
+
+        No positive "did they pay" test is needed on this rail: a credits subscription only
+        activates once credits are deducted, so voucher-free implies purchased.
+        """
+        granted = (
+            select(CreditTransaction.id)
+            .where(
+                CreditTransaction.user_id == PlanSubscription.user_id,
+                CreditTransaction.provider == CreditTransactionProvider.voucher,
+            )
+            .exists()
+        )
+        return (
+            (
+                await db.execute(
+                    select(PlanSubscription)
+                    .join(User, User.id == PlanSubscription.user_id)
+                    .where(
+                        PlanSubscription.provider == CREDITS_PROVIDER,
+                        PlanSubscription.is_trial.is_(False),
+                        User.is_libertai_staff.is_(False),
+                        ~granted,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     @staticmethod
     async def _revolut_topups_by_day(db, start_date: date, end_date: date) -> list[tuple[date, float]]:
@@ -1674,11 +1705,27 @@ class StatsService:
         return daily
 
     @staticmethod
+    def _mrr_by_tier_on(timelines: list[dict], day: date) -> dict[str, float]:
+        by_tier: dict[str, float] = {}
+        for t in timelines:
+            tier = StatsService._tier_at(t, day)
+            if tier:
+                by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier)
+        return by_tier
+
+    @staticmethod
     async def get_global_subscriptions_revenue(start_date: date, end_date: date) -> GlobalSubscriptionsRevenueStats:
-        """Revolut MRR (nominal, currency-blind, trials excluded), event-replayed over the range."""
+        """MRR per rail (nominal, currency-blind, trials excluded), event-replayed over the range.
+
+        Both rails count a subscription until it actually ends, so one that is cancelled but still
+        inside its paid period stays in MRR and shows up as churn when it lapses. That is the
+        standard convention and it matters more here than on a card rail: most credits subscribers
+        so far buy a single month and switch off renewal within seconds of activating, so the
+        credits series leads its own forward run-rate by a wide margin.
+        """
         try:
             async with AsyncSessionLocal() as db:
-                subs = (
+                revolut_subs = (
                     (
                         await db.execute(
                             select(PlanSubscription).where(
@@ -1690,46 +1737,32 @@ class StatsService:
                     .scalars()
                     .all()
                 )
-                sub_ids = [s.id for s in subs]
-                events = (
-                    (
-                        await db.execute(
-                            select(PlanSubscriptionEvent).where(
-                                PlanSubscriptionEvent.subscription_id.in_(sub_ids)
-                            )
-                        )
-                    ).scalars().all()
-                    if sub_ids
-                    else []
-                )
-                events_by_sub: dict = {}
-                for e in events:
-                    events_by_sub.setdefault(e.subscription_id, []).append(e)
-
-                timelines = StatsService._replay_subscription_timelines(subs, events_by_sub)
+                timelines = await StatsService._timelines_for(db, revolut_subs)
                 daily = StatsService._mrr_daily(timelines, start_date, end_date)
+
+                credits_timelines = await StatsService._timelines_for(
+                    db, await StatsService._paid_credits_subscriptions(db)
+                )
+                credits_daily = StatsService._mrr_daily(credits_timelines, start_date, end_date)
 
                 topup_rows = await StatsService._revolut_topups_by_day(
                     db, StatsService._topups_window_start(start_date), end_date
                 )
-                topups_daily = [
-                    TopupDay(date=d.strftime("%Y-%m-%d"), amount=amount) for d, amount in topup_rows
-                ]
-                total_topups = round(
-                    sum(amount for d, amount in topup_rows if start_date <= d <= end_date), 2
-                )
+                topups_daily = [TopupDay(date=d.strftime("%Y-%m-%d"), amount=amount) for d, amount in topup_rows]
+                total_topups = round(sum(amount for d, amount in topup_rows if start_date <= d <= end_date), 2)
 
                 today = datetime.now(timezone.utc).date()
-                by_tier: dict[str, float] = {}
-                for t in timelines:
-                    tier = StatsService._tier_at(t, today)
-                    if tier:
-                        by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier)
-                current_mrr = round(sum(by_tier.values()), 2)
+                by_tier = StatsService._mrr_by_tier_on(timelines, today)
+                credits_by_tier = StatsService._mrr_by_tier_on(credits_timelines, today)
                 return GlobalSubscriptionsRevenueStats(
-                    current_mrr=current_mrr,
+                    current_mrr=round(sum(by_tier.values()), 2),
                     mrr_by_tier=[MrrByTier(tier=k, mrr=round(v, 2)) for k, v in sorted(by_tier.items())],
                     daily=daily,
+                    credits_mrr=round(sum(credits_by_tier.values()), 2),
+                    credits_mrr_by_tier=[
+                        MrrByTier(tier=k, mrr=round(v, 2)) for k, v in sorted(credits_by_tier.items())
+                    ],
+                    credits_daily=credits_daily,
                     topups_daily=topups_daily,
                     total_topups=total_topups,
                 )
@@ -1837,24 +1870,18 @@ class StatsService:
         total_churned = 0
         for t in timelines:
             a = t["activated_on"]
-            if (
-                a
-                and start_date <= a <= end_date
-                and week_of(a) not in upgrade_weeks.get(t["user_id"], set())
-            ):
+            if a and start_date <= a <= end_date and week_of(a) not in upgrade_weeks.get(t["user_id"], set()):
                 weeks[week_of(a)]["new"] += 1
                 total_new += 1
             e = t["ended_on"]
-            if (
-                e
-                and start_date <= e <= end_date
-                and t["terminal_event"] in StatsService._CHURN_TERMINAL_EVENTS
-            ):
+            if e and start_date <= e <= end_date and t["terminal_event"] in StatsService._CHURN_TERMINAL_EVENTS:
                 weeks[week_of(e)]["churned"] += 1
                 total_churned += 1
 
         weekly = [
-            ChurnWeek(week_start=w.strftime("%Y-%m-%d"), new=c["new"], churned=c["churned"], net=c["new"] - c["churned"])
+            ChurnWeek(
+                week_start=w.strftime("%Y-%m-%d"), new=c["new"], churned=c["churned"], net=c["new"] - c["churned"]
+            )
             for w, c in sorted(weeks.items())
         ]
         return GlobalSubscriptionsChurnStats(weekly=weekly, total_new=total_new, total_churned=total_churned)
@@ -1880,11 +1907,11 @@ class StatsService:
                 events = (
                     (
                         await db.execute(
-                            select(PlanSubscriptionEvent).where(
-                                PlanSubscriptionEvent.subscription_id.in_(sub_ids)
-                            )
+                            select(PlanSubscriptionEvent).where(PlanSubscriptionEvent.subscription_id.in_(sub_ids))
                         )
-                    ).scalars().all()
+                    )
+                    .scalars()
+                    .all()
                     if sub_ids
                     else []
                 )

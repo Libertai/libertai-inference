@@ -429,7 +429,16 @@ class TopupDay(BaseModel):
 
 
 class GlobalSubscriptionsRevenueStats(BaseModel):
-    """Revolut (fiat) MRR, nominal and currency-blind; trials excluded. Event-replayed history.
+    """MRR on both paid rails, nominal and currency-blind; trials excluded. Event-replayed history.
+
+    The two rails are reported separately because they are denominated differently: ``current_mrr``
+    and ``daily`` are Revolut card charges, ``credits_mrr`` and ``credits_daily`` are subscriptions
+    billed by deducting prepaid credits. Summing them is the client's call.
+
+    The credits series counts only subscribers whose credits were **bought** — see
+    ``StatsService._paid_credits_subscriptions`` for the exclusions. Without them the figure is
+    dominated by granted credits: at time of writing 5 of 21 live credits subscriptions were
+    voucher-funded and carried 79% of the rail's nominal MRR.
 
     ``topups_daily`` covers completed Revolut credit purchases, excluding ``upgrade_remainder``
     grants and pending checkouts. Its window is widened back to the first day of ``start_date``'s
@@ -439,6 +448,9 @@ class GlobalSubscriptionsRevenueStats(BaseModel):
     current_mrr: float
     mrr_by_tier: list[MrrByTier]
     daily: list[MrrDay]
+    credits_mrr: float
+    credits_mrr_by_tier: list[MrrByTier]
+    credits_daily: list[MrrDay]
     topups_daily: list[TopupDay]
     total_topups: float
 
