@@ -339,10 +339,6 @@ class SubscriptionStatusFilter(str, Enum):
     cancelled = "cancelled"
     expired = "expired"
     pending_upgrade = "pending_upgrade"
-    # Legacy parked-upgrade status. Kept so an operator can isolate these rows while the revert
-    # pass drains them and the cutover script resolves or reports them as stranded; remove once
-    # no PlanSubscription rows carry this status.
-    upgrading = "upgrading"
 
 
 class LatestSubscriber(BaseModel):

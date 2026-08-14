@@ -1,10 +1,14 @@
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
+
+import pytest
 
 from src.interfaces.stats import SubscriptionActivityType, SubscriptionStatusFilter
 from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.auth_tokens import create_access_token
 from src.services.stats import StatsService
 
 
@@ -79,18 +83,40 @@ async def test_latest_subscribers_default_hides_unpaid_checkouts():
     assert all(s.status != "pending_upgrade" for s in result.subscribers)
 
 
-async def test_latest_subscribers_upgrading_filter_still_isolates_legacy_rows():
+@pytest.mark.asyncio
+async def test_route_without_limit_returns_every_matching_row(async_client):
+    """The subscribers table sorts, searches and paginates client-side, so it needs the whole set.
+    A default ``limit`` on the route silently truncates it while ``total`` keeps counting all
+    matches — the table then shows a total it cannot reach and rows that cannot be found."""
     async with AsyncSessionLocal() as db:
-        user = User(email="legacy-upgrading@example.com")
-        db.add(user)
+        for i in range(25):
+            u = User(email=f"nolimit{i}-{uuid.uuid4().hex}@example.com")
+            db.add(u)
+            await db.flush()
+            # One row per user: the partial unique index allows only one live sub each.
+            sub = PlanSubscription(user_id=u.id, tier="go", status="overdue", provider="revolut")
+            sub.created_at = datetime(2098, 5, 1) + timedelta(days=i)
+            db.add(sub)
+        staff = User(email=f"nolimit-staff-{uuid.uuid4().hex}@example.com")
+        staff.is_libertai_staff = True
+        db.add(staff)
         await db.flush()
-        sub = PlanSubscription(user_id=user.id, tier="max", provider="fake", status="upgrading")
-        sub.created_at = datetime(2099, 3, 2)
-        db.add(sub)
+        headers = {"Authorization": f"Bearer {create_access_token(staff.id)}"}
         await db.commit()
 
-    result = await StatsService.get_latest_subscribers(limit=50, statuses=[SubscriptionStatusFilter.upgrading])
-    assert result.subscribers and all(s.status == "upgrading" for s in result.subscribers)
+    resp = await async_client.get("/stats/global/subscriptions/latest?status=overdue", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] >= 25
+    assert len(body["subscribers"]) == body["total"]
+
+
+def test_upgrading_is_not_a_selectable_status_filter():
+    """Retired from the filter once prod carried no such rows. The payments manager still parks
+    rows in ``upgrading`` mid-upgrade, so the status itself lives on — the route must reject it as
+    a filter value (400) rather than offer it as something to select."""
+    with pytest.raises(ValueError):
+        SubscriptionStatusFilter("upgrading")
 
 
 async def test_latest_subscribers_total_counts_all_matching_ignoring_limit():
@@ -236,12 +262,8 @@ async def test_subscription_activity_distinguishes_renewals():
     assert [e.type for e in mine] == [SubscriptionActivityType.renewed, SubscriptionActivityType.subscribed]
     assert all(e.tier == "go" for e in mine)
 
-    only_renewed = await StatsService.get_subscription_activity(
-        limit=50, types=[SubscriptionActivityType.renewed]
-    )
-    assert only_renewed.events and all(
-        e.type is SubscriptionActivityType.renewed for e in only_renewed.events
-    )
+    only_renewed = await StatsService.get_subscription_activity(limit=50, types=[SubscriptionActivityType.renewed])
+    assert only_renewed.events and all(e.type is SubscriptionActivityType.renewed for e in only_renewed.events)
     assert any(e.user_label == "activity-renew@example.com" for e in only_renewed.events)
 
 
