@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from src.config import config
 from src.services.payments.base import (
-    PaymentCapability,
     PaymentProvider,
     PaymentProviderKind,
     ProviderDescriptor,
@@ -31,9 +30,6 @@ class PaymentRegistry:
 
     def descriptors(self) -> list[ProviderDescriptor]:
         return [p.descriptor() for p in self._providers.values()]
-
-    def with_capability(self, capability: PaymentCapability) -> list[PaymentProvider]:
-        return [p for p in self._providers.values() if p.supports(capability)]
 
     def available_for_chains(self, chains: list[str]) -> list[ProviderDescriptor]:
         """Descriptors a user may use. Payment rails are split by account type:

@@ -15,6 +15,8 @@ async def lifespan(_app: FastAPI):
     from src.config import config
     from src.services.aleph import aleph_service
     from src.services.api_key_pool import ApiKeyPoolService
+    from src.services.payments.registry import payment_registry
+    from src.services.payments.revolut import RevolutProvider
     from src.utils.token import close_async_client
 
     await aleph_service.fetch_models_data()
@@ -30,3 +32,6 @@ async def lifespan(_app: FastAPI):
     yield
     scheduler.shutdown()
     await close_async_client()
+    for provider in payment_registry.all():
+        if isinstance(provider, RevolutProvider):
+            await provider.close()

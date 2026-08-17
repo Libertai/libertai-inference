@@ -28,14 +28,6 @@ class _Config:
     ADMIN_SECRET: str
     LIBERCLAW_SECRET: str
 
-    ALEPH_API_URL: str | None
-    ALEPH_SENDER: str
-    ALEPH_OWNER: str
-    ALEPH_SENDER_SK: bytes
-    ALEPH_SENDER_PK: bytes
-
-    ALEPH_AGENT_CHANNEL: str
-
     LIBERTAI_CHAT_API_KEY: str
     LIBERTAI_CHAT_API_BASE_URL: str
 
@@ -112,14 +104,6 @@ class _Config:
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
         self.LIBERCLAW_SECRET: str = os.getenv("LIBERCLAW_SECRET", "")
-
-        self.ALEPH_API_URL = os.getenv("ALEPH_API_URL")
-        self.ALEPH_SENDER = os.getenv("ALEPH_SENDER")
-        self.ALEPH_OWNER = os.getenv("ALEPH_OWNER")
-        self.ALEPH_SENDER_SK = os.getenv("ALEPH_SENDER_SK")  # type: ignore
-        self.ALEPH_SENDER_PK = os.getenv("ALEPH_SENDER_PK")  # type: ignore
-
-        self.ALEPH_AGENT_CHANNEL = os.getenv("ALEPH_AGENT_CHANNEL")
 
         self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")

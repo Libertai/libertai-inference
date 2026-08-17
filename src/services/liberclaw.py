@@ -315,18 +315,3 @@ class LiberclawService:
             return 0.0
         grants = await LiberclawService.lock_grants(db, liberclaw_user_id)
         return LiberclawService.decrement_grants(grants, amount)
-
-    @staticmethod
-    async def get_rolling_window_usage(api_key_id: uuid.UUID, rolling_window_days: int) -> float:
-        """Get total credits used by a key in the rolling window."""
-        async with AsyncSessionLocal() as db:
-            cutoff = datetime.now() - timedelta(days=rolling_window_days)
-            result = (
-                await db.execute(
-                    select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
-                        InferenceCall.api_key_id == api_key_id,
-                        InferenceCall.used_at >= cutoff,
-                    )
-                )
-            ).scalar()
-            return float(result or 0.0)

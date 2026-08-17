@@ -88,10 +88,3 @@ class CreditTransaction(Base):
     )
 
     user: Mapped["User"] = relationship("User", back_populates="credit_transactions")
-
-    @property
-    def used_amount(self) -> float:
-        """
-        Calculate amount used from this transaction.
-        """
-        return max(0.0, self.amount - self.amount_left)

@@ -3,12 +3,11 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, Enum, Float, ForeignKey, Index, String, func, select, text
+from sqlalchemy import TIMESTAMP, UUID, Boolean, Enum, Float, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql.expression import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
-from src.models.base import AsyncSessionLocal, Base
+from src.models.base import Base
 from src.models.liberclaw_user import LiberclawUser
 
 if TYPE_CHECKING:
@@ -94,35 +93,3 @@ class ApiKey(Base):
     @staticmethod
     def generate_key() -> str:
         return secrets.token_hex(16)
-
-    async def get_current_month_usage(self) -> float:
-        from src.models.inference_call import InferenceCall
-
-        async with AsyncSessionLocal() as db:
-            now = datetime.now()
-            first_day = datetime(now.year, now.month, 1)
-            next_month = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
-
-            result = await db.execute(
-                select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
-                    InferenceCall.api_key_id == self.id,
-                    InferenceCall.used_at >= first_day,
-                    InferenceCall.used_at < next_month,
-                )
-            )
-            return float(result.scalar() or 0.0)
-
-    async def get_effective_limit_remaining(self) -> float:
-        if not self.user_id:
-            return 0.0
-
-        from src.services.credit import CreditService
-
-        user_balance = await CreditService.get_balance(self.user_id)
-
-        if self.monthly_limit is not None:
-            usage = await self.get_current_month_usage()
-            limit_remaining = max(0.0, self.monthly_limit - usage)
-            return min(limit_remaining, user_balance)
-
-        return user_balance

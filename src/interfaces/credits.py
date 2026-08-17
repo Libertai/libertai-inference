@@ -57,14 +57,6 @@ class ExpiredCreditTransactionsResponse(BaseModel):
     transactions: list[ExpiredCreditTransaction]
 
 
-class ThirdwebTransactionDetails(BaseModel):
-    transactionHash: str
-    amountWei: str
-    amount: str
-    amountUSDCents: int
-    completedAt: str
-
-
 class ThirdwebPurchaseData(BaseModel):
     # The session user id — credits land on the signed-in account regardless of which wallet paid
     # (email/OAuth users pay via a just-connected wallet that isn't their own account).

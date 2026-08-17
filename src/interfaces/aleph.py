@@ -1,6 +1,4 @@
-from enum import StrEnum
-
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 
 class TextCapability(BaseModel):
@@ -45,29 +43,8 @@ class ModelInfo(BaseModel):
     pricing: dict[str, TextPricing | EmbeddingPricing | AudioPricing | float]
 
 
-class RedirectionType(StrEnum):
-    DEPRECATED = "DEPRECATED"
-    INTERNAL = "INTERNAL"
-
-
-class ModelRedirection(BaseModel):
-    from_id: str
-    to: str
-    type: RedirectionType
-    category: str  # "text", "image", "search"
-    description: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def rename_from(cls, data):
-        if isinstance(data, dict) and "from" in data:
-            data["from_id"] = data.pop("from")
-        return data
-
-
 class ModelsResponse(BaseModel):
     models: list[ModelInfo]
-    redirections: list[ModelRedirection] = []
 
 
 class AlephAPIResponse(BaseModel):
