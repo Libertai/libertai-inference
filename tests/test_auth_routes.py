@@ -22,19 +22,36 @@ def _sign(account, message: str) -> str:
     return sig if sig.startswith("0x") else f"0x{sig}"
 
 
+async def _wallet_login(async_client, account) -> dict:
+    """Wallet login: static message, signature, cookie JWT keyed on the address."""
+    message = (await async_client.post("/auth/message", json={"chain": "base", "address": account.address})).json()[
+        "message"
+    ]
+    response = await async_client.post(
+        "/auth/login",
+        json={"chain": "base", "address": account.address, "signature": _sign(account, message)},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+async def _token_pair(email: str) -> tuple[User, dict]:
+    """An access+refresh pair (and its session row) for an email user, bypassing the login routes."""
+    from src.routes.auth import _issue_token_pair
+
+    async with AsyncSessionLocal() as db:
+        user, _ = await get_or_create_user_by_email(db, email)
+        pair = await _issue_token_pair(db, user)
+        await db.commit()
+    return user, pair.model_dump()
+
+
 async def test_wallet_login_flow_and_protected_route(async_client):
     account = Account.create()
 
-    challenge = await async_client.post("/auth/wallet/challenge", json={"address": account.address})
-    assert challenge.status_code == 200
-    message = challenge.json()["message"]
-
-    verify = await async_client.post(
-        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-    )
-    assert verify.status_code == 200
-    tokens = verify.json()
-    assert tokens["access_token"] and tokens["refresh_token"]
+    tokens = await _wallet_login(async_client, account)
+    assert tokens["access_token"]
+    assert tokens["address"] == account.address
 
     # The access token works on a protected endpoint.
     keys = await async_client.get("/api-keys", headers={"Authorization": f"Bearer {tokens['access_token']}"})
@@ -42,13 +59,7 @@ async def test_wallet_login_flow_and_protected_route(async_client):
 
 
 async def test_refresh_rotation(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    pair = (
-        await async_client.post(
-            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-        )
-    ).json()
+    _user, pair = await _token_pair("refresh-rotation@example.com")
 
     rotated = await async_client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]})
     assert rotated.status_code == 200
@@ -88,25 +99,6 @@ async def test_email_magic_link_verify_refuses_suspended_user(async_client, monk
         user = (await db.execute(select(User).where(User.email == email))).scalars().one()
         sessions = (await db.execute(select(Session).where(Session.user_id == user.id))).scalars().all()
         assert sessions == []
-
-
-async def test_wallet_verify_refuses_suspended_user(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    await async_client.post(
-        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-    )
-    async with AsyncSessionLocal() as db:
-        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
-        user.suspended_at = datetime.now()
-        await db.commit()
-
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    refused = await async_client.post(
-        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-    )
-    assert refused.status_code == 403
-    assert refused.json()["detail"]["code"] == "account_suspended"
 
 
 async def test_email_magic_link_verify_refuses_disposable_domain(async_client, monkeypatch):
@@ -169,12 +161,7 @@ async def test_oauth_exchange_one_time_code(async_client, monkeypatch):
 
 async def test_auth_status_returns_wallet_address_not_user_id(async_client):
     account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    tokens = (
-        await async_client.post(
-            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-        )
-    ).json()
+    tokens = await _wallet_login(async_client, account)
 
     status = await async_client.get("/auth/status", headers={"Authorization": f"Bearer {tokens['access_token']}"})
     assert status.status_code == 200
@@ -205,12 +192,14 @@ async def test_auth_status_unauthenticated(async_client):
     assert status.json()["authenticated"] is False
 
 
-async def test_login_sets_session_and_refresh_cookies(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    verify = await async_client.post(
-        "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-    )
+async def test_login_sets_session_and_refresh_cookies(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
+    email = "cookies@example.com"
+    async with AsyncSessionLocal() as db:
+        _token, code = await create_magic_link(db, email)
+        await db.commit()
+
+    verify = await async_client.post("/auth/verify-magic-link", json={"email": email, "code": code})
     assert verify.status_code == 200
     cookies = verify.headers.get_list("set-cookie")
     auth_cookie = next(c for c in cookies if c.startswith("libertai_auth="))
@@ -220,13 +209,7 @@ async def test_login_sets_session_and_refresh_cookies(async_client):
 
 
 async def test_refresh_from_cookie_rotates_and_resets_cookies(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    pair = (
-        await async_client.post(
-            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-        )
-    ).json()
+    _user, pair = await _token_pair("refresh-cookie@example.com")
 
     # No body: the refresh token rides the httpOnly cookie (web client behavior).
     rotated = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
@@ -248,16 +231,11 @@ async def test_refresh_without_token_is_401(async_client):
 
 
 async def test_refresh_rejects_suspended_user_and_revokes_session(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    pair = (
-        await async_client.post(
-            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-        )
-    ).json()
+    email = "refresh-suspended@example.com"
+    _user, pair = await _token_pair(email)
 
     async with AsyncSessionLocal() as db:
-        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
+        user = (await db.execute(select(User).where(User.email == email))).scalars().one()
         user.suspended_at = datetime.now()
         await db.commit()
 
@@ -266,7 +244,7 @@ async def test_refresh_rejects_suspended_user_and_revokes_session(async_client):
 
     # The session is revoked, so lifting the suspension can't resurrect the old cookie.
     async with AsyncSessionLocal() as db:
-        user = (await db.execute(select(User).where(User.address == account.address.lower()))).scalars().one()
+        user = (await db.execute(select(User).where(User.email == email))).scalars().one()
         user.suspended_at = None
         await db.commit()
     retried = await async_client.post("/auth/refresh", cookies={"libertai_refresh": pair["refresh_token"]})
@@ -274,13 +252,7 @@ async def test_refresh_rejects_suspended_user_and_revokes_session(async_client):
 
 
 async def test_logout_revokes_session_from_cookie(async_client):
-    account = Account.create()
-    message = (await async_client.post("/auth/wallet/challenge", json={"address": account.address})).json()["message"]
-    pair = (
-        await async_client.post(
-            "/auth/wallet/verify", json={"address": account.address, "signature": _sign(account, message)}
-        )
-    ).json()
+    _user, pair = await _token_pair("logout-cookie@example.com")
 
     logout = await async_client.post("/auth/logout", cookies={"libertai_refresh": pair["refresh_token"]})
     assert logout.status_code == 204

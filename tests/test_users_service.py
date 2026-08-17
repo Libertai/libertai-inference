@@ -5,7 +5,6 @@ from src.services.oauth import OAuthUserInfo
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
-    link_wallet,
 )
 
 
@@ -116,16 +115,3 @@ async def test_oauth_login_keeps_avatar_when_provider_sends_none():
         user2, _ = await get_or_create_user_by_oauth(db, _oauth_info(provider_id="avatar-3", avatar_url=None))
         await db.commit()
         assert user2.avatar_url == "http://avatar"
-
-
-async def test_link_wallet_adds_one():
-    from src.models.base import AsyncSessionLocal
-
-    async with AsyncSessionLocal() as db:
-        user, _ = await get_or_create_user_by_email(db, "wallet-link@example.com")
-        await db.commit()
-        assert await _wallet_count(db, user.id) == 0
-
-        await link_wallet(db, user, "0x2222222222222222222222222222222222222222")
-        await db.commit()
-        assert await _wallet_count(db, user.id) == 1

@@ -155,23 +155,6 @@ async def link_oauth(db: AsyncSession, user: User, info: "OAuthUserInfo") -> Non
     await db.flush()
 
 
-async def link_wallet(db: AsyncSession, user: User, address: str, chain: str | None = None) -> WalletConnection:
-    """Attach a wallet to a user (used when a fiat user later connects crypto)."""
-    chain = chain or infer_chain(address)
-    existing = (
-        (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
-    )
-    if existing is not None:
-        return existing
-    has_primary = (
-        await db.execute(select(WalletConnection).where(WalletConnection.user_id == user.id))
-    ).scalars().first() is not None
-    wallet = WalletConnection(user_id=user.id, chain=chain, address=address, is_primary=not has_primary)
-    db.add(wallet)
-    await db.flush()
-    return wallet
-
-
 async def update_user_profile(db: AsyncSession, user_id: uuid.UUID, updates: dict) -> User:
     """Partial update of the user's editable profile fields (only keys present are assigned)."""
     user = await db.get(User, user_id)

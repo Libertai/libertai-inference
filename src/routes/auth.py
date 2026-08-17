@@ -29,15 +29,12 @@ from src.interfaces.auth import (
     TokenPairResponse,
     UpdateProfileRequest,
     VerifyMagicLinkRequest,
-    WalletChallengeRequest,
-    WalletChallengeResponse,
-    WalletVerifyRequest,
 )
 from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
 from src.models.session import Session
 from src.models.user import User
-from src.services import magic_link, oauth, wallet_auth
+from src.services import magic_link, oauth
 from src.services.auth import create_access_token, get_current_user, get_optional_user
 from src.services.auth_tokens import REFRESH, create_refresh_token, decode_token
 from src.services.auth_tokens import create_access_token as create_user_access_token
@@ -45,8 +42,6 @@ from src.services.disposable_email import DisposableEmailError
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
-    get_or_create_user_by_wallet,
-    link_wallet,
     update_user_profile,
 )
 from src.utils.encryption import decrypt, encrypt
@@ -215,31 +210,6 @@ async def update_me(request: UpdateProfileRequest, user: User = Depends(get_curr
             is_libertai_staff=updated.is_libertai_staff,
             monthly_extra_credit_cap=updated.monthly_extra_credit_cap,
         )
-
-
-# --- Wallet (EVM) challenge/verify ---
-
-
-@router.post("/wallet/challenge")
-async def wallet_challenge(request: WalletChallengeRequest) -> WalletChallengeResponse:
-    """Issue a nonce message for an EVM wallet to sign."""
-    async with AsyncSessionLocal() as db:
-        message = await wallet_auth.create_challenge(db, request.address)
-        await db.commit()
-    return WalletChallengeResponse(message=message)
-
-
-@router.post("/wallet/verify")
-async def wallet_verify(request: WalletVerifyRequest, response: fastapi.Response) -> TokenPairResponse:
-    """Verify a signed challenge and return a token pair (creates/links the wallet user)."""
-    async with AsyncSessionLocal() as db:
-        if not await wallet_auth.verify_signature(db, request.address, request.signature):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
-        user = await get_or_create_user_by_wallet(db, format_eth_address(request.address), "base")
-        pair = await _issue_token_pair(db, user)
-        await db.commit()
-    _set_auth_cookies(response, pair)
-    return pair
 
 
 # --- Email magic link ---
@@ -477,16 +447,3 @@ async def logout(
         if session is not None and session.revoked_at is None:
             session.revoked_at = datetime.now()
             await db.commit()
-
-
-# --- Account linking (logged-in) ---
-
-
-@router.post("/link/wallet", status_code=status.HTTP_204_NO_CONTENT)
-async def link_wallet_route(request: WalletVerifyRequest, user: User = Depends(get_current_user)) -> None:
-    """Attach a verified EVM wallet to the logged-in user (e.g. a fiat user adding crypto)."""
-    async with AsyncSessionLocal() as db:
-        if not await wallet_auth.verify_signature(db, request.address, request.signature):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
-        await link_wallet(db, user, format_eth_address(request.address), "base")
-        await db.commit()

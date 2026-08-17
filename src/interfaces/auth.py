@@ -45,26 +45,13 @@ class AuthStatusResponse(BaseModel):
     address: str | None = None
 
 
-# --- UUID-identity auth (email / OAuth / wallet challenge / refresh) ---
+# --- UUID-identity auth (email / OAuth / refresh) ---
 
 
 class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-
-
-class WalletChallengeRequest(BaseModel):
-    address: str
-
-
-class WalletChallengeResponse(BaseModel):
-    message: str
-
-
-class WalletVerifyRequest(BaseModel):
-    address: str
-    signature: str
 
 
 class EmailLoginRequest(BaseModel):

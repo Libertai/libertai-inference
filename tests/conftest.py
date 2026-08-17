@@ -72,7 +72,6 @@ import src.models.plan_subscription
 import src.models.plan_subscription_event
 import src.models.session
 import src.models.user
-import src.models.wallet_challenge
 import src.models.wallet_connection  # noqa: F401
 from src.models.base import Base
 

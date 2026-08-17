@@ -15,7 +15,6 @@ from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.session import Session
 from src.models.user import User
-from src.models.wallet_challenge import WalletChallenge
 from src.models.wallet_connection import WalletConnection
 
 __all__ = [
@@ -36,6 +35,5 @@ __all__ = [
     "PlanSubscriptionEvent",
     "Session",
     "User",
-    "WalletChallenge",
     "WalletConnection",
 ]

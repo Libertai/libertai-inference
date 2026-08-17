@@ -1,13 +1,6 @@
-from datetime import datetime, timedelta
-
-from eth_account import Account
-from eth_account.messages import encode_defunct
-
 from src.config import config
-from src.models.wallet_challenge import WalletChallenge
 from src.services import oauth
 from src.services.magic_link import create_magic_link, verify_magic_link
-from src.services.wallet_auth import create_challenge, verify_signature
 
 # --- magic link ---
 
@@ -26,36 +19,6 @@ async def test_magic_link_verify_by_code_and_attempts(db, monkeypatch):
 
     assert await verify_magic_link(db, email="code@example.com", code="000000") is None  # wrong code
     assert await verify_magic_link(db, email="code@example.com", code=code) == "code@example.com"
-
-
-# --- wallet auth ---
-
-
-async def test_wallet_signature_roundtrip(db):
-    account = Account.create()
-    message = await create_challenge(db, account.address)
-    signed = Account.sign_message(encode_defunct(text=message), account.key)
-    assert await verify_signature(db, account.address, signed.signature) is True
-
-
-async def test_wallet_wrong_signer_rejected(db):
-    account = Account.create()
-    other = Account.create()
-    message = await create_challenge(db, account.address)
-    signed = Account.sign_message(encode_defunct(text=message), other.key)  # signed by someone else
-    assert await verify_signature(db, account.address, signed.signature) is False
-
-
-async def test_wallet_expired_challenge_rejected(db):
-    account = Account.create()
-    await create_challenge(db, account.address)
-    # Force the stored challenge to be expired.
-    challenge = (await db.execute(WalletChallenge.__table__.select())).first()
-    await db.execute(WalletChallenge.__table__.update().values(expires_at=datetime.now() - timedelta(minutes=1)))
-    signed = Account.sign_message(
-        encode_defunct(text=f"Sign in to LibertAI.\n\nNonce: {challenge.nonce}"), account.key
-    )
-    assert await verify_signature(db, account.address, signed.signature) is False
 
 
 # --- oauth ---
