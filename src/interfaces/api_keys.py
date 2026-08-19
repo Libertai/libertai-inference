@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ApiKeyType(str, Enum):
@@ -77,9 +77,17 @@ class CliApiKeyCreate(BaseModel):
 
 
 class ApiKeyUpdate(BaseModel):
+    # Absent fields are left untouched. An explicit null clears the monthly limit (unlimited);
+    # name and is_active are NOT NULL columns, so an explicit null there is refused.
     name: str | None = None
     is_active: bool | None = None
     monthly_limit: float | None = None
+
+    @field_validator("name", "is_active")
+    def reject_explicit_null(cls, value):
+        if value is None:
+            raise ValueError("field cannot be null")
+        return value
 
 
 # The usage counts below are self-reported by the caller, so they are untrusted input:

@@ -417,20 +417,14 @@ class ApiKeyService:
             raise
 
     @staticmethod
-    async def update_api_key(
-        key_id: uuid.UUID,
-        name: str | None = None,
-        is_active: bool | None = None,
-        monthly_limit: float | None = None,
-    ) -> ApiKey | None:
+    async def update_api_key(key_id: uuid.UUID, updates: dict) -> ApiKey | None:
         """
-        Update an API key.
+        Partial update of an API key: only the keys present in ``updates`` are assigned, so an
+        explicit ``monthly_limit=None`` clears the limit while an absent one leaves it untouched.
 
         Args:
             key_id: API key UUID
-            name: New name for the API key
-            is_active: Whether the API key is active
-            monthly_limit: Monthly usage limit in credits
+            updates: subset of {"name", "is_active", "monthly_limit"} to assign
 
         Returns:
             Updated ApiKey object if found, None otherwise
@@ -446,15 +440,10 @@ class ApiKeyService:
                     logger.warning(f"API key {key_id} not found for update")
                     return None
 
-                # Update fields if provided (names are not unique per user)
-                if name is not None:
-                    api_key.name = name
-
-                if is_active is not None:
-                    api_key.is_active = is_active
-
-                if monthly_limit is not None:
-                    api_key.monthly_limit = monthly_limit
+                # Names are not unique per user.
+                for field in ("name", "is_active", "monthly_limit"):
+                    if field in updates:
+                        setattr(api_key, field, updates[field])
 
                 await db.commit()
 

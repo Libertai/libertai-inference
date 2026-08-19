@@ -107,9 +107,7 @@ async def update_api_key(
 
         api_key = await ApiKeyService.update_api_key(
             key_id=key_id,
-            name=api_key_update.name,
-            is_active=api_key_update.is_active,
-            monthly_limit=api_key_update.monthly_limit,
+            updates=api_key_update.model_dump(exclude_unset=True, include={"name", "is_active", "monthly_limit"}),
         )
 
         if not api_key:
