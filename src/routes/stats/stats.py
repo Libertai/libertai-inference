@@ -41,8 +41,7 @@ logger = setup_logger(__name__)
 @router.get("/dashboard", response_model=DashboardStats)  # type: ignore
 async def get_dashboard_stats(user: User = Depends(get_current_user)) -> DashboardStats:
     try:
-        # Stats are still wallet-address keyed; email users (no address) get empty stats for now.
-        return await StatsService.get_dashboard_stats(user.address or "")
+        return await StatsService.get_dashboard_stats(user.id, user.address or "")
     except Exception as e:
         logger.error(f"Error in dashboard stats route for user {user.id}: {e!s}", exc_info=True)
         raise
@@ -55,7 +54,7 @@ async def get_usage_stats(
     user: User = Depends(get_current_user),
 ) -> UsageStats:
     try:
-        return await StatsService.get_usage_stats(user.address or "", start_date, end_date)
+        return await StatsService.get_usage_stats(user.id, start_date, end_date)
     except Exception as e:
         logger.error(f"Error in usage stats route for user {user.id}: {e!s}", exc_info=True)
         raise

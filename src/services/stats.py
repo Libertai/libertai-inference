@@ -111,17 +111,20 @@ def _live_keys(stmt):
 
 class StatsService:
     @staticmethod
-    async def get_dashboard_stats(user_address: str) -> DashboardStats:
+    async def get_dashboard_stats(user_id: uuid.UUID, address: str) -> DashboardStats:
+        """Usage summary for the keys owned by ``user_id``.
+
+        ``address`` is echoed back on the response for the console and plays no part in the
+        query: keys are keyed by user id, so email and OAuth accounts count too.
+        """
         try:
             async with AsyncSessionLocal() as db:
                 now = datetime.now()
 
-                api_key_ids = (
-                    (await db.execute(select(ApiKey.id).where(ApiKey.user_address == user_address))).scalars().all()
-                )
+                api_key_ids = (await db.execute(select(ApiKey.id).where(ApiKey.user_id == user_id))).scalars().all()
                 if not api_key_ids:
                     return DashboardStats(
-                        address=user_address,
+                        address=address,
                         monthly_usage={},
                         current_month=TokenStats(
                             inference_calls=0, total_tokens=0, input_tokens=0, output_tokens=0, credits_used=0.0
@@ -169,7 +172,7 @@ class StatsService:
                         current_output = row.output_tokens or 0
 
                 return DashboardStats(
-                    address=user_address,
+                    address=address,
                     monthly_usage=monthly_usage,
                     current_month=TokenStats(
                         inference_calls=current_calls,
@@ -181,22 +184,20 @@ class StatsService:
                 )
 
         except Exception as e:
-            logger.error(f"Error retrieving dashboard stats for {user_address}: {e!s}", exc_info=True)
+            logger.error(f"Error retrieving dashboard stats for {user_id}: {e!s}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error retrieving dashboard statistics: {e!s}",
             )
 
     @staticmethod
-    async def get_usage_stats(user_address: str, start_date: date, end_date: date) -> UsageStats:
+    async def get_usage_stats(user_id: uuid.UUID, start_date: date, end_date: date) -> UsageStats:
         try:
             async with AsyncSessionLocal() as db:
                 start_datetime = datetime.combine(start_date, datetime.min.time())
                 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-                api_keys = (
-                    await db.execute(select(ApiKey.id, ApiKey.name).where(ApiKey.user_address == user_address))
-                ).all()
+                api_keys = (await db.execute(select(ApiKey.id, ApiKey.name).where(ApiKey.user_id == user_id))).all()
                 if not api_keys:
                     return UsageStats(
                         inference_calls=0,
@@ -316,7 +317,7 @@ class StatsService:
                 )
 
         except Exception as e:
-            logger.error(f"Error retrieving usage stats for {user_address}: {e!s}", exc_info=True)
+            logger.error(f"Error retrieving usage stats for {user_id}: {e!s}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error retrieving usage statistics: {e!s}",
