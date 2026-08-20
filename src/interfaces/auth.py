@@ -95,13 +95,14 @@ class UpdateProfileRequest(BaseModel):
         return trimmed
 
     # Monthly cap (USD credits) on extra-credit overflow spend. Explicit null clears it
-    # (unlimited); omit the field to leave it untouched.
+    # (unlimited); omit the field to leave it untouched. 0 is a real setting: spend the plan
+    # allowance, never the prepaid balance.
     monthly_extra_credit_cap: float | None = None
 
     @field_validator("monthly_extra_credit_cap")
     def validate_cap(cls, value: float | None):
-        if value is not None and (not math.isfinite(value) or value <= 0):
-            raise ValueError("monthly_extra_credit_cap must be a finite number greater than 0")
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("monthly_extra_credit_cap must be a finite non-negative number")
         return value
 
 

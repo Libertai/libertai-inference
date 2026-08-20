@@ -113,6 +113,7 @@ def test_effective_prepaid():
     assert effective_prepaid(100.0, 20.0, 5.0) == 15.0  # cap remaining binds
     assert effective_prepaid(10.0, 20.0, 5.0) == 10.0  # balance binds
     assert effective_prepaid(100.0, 20.0, 25.0) == 0.0  # overshoot floors at 0
+    assert effective_prepaid(100.0, 0.0, 0.0) == 0.0  # zero cap -> no prepaid spend at all
 
 
 async def test_month_overflow_sums_current_month_only():
@@ -154,6 +155,18 @@ async def test_allowance_state_cap_reached_blocks_prepaid():
         assert state.monthly_extra_credit_cap == pytest.approx(2.0)
         # exhaust_windows seeds 10.0 tier-covered (0 overflow) + the explicit 3.0 overflow call
         assert state.extra_credits_used_this_month == pytest.approx(3.0)
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_allowance_state_zero_cap_blocks_all_prepaid():
+    user_id, _ = await _setup(prepaid=50.0, cap=0, exhaust_windows=True)
+    try:
+        async with AsyncSessionLocal() as db:
+            state = await get_allowance_state(db, user_id)
+        assert state.source == "blocked"
+        assert state.monthly_extra_credit_cap == 0
+        assert state.extra_credits_used_this_month == 0.0
     finally:
         await _cleanup(user_id)
 
@@ -258,9 +271,7 @@ async def test_allowance_state_no_cap_unchanged():
         await _cleanup(user_id)
 
 
-def test_update_request_rejects_non_positive_cap():
-    with pytest.raises(pydantic.ValidationError):
-        UpdateProfileRequest(monthly_extra_credit_cap=0)
+def test_update_request_cap_validation():
     with pytest.raises(pydantic.ValidationError):
         UpdateProfileRequest(monthly_extra_credit_cap=-5.0)
     with pytest.raises(pydantic.ValidationError):
@@ -269,6 +280,8 @@ def test_update_request_rejects_non_positive_cap():
         UpdateProfileRequest(monthly_extra_credit_cap=float("inf"))
     assert UpdateProfileRequest(monthly_extra_credit_cap=12.5).monthly_extra_credit_cap == 12.5
     assert UpdateProfileRequest(monthly_extra_credit_cap=None).monthly_extra_credit_cap is None
+    # 0 means "never spend beyond the plan allowance", not "unset".
+    assert UpdateProfileRequest(monthly_extra_credit_cap=0).monthly_extra_credit_cap == 0
 
 
 def test_update_request_partial_dump():
