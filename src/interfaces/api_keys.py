@@ -66,9 +66,14 @@ def invalid_key_info(reason: InvalidKeyReason) -> InvalidKeyInfo:
     return InvalidKeyInfo(reason=reason, message=INVALID_KEY_MESSAGES[reason])
 
 
+# Monthly spend limit in credits: null = unlimited, 0 = the key can never spend.
+# Negative and non-finite values are refused, they would only ever block the key.
+MonthlyLimit = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
 class ApiKeyCreate(BaseModel):
     name: str
-    monthly_limit: float | None = None
+    monthly_limit: MonthlyLimit | None = None
 
 
 class CliApiKeyCreate(BaseModel):
@@ -81,7 +86,7 @@ class ApiKeyUpdate(BaseModel):
     # name and is_active are NOT NULL columns, so an explicit null there is refused.
     name: str | None = None
     is_active: bool | None = None
-    monthly_limit: float | None = None
+    monthly_limit: MonthlyLimit | None = None
 
     @field_validator("name", "is_active")
     def reject_explicit_null(cls, value):

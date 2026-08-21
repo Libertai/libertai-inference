@@ -6,7 +6,7 @@ import pydantic
 import pytest
 from sqlalchemy import delete
 
-from src.interfaces.api_keys import ApiKeyType, ApiKeyUpdate
+from src.interfaces.api_keys import ApiKeyCreate, ApiKeyType, ApiKeyUpdate
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.user import User
@@ -43,6 +43,15 @@ def test_update_request_partial_dump():
     assert dump == {"name": "renamed"}
     dump = ApiKeyUpdate.model_validate({"monthly_limit": None}).model_dump(exclude_unset=True)
     assert dump == {"monthly_limit": None}
+
+
+def test_monthly_limit_bounds():
+    for model in (ApiKeyCreate, ApiKeyUpdate):
+        for bad in (-1.0, float("nan"), float("inf")):
+            with pytest.raises(pydantic.ValidationError):
+                model.model_validate({"name": "k", "monthly_limit": bad})
+        assert model.model_validate({"name": "k", "monthly_limit": 0}).monthly_limit == 0
+        assert model.model_validate({"name": "k", "monthly_limit": None}).monthly_limit is None
 
 
 def test_update_request_rejects_explicit_null_on_not_null_columns():
