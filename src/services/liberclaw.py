@@ -6,7 +6,7 @@ from sqlalchemy.sql import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.liberclaw import LiberclawApiKeyResponse, LiberclawUserResponse
-from src.liberclaw_tiers import LIBERCLAW_TIERS
+from src.liberclaw_tiers import LIBERCLAW_TIERS, get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
@@ -158,7 +158,7 @@ class LiberclawService:
             if not lc_user:
                 raise ValueError(f"Liberclaw user not found: {user_id} ({user_type})")
 
-            tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+            tier_config = get_tier_config(lc_user.tier)
             rolling_days = tier_config["rolling_window_days"]
             credits_limit = tier_config["credits_limit"]
 

@@ -17,7 +17,7 @@ from src.interfaces.api_keys import (
     InvalidKeyReason,
     invalid_key_info,
 )
-from src.liberclaw_tiers import LIBERCLAW_TIERS
+from src.liberclaw_tiers import get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
@@ -657,7 +657,7 @@ class ApiKeyService:
                         lc_user = k.liberclaw_user
                         if lc_user is None:
                             continue
-                        tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+                        tier_config = get_tier_config(lc_user.tier)
                         key_ids_by_window.setdefault(tier_config["rolling_window_days"], []).append(k.id)
                     for window_days, key_ids in key_ids_by_window.items():
                         cutoff = now - timedelta(days=window_days)
@@ -713,7 +713,7 @@ class ApiKeyService:
                         lc_user = key.liberclaw_user
                         if lc_user is None:
                             continue
-                        tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+                        tier_config = get_tier_config(lc_user.tier)
                         effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0)
                         if liberclaw_usage.get(key.id, 0.0) >= effective_limit:
                             invalid[key.key] = invalid_key_info(InvalidKeyReason.liberclaw_limit)
@@ -842,7 +842,7 @@ class ApiKeyService:
                         # consume, skip the window query entirely.
                         grants = await LiberclawService.lock_grants(db, api_key.liberclaw_user_id)
                         if grants:
-                            tier_config = LIBERCLAW_TIERS.get(lc_user.tier, LIBERCLAW_TIERS["free"])
+                            tier_config = get_tier_config(lc_user.tier)
                             cutoff = now - timedelta(days=tier_config["rolling_window_days"])
                             window_usage = (
                                 await db.execute(
