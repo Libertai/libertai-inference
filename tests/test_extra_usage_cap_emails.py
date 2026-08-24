@@ -128,6 +128,16 @@ async def test_one_failure_does_not_resend_the_rest(monkeypatch):
         await _cleanup(good, bad)
 
 
+async def test_no_warning_once_the_cap_is_reached():
+    """Past the cap the keys are already blocked, so the "usage will pause" warning is wrong."""
+    user_id, _ = await _setup(cap=10.0, overflow=10.4)  # 104%
+    try:
+        assert await check_extra_usage_caps() == 0
+        assert await _send_types(user_id) == []
+    finally:
+        await _cleanup(user_id)
+
+
 async def test_jumping_straight_past_90_sends_only_the_90_warning():
     user_id, _ = await _setup(cap=10.0, overflow=9.6)  # 96%
     try:
