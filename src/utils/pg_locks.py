@@ -23,6 +23,11 @@ LIFECYCLE_EMAILS_LOCK_ID = 911005
 # spans cannot be enumerated here (see ``PaymentManager._lock_user``).
 USER_SUBSCRIPTION_LOCK_CLASS = 911004
 
+# Classid for invoice-number allocation; objid = invoice year. Held to end of
+# transaction, so concurrent issuances serialize through commit and the second
+# one sees the first's row (gap-free, no double allocation across replicas).
+INVOICE_NUMBER_LOCK_CLASS = 911006
+
 T = TypeVar("T")
 
 

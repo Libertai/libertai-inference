@@ -15,6 +15,7 @@ from src.models.chat_request import ChatRequest  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.entitlement_window import EntitlementWindow  # noqa
 from src.models.inference_call import InferenceCall  # noqa
+from src.models.invoice import Invoice  # noqa
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant  # noqa
 from src.models.liberclaw_user import LiberclawUser  # noqa
 from src.models.lifecycle_email_send import LifecycleEmailSend  # noqa
@@ -24,6 +25,7 @@ from src.models.plan_subscription import PlanSubscription  # noqa
 from src.models.plan_subscription_event import PlanSubscriptionEvent  # noqa
 from src.models.session import Session  # noqa
 from src.models.user import User  # noqa
+from src.models.user_billing_details import UserBillingDetails  # noqa
 from src.models.wallet_connection import WalletConnection  # noqa
 
 # this is the Alembic Config object, which provides
