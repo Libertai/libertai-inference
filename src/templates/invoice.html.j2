@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 2cm; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 10pt; color: #1a1a1a; }
+  .logo { width: 5.2cm; height: auto; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .header .meta { text-align: right; }
+  .header .meta h1 { font-size: 18pt; margin: 0 0 0.2em 0; letter-spacing: 0.06em; }
+  .header .meta .number { font-size: 11pt; color: #555; margin: 0 0 0.6em 0; }
+  .header .meta .dates { font-size: 9pt; color: #555; margin: 0; line-height: 1.5; }
+  .rule { border: none; border-top: 2px solid #1a1a1a; margin: 1.4em 0 0 0; }
+  .muted { color: #555; font-size: 9pt; }
+  .blocks { display: flex; justify-content: space-between; margin-top: 1.4em; }
+  .block { width: 48%; }
+  .block h2 { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.12em; color: #888; margin: 0 0 0.5em 0; }
+  .block p { margin: 0; line-height: 1.55; }
+  table.lines { width: 100%; border-collapse: collapse; margin-top: 2.2em; }
+  table.lines th { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.1em; color: #888;
+                   border-bottom: 1px solid #1a1a1a; padding: 0.5em 0.4em; text-align: left; }
+  table.lines td { border-bottom: 1px solid #e2e2e2; padding: 0.7em 0.4em; text-align: left; }
+  table.lines th.num, table.lines td.num { text-align: right; }
+  table.totals { margin-top: 1.2em; margin-left: auto; width: 45%; border-collapse: collapse; }
+  table.totals td { padding: 0.35em 0.4em; }
+  table.totals td.num { text-align: right; }
+  table.totals tr.grand td { border-top: 1px solid #1a1a1a; font-weight: bold; padding-top: 0.5em; }
+  .paid-badge { display: inline-block; margin-top: 1.6em; padding: 0.3em 0.9em; border: 1px solid #1a7f4b;
+                color: #1a7f4b; border-radius: 3px; font-size: 9pt; font-weight: bold; letter-spacing: 0.08em; }
+  .payment { margin-top: 0.6em; }
+  .footer { margin-top: 3em; font-size: 7.5pt; color: #777; border-top: 1px solid #ccc; padding-top: 0.6em; line-height: 1.5; }
+  .footer p { margin: 0.2em 0; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <svg viewBox="0 0 852 149" xmlns="http://www.w3.org/2000/svg" class="logo">{{ logo_paths }}</svg>
+    <div class="meta">
+      <h1>INVOICE</h1>
+      <p class="number">{{ inv.number }}</p>
+      <p class="dates">
+        Issue date: {{ inv.issued_at | fmt_date }}<br>
+        Payment date: {{ inv.payment_date | fmt_date }}
+      </p>
+    </div>
+  </div>
+  <hr class="rule">
+
+  <div class="blocks">
+    <div class="block">
+      <h2>From</h2>
+      <p>
+        <strong>{{ inv.seller.legal_name }}</strong>{% if inv.seller.trade_name %} ({{ inv.seller.trade_name }}){% endif %}<br>
+        {{ inv.seller.address_line1 }}<br>
+        {{ inv.seller.postal_code }} {{ inv.seller.city }}, {{ inv.seller.country }}<br>
+        VAT: {{ inv.seller.vat_number }}
+      </p>
+    </div>
+    <div class="block">
+      <h2>Billed to</h2>
+      <p>
+        {% if inv.buyer.name %}<strong>{{ inv.buyer.name }}</strong><br>{% endif %}
+        {% if inv.buyer.address_line1 %}{{ inv.buyer.address_line1 }}<br>{% endif %}
+        {% if inv.buyer.address_line2 %}{{ inv.buyer.address_line2 }}<br>{% endif %}
+        {% if inv.buyer.postal_code or inv.buyer.city %}{{ inv.buyer.postal_code }} {{ inv.buyer.city }}<br>{% endif %}
+        {% if inv.buyer.country %}{{ inv.buyer.country }}<br>{% endif %}
+        {% if inv.buyer.vat_number %}VAT: {{ inv.buyer.vat_number }}<br>{% endif %}
+        {{ inv.buyer.email }}
+      </p>
+    </div>
+  </div>
+
+  <table class="lines">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th class="num">Qty</th>
+        <th class="num">Unit price (excl. VAT)</th>
+        <th class="num">Amount (excl. VAT)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          {{ inv.line_label }}
+          {% if inv.period_start and inv.period_end %}
+            <br><span class="muted">Service period: {{ inv.period_start | fmt_date }} to {{ inv.period_end | fmt_date }}</span>
+          {% endif %}
+        </td>
+        <td class="num">1</td>
+        <td class="num">{{ inv.net_amount | fmt_amount }}</td>
+        <td class="num">{{ inv.net_amount | fmt_amount }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Subtotal (excl. VAT)</td><td class="num">{{ inv.net_amount | fmt_amount }} {{ inv.currency }}</td></tr>
+    {# Currency doubles as the VAT regime (geo.vat_rate_for_currency): EUR = French VAT, anything else = outside scope. #}
+    {% if inv.currency == "EUR" %}
+      <tr><td>VAT ({{ inv.vat_rate | fmt_pct }}%)</td><td class="num">{{ inv.vat_amount | fmt_amount }} {{ inv.currency }}</td></tr>
+    {% else %}
+      <tr><td colspan="2" class="muted">TVA non applicable - article 259 B du CGI</td></tr>
+    {% endif %}
+    <tr class="grand"><td>Total</td><td class="num">{{ inv.gross_amount | fmt_amount }} {{ inv.currency }}</td></tr>
+  </table>
+
+  <div>
+    <span class="paid-badge">PAID</span>
+    <p class="payment muted">Paid on {{ inv.payment_date | fmt_date }} by card (Revolut). No amount due.</p>
+  </div>
+
+  <div class="footer">
+    <p>{{ inv.seller.legal_name }}{% if inv.seller.trade_name %} ({{ inv.seller.trade_name }}){% endif %} ·
+      {{ inv.seller.legal_form }} · {{ inv.seller.rcs }} · SIRET {{ inv.seller.siret }} ·
+      {{ inv.seller.address_line1 }}, {{ inv.seller.postal_code }} {{ inv.seller.city }}, {{ inv.seller.country }} ·
+      TVA : {{ inv.seller.vat_number }}</p>
+    <p>Escompte : néant. En cas de retard de paiement, pénalités au taux de 3 fois le taux d'intérêt légal et
+      indemnité forfaitaire pour frais de recouvrement de 40 € (professionnels, art. L441-10 C. com.).</p>
+    <p>Catégorie d'opération : Prestation de services.</p>
+  </div>
+</body>
+</html>
