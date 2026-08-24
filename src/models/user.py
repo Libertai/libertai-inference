@@ -11,9 +11,11 @@ from src.utils.email_canonical import canonical_email_expression
 if TYPE_CHECKING:
     from src.models.api_key import ApiKey
     from src.models.credit_transaction import CreditTransaction
+    from src.models.invoice import Invoice
     from src.models.oauth_connection import OAuthConnection
     from src.models.plan_subscription import PlanSubscription
     from src.models.session import Session
+    from src.models.user_billing_details import UserBillingDetails
     from src.models.wallet_connection import WalletConnection
 
 
@@ -56,6 +58,11 @@ class User(Base):
     sessions: Mapped[list["Session"]] = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     plan_subscriptions: Mapped[list["PlanSubscription"]] = relationship(
         "PlanSubscription", back_populates="user", cascade="all, delete-orphan"
+    )
+    # No delete cascade: user deletion must fail while invoices exist (RESTRICT on the FK).
+    invoices: Mapped[list["Invoice"]] = relationship("Invoice", back_populates="user")
+    billing_details: Mapped["UserBillingDetails | None"] = relationship(
+        "UserBillingDetails", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
 
     def __init__(

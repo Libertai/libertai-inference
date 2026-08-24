@@ -7,6 +7,7 @@ from src.models.blocked_email_domain import BlockedEmailDomain
 from src.models.credit_transaction import CreditTransaction, CreditTransactionProvider, CreditTransactionStatus
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
+from src.models.invoice import Invoice
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
 from src.models.magic_link import MagicLink
@@ -15,6 +16,7 @@ from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.session import Session
 from src.models.user import User
+from src.models.user_billing_details import UserBillingDetails
 from src.models.wallet_connection import WalletConnection
 
 __all__ = [
@@ -27,6 +29,7 @@ __all__ = [
     "CreditTransactionStatus",
     "EntitlementWindow",
     "InferenceCall",
+    "Invoice",
     "LiberclawCreditGrant",
     "LiberclawUser",
     "MagicLink",
@@ -35,5 +38,6 @@ __all__ = [
     "PlanSubscriptionEvent",
     "Session",
     "User",
+    "UserBillingDetails",
     "WalletConnection",
 ]
