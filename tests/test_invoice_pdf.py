@@ -90,7 +90,16 @@ def test_usd_invoice_has_259b_mention_and_no_vat_rate():
 
 
 def test_billing_details_rendered_and_escaped():
-    inv = _invoice(buyer={"email": "a@b.c", "name": "<script>alert(1)</script> ACME"})
+    inv = _invoice(
+        buyer={
+            "email": "a@b.c",
+            "name": "<script>alert(1)</script> ACME",
+            "address_line1": "12 Rue de la Paix",
+            "postal_code": "75002",
+            "city": "Paris",
+            "country": "France",
+        }
+    )
 
     html = _render_html(inv)
     assert "&lt;script&gt;" in html  # Jinja autoescape: no raw markup reaches WeasyPrint
@@ -98,6 +107,8 @@ def test_billing_details_rendered_and_escaped():
 
     text = _pdf_text(render_invoice_pdf(inv))
     assert "ACME" in text
+    assert "RuedelaPaix" in text.replace(" ", "")
+    assert "75002Paris".replace(" ", "") in text.replace(" ", "")
 
 
 def test_facturx_xml_embedded_and_consistent():

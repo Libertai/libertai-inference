@@ -67,15 +67,11 @@ async def test_put_then_get_roundtrip(async_client):
 async def test_control_chars_stripped_and_lengths_enforced(async_client):
     user, headers = await _auth_user()
     try:
-        resp = await async_client.put(
-            "/invoices/billing-details", headers=headers, json={"name": "AC\x00ME\x1b"}
-        )
+        resp = await async_client.put("/invoices/billing-details", headers=headers, json={"name": "AC\x00ME\x1b"})
         assert resp.status_code == 200
         assert resp.json()["name"] == "ACME"
 
-        too_long_resp = await async_client.put(
-            "/invoices/billing-details", headers=headers, json={"name": "a" * 201}
-        )
+        too_long_resp = await async_client.put("/invoices/billing-details", headers=headers, json={"name": "a" * 201})
         assert too_long_resp.status_code == 422
     finally:
         await _cleanup(user.id)

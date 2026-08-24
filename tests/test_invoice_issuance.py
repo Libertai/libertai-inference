@@ -127,7 +127,7 @@ async def test_subscription_activation_issues_invoice_with_period(db):
     invoices = await _invoices(db)
     assert len(invoices) == 1
     invoice = invoices[0]
-    assert "plus" in invoice.line_label
+    assert invoice.line_label == "Plus subscription"
     assert invoice.period_start is not None
     assert invoice.period_end is not None
 
