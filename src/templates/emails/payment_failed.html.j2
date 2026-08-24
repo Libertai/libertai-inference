@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% set subject = "Your payment didn't go through" %}
+{% block body %}
+<p style="{{ p }}">We were unable to process the latest payment for your {{ tier | capitalize }} subscription.</p>
+<p style="margin:24px 0"><a href="{{ frontend }}/plans" style="{{ btn }}">Update payment information</a></p>
+<p style="{{ p }}">Your subscription is not cancelled, but your plan benefits are paused until a payment goes through. If you believe this is an error or need help, reply to this email.</p>
+{% endblock %}

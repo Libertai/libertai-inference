@@ -16,6 +16,7 @@ MIGRATIONS_LOCK_ID = 911000
 POOL_RECONCILE_LOCK_ID = 911001
 LTAI_BASE_LOCK_ID = 911002
 LTAI_SOLANA_LOCK_ID = 911003
+LIFECYCLE_EMAILS_LOCK_ID = 911005
 
 # Classid for the two-argument ``pg_advisory_*(classid, objid)`` form, whose keyspace is
 # disjoint from the single-argument ids above. Its objid is derived per user, so the ids it

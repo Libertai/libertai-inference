@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% set subject = "You've used " ~ pct ~ "% of your extra usage limit" %}
+{% block body %}
+<p style="{{ p }}">You have used about {{ pct }}% of the ${{ cap }} monthly limit you set for extra usage credits.</p>
+<p style="{{ p }}">Once the limit is reached, usage beyond your plan allowance pauses until next month. You can adjust the limit at any time.</p>
+<p style="margin:24px 0"><a href="{{ frontend }}/plans" style="{{ btn }}">Review my limit</a></p>
+{% endblock %}

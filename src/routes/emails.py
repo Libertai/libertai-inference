@@ -1,24 +1,88 @@
-"""Email preference endpoints. Unauthenticated: the signed token is the credential,
-so unsubscribe works from any mail client without a session."""
+"""Email preference endpoints and lifecycle email cron jobs.
+
+Endpoints are unauthenticated: the signed token is the credential, so unsubscribe works
+from any mail client without a session."""
 
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from sqlalchemy import select
 
 from src.models.base import AsyncSessionLocal
 from src.models.user import User
-from src.services.lifecycle_email import parse_unsubscribe_token
+from src.services.entitlement import current_month_bounds, month_overflow_by_users
+from src.services.lifecycle_email import parse_unsubscribe_token, render_page, send_lifecycle_email
+from src.utils.cron import scheduler
+from src.utils.pg_locks import LIFECYCLE_EMAILS_LOCK_ID, single_runner
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
-_CONFIRMATION_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Unsubscribed — LibertAI</title></head>
-<body style="font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#111214">
-<h1 style="font-size:24px">You're unsubscribed</h1>
-<p style="color:#50545b">You will no longer receive product and onboarding emails from LibertAI.
-Sign-in and billing emails are unaffected.</p>
-</body></html>"""
+
+async def check_extra_usage_caps() -> int:
+    """Warn users approaching their monthly extra-usage credit cap, once per threshold.
+
+    The cap and its overflow counter reset monthly, so the dedup window is "since month start".
+    """
+    now = datetime.now()
+    month_start, _ = current_month_bounds(now)
+    sent = 0
+    async with AsyncSessionLocal() as db:
+        users = (
+            (
+                await db.execute(
+                    select(User).where(
+                        User.monthly_extra_credit_cap.is_not(None),
+                        User.monthly_extra_credit_cap > 0,
+                        User.email.is_not(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not users:
+            return 0
+        overflow = await month_overflow_by_users(db, {u.id for u in users}, now)
+        for user in users:
+            cap = user.monthly_extra_credit_cap
+            assert cap is not None  # filtered above; for the type checker
+            pct = overflow.get(user.id, 0.0) / cap * 100
+            threshold = 90 if pct >= 90 else 75 if pct >= 75 else None
+            if threshold is None:
+                continue
+            if await send_lifecycle_email(
+                db,
+                user,
+                f"extra_usage_cap_{threshold}",
+                "extra_usage_cap",
+                {"pct": int(pct), "cap": f"{cap:g}"},
+                transactional=True,
+                once=False,
+                resend_after=now - month_start,
+            ):
+                sent += 1
+        await db.commit()
+    return sent
+
+
+# 10 min, not hourly: an API burst can cross both thresholds well within an hour,
+# and a warning that arrives after the cap is hit is useless.
+@scheduler.scheduled_job("interval", minutes=10)
+@single_runner(LIFECYCLE_EMAILS_LOCK_ID, skip_result=0)
+async def send_extra_usage_cap_warnings() -> int:
+    return await check_extra_usage_caps()
+
+
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "emails"
+
+
+@router.get("/logo.png", include_in_schema=False)
+async def email_logo() -> FileResponse:
+    # Referenced by URL from the templates: mail clients don't render data-URI images.
+    return FileResponse(_STATIC_DIR / "logo.png", headers={"Cache-Control": "public, max-age=604800"})
 
 
 async def _unsubscribe(token: str) -> None:
@@ -36,7 +100,7 @@ async def _unsubscribe(token: str) -> None:
 @router.get("/unsubscribe", response_class=HTMLResponse)
 async def unsubscribe_get(token: str) -> str:
     await _unsubscribe(token)
-    return _CONFIRMATION_HTML
+    return render_page("unsubscribe_page")
 
 
 @router.post("/unsubscribe", status_code=status.HTTP_204_NO_CONTENT)
