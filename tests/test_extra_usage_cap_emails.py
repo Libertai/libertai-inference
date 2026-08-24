@@ -7,6 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import delete, select
 
+import src.services.lifecycle_email as lifecycle
 from src.interfaces.api_keys import ApiKeyType
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
@@ -96,6 +97,35 @@ async def test_opted_out_user_still_warned():
         assert await _send_types(user_id) == ["extra_usage_cap_75"]
     finally:
         await _cleanup(user_id)
+
+
+async def test_one_failure_does_not_resend_the_rest(monkeypatch):
+    """A send that blows up must not roll back the log rows of mail already delivered."""
+    good, _ = await _setup(cap=10.0, overflow=8.0)
+    bad, _ = await _setup(cap=10.0, overflow=8.0)
+    async with AsyncSessionLocal() as db:
+        bad_email = (await db.get(User, bad)).email
+
+    real_send = lifecycle.send_email
+
+    async def flaky(to, *args, **kwargs):
+        if to == bad_email:
+            raise RuntimeError("transport exploded")
+        return await real_send(to, *args, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "send_email", flaky)
+    try:
+        assert await check_extra_usage_caps() == 1
+        assert await _send_types(good) == ["extra_usage_cap_75"]
+        assert await _send_types(bad) == []
+
+        # The sweep runs again 10 minutes later: the delivered warning is not repeated.
+        monkeypatch.setattr(lifecycle, "send_email", real_send)
+        assert await check_extra_usage_caps() == 1
+        assert await _send_types(good) == ["extra_usage_cap_75"]
+        assert await _send_types(bad) == ["extra_usage_cap_75"]
+    finally:
+        await _cleanup(good, bad)
 
 
 async def test_jumping_straight_past_90_sends_only_the_90_warning():
