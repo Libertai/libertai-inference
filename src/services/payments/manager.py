@@ -831,7 +831,7 @@ class PaymentManager:
                     currency=currency,
                     tax_minor=tax,
                     payment_date=paid_at,
-                    line_label=f"{get_tier(sub.tier).name} subscription",
+                    line_label=f"{get_tier(sub.tier).name.capitalize()} subscription",
                     # A provider read failure leaves has_period False without stale-but-plausible
                     # dates on sub — the invoice then omits the period rather than showing one
                     # that doesn't match what actually got billed.

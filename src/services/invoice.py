@@ -59,7 +59,8 @@ async def issue_invoice(
     if gross_minor <= 0:
         return None
 
-    year = datetime.now(timezone.utc).year
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    year = now.year
     await db.execute(select(func.pg_advisory_xact_lock(INVOICE_NUMBER_LOCK_CLASS, year)))
 
     # Under the year lock a concurrent issuance has either committed (visible here)
@@ -98,6 +99,7 @@ async def issue_invoice(
         year=year,
         seq=seq,
         user_id=user_id,
+        issued_at=now,
         payment_date=payment_date,
         external_reference=external_reference,
         currency=currency,

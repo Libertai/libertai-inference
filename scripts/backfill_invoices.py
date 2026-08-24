@@ -113,6 +113,10 @@ async def main(dry_run: bool) -> None:
         if gross == 0:
             report["zero"] += 1
             continue
+        user_email = users[candidate.user_id].email
+        if user_email is None:
+            report["unresolvable"].append((ref, "user has no email"))
+            continue
         line_label = _line_label(order, candidate)
         if dry_run:
             report["issued"] += 1
@@ -123,7 +127,7 @@ async def main(dry_run: bool) -> None:
                 invoice = await issue_invoice(
                     db,
                     user_id=candidate.user_id,
-                    user_email=users[candidate.user_id].email,
+                    user_email=user_email,
                     external_reference=ref,
                     gross_minor=gross,
                     currency=currency,
