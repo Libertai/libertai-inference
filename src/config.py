@@ -47,6 +47,9 @@ class _Config:
     SMTP_USER: str
     SMTP_PASSWORD: str
     SMTP_FROM: str
+    # Lifecycle emails invite a reply, so they come from a monitored mailbox. Must be an address
+    # the SMTP account owns: Proton rejects the send outright ("sender address rejected") otherwise.
+    SMTP_FROM_LIFECYCLE: str
     SMTP_USE_TLS: bool
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
@@ -123,6 +126,7 @@ class _Config:
         self.SMTP_USER = os.getenv("SMTP_USER", "")
         self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
         self.SMTP_FROM = os.getenv("SMTP_FROM", "LibertAI <noreply@libertai.io>")
+        self.SMTP_FROM_LIFECYCLE = os.getenv("SMTP_FROM_LIFECYCLE", "LibertAI <hello@libertai.io>")
         self.SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
 
         # Token encryption (Fernet)

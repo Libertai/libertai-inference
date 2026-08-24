@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
 from src.models.magic_link import MagicLink
+from src.services.email import send_email
 from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
 
@@ -102,32 +103,11 @@ def _build_email_html(link: str, code: str) -> str:
     )
 
 
-def _send_smtp(email: str, html: str) -> None:
-    import smtplib
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Your LibertAI sign-in link"
-    msg["From"] = config.SMTP_FROM
-    msg["To"] = email
-    msg.attach(MIMEText(html, "html"))
-
-    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as server:
-        if config.SMTP_USE_TLS:
-            server.starttls()
-        if config.SMTP_USER and config.SMTP_PASSWORD:
-            server.login(config.SMTP_USER, config.SMTP_PASSWORD)
-        server.sendmail(config.SMTP_FROM, [email], msg.as_string())
-
-
 async def send_magic_link_email(email: str, token: str, code: str, redirect_base: str | None = None) -> None:
-    """Send the magic-link email via SMTP. With no SMTP host configured (dev), log it instead.
+    """Send the magic-link email. With no SMTP host configured (dev), the transport logs it instead.
 
     `redirect_base` is the origin of the app the user signed in from (chat vs console); the link
     points back there when it's an allowed frontend, else falls back to FRONTEND_URL."""
-    import asyncio
-
     try:
         link = f"{resolve_frontend_base(redirect_base)}/auth/verify?token={token}"
     except ValueError:
@@ -135,13 +115,7 @@ async def send_magic_link_email(email: str, token: str, code: str, redirect_base
         logger.error(f"FRONTEND_URL is not configured; cannot send magic-link email to {email}")
         return
     if not config.SMTP_HOST:
+        # Log the code/link (not just the generic transport mock line) so dev login is usable.
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return
-
-    try:
-        await asyncio.to_thread(_send_smtp, email, _build_email_html(link, code))
-        logger.info(f"Magic-link email sent to {email} via SMTP")
-    except Exception as e:
-        # Don't surface SMTP errors to the caller (avoids leaking whether an email exists);
-        # the user can retry. The failure is logged for ops.
-        logger.error(f"SMTP send failed for {email}: {e}")
+    await send_email(email, "Your LibertAI sign-in link", _build_email_html(link, code))
