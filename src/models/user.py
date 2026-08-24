@@ -32,6 +32,8 @@ class User(Base):
     is_libertai_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Monthly cap (USD credits) on overflow spend beyond entitlement windows. NULL = unlimited.
     monthly_extra_credit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Transactional emails (payment failed, cancellation confirm) ignore this flag.
+    lifecycle_emails_opt_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # NULL = active. Never delete a suspended row: it holds its uq_users_email_canonical slot.
     suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)

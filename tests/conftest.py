@@ -66,6 +66,7 @@ import src.models.entitlement_window
 import src.models.inference_call
 import src.models.liberclaw_credit_grant
 import src.models.liberclaw_user
+import src.models.lifecycle_email_send
 import src.models.magic_link
 import src.models.oauth_connection
 import src.models.plan_subscription
