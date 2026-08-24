@@ -16,7 +16,10 @@ from src.models.user import User
 from src.services.entitlement import current_month_bounds, month_overflow_by_users
 from src.services.lifecycle_email import parse_unsubscribe_token, render_page, send_lifecycle_email
 from src.utils.cron import scheduler
+from src.utils.logger import setup_logger
 from src.utils.pg_locks import LIFECYCLE_EMAILS_LOCK_ID, single_runner
+
+logger = setup_logger(__name__)
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -53,18 +56,24 @@ async def check_extra_usage_caps() -> int:
             threshold = 90 if pct >= 90 else 75 if pct >= 75 else None
             if threshold is None:
                 continue
-            if await send_lifecycle_email(
-                db,
-                user,
-                f"extra_usage_cap_{threshold}",
-                "extra_usage_cap",
-                {"pct": int(pct), "cap": f"{cap:g}"},
-                transactional=True,
-                once=False,
-                resend_after=now - month_start,
-            ):
-                sent += 1
-        await db.commit()
+            try:
+                if await send_lifecycle_email(
+                    db,
+                    user,
+                    f"extra_usage_cap_{threshold}",
+                    "extra_usage_cap",
+                    {"pct": int(pct), "cap": f"{cap:g}"},
+                    transactional=True,
+                    once=False,
+                    resend_after=now - month_start,
+                ):
+                    # Commit per send: the mail is already gone, so its log row has to survive a
+                    # later failure in the sweep. Rolling it back would re-send on the next run.
+                    await db.commit()
+                    sent += 1
+            except Exception:
+                logger.error(f"Extra-usage-cap warning failed for user {user.id}", exc_info=True)
+                await db.rollback()
     return sent
 
 
