@@ -53,6 +53,10 @@ async def check_extra_usage_caps() -> int:
             cap = user.monthly_extra_credit_cap
             assert cap is not None  # filtered above; for the type checker
             pct = overflow.get(user.id, 0.0) / cap * 100
+            if pct >= 100:
+                # Their keys are already refused with ``extra_credit_cap``, so a warning that
+                # usage "will pause" is false. There is no cap-reached email to send instead.
+                continue
             threshold = 90 if pct >= 90 else 75 if pct >= 75 else None
             if threshold is None:
                 continue
