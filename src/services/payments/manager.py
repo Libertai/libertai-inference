@@ -26,6 +26,7 @@ from src.models.plan_subscription import ACTIVE_STATUSES, UNPAID_CHECKOUT_STATUS
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
+from src.services.invoice import issue_invoice
 from src.services.lifecycle_email import send_lifecycle_email
 from src.services.payments.base import (
     CheckoutResult,
@@ -74,6 +75,27 @@ def _naive_utc(value: str) -> datetime:
     return parsed
 
 
+def order_invoice_fields(order: dict, order_id: str) -> tuple[int, str, int | None, datetime]:
+    """(gross_minor, currency, tax_minor, payment_date) off a Revolut order payload.
+
+    ``order_id`` is only for the error message: a missing key here means the provider's
+    payload shape changed, and a bare KeyError wouldn't say which order or field.
+    """
+    for field in ("amount", "currency"):
+        if field not in order:
+            raise ValueError(f"Order {order_id} is missing {field!r}: cannot derive invoice fields")
+    gross = int(order["amount"])
+    currency = order["currency"]
+    tax = None
+    line_items = order.get("line_items") or []
+    taxes = [t.get("amount", 0) for li in line_items for t in (li.get("taxes") or [])]
+    if taxes:
+        tax = int(sum(taxes))
+    completed = order.get("completed_at") or order.get("updated_at")
+    payment_date = _naive_utc(completed) if completed else datetime.now(timezone.utc).replace(tzinfo=None)
+    return gross, currency, tax, payment_date
+
+
 async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscription]) -> set[uuid.UUID]:
     """Of ``subs``, the ids that carry positive proof of a payment: an ``activated``/``renewed`` event.
 
@@ -110,6 +132,14 @@ class PaymentManager:
     def __init__(self, provider: PaymentProvider, db: AsyncSession):
         self.provider = provider
         self.db = db
+        # One provider read per order per webhook: refund classification, subscription
+        # resolution and invoice issuance all inspect the same payload.
+        self._order_cache: dict[str, dict] = {}
+
+    async def _get_order(self, order_id: str) -> dict:
+        if order_id not in self._order_cache:
+            self._order_cache[order_id] = await self.provider.get_order(order_id)
+        return self._order_cache[order_id]
 
     # ------------------------------------------------------------------ helpers
     async def _active_subscription(self, user_id: uuid.UUID, lock: bool = True) -> PlanSubscription | None:
@@ -232,6 +262,30 @@ class PaymentManager:
                 tx.is_active = True
                 tx.amount_left = tx.amount
                 logger.info(f"Top-up {tx.external_reference} completed ({tx.amount} credits)")
+                # Not wrapped: a failed read must fail the webhook (provider redelivers) rather
+                # than complete the top-up with no invoice to show for it.
+                order = await self._get_order(event.order_id)
+                gross, currency, tax, paid_at = order_invoice_fields(order, event.order_id)
+                user = (await self.db.execute(select(User).where(User.id == tx.user_id))).scalar_one()
+                if user.email is None or tx.external_reference is None:
+                    raise RuntimeError(f"Top-up {tx.id} cannot be invoiced: missing user email or order reference")
+                # The order's own line-item name is what the customer saw at checkout; the invoice
+                # line mirrors it exactly, falling back to the credits label for older orders.
+                line_items = order.get("line_items") or []
+                label = (
+                    line_items[0].get("name") if line_items else None
+                ) or f"LibertAI usage credits (${tx.amount:g})"
+                await issue_invoice(
+                    self.db,
+                    user_id=tx.user_id,
+                    user_email=user.email,
+                    external_reference=tx.external_reference,
+                    gross_minor=gross,
+                    currency=currency,
+                    tax_minor=tax,
+                    payment_date=paid_at,
+                    line_label=label,
+                )
             else:
                 logger.info(f"Top-up {tx.external_reference} already completed, skipping")
         elif event.type == PaymentEventType.order_failed:
@@ -738,7 +792,7 @@ class PaymentManager:
                 await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
                 sub.tier = sub.pending_tier
                 sub.pending_tier = None
-            await self._refresh_cycle_dates(sub)
+            has_period = await self._refresh_cycle_dates(sub)
             # Last mutation of this row, and only reached once every row it replaces is flushed
             # non-live: the one-live-subscription index is enforced per statement, so any flush
             # while two rows are live fails.
@@ -758,6 +812,31 @@ class PaymentManager:
             if already_activated is None:
                 await send_lifecycle_email(
                     self.db, user, f"paid_welcome_{sub.tier}", "paid_welcome", {"tier": sub.tier}
+                )
+            if event.order_id:
+                # Last: issue_invoice holds a global advisory lock to commit, so nothing that
+                # blocks on I/O (the email send above, any provider call) may run after it.
+                # Not wrapped: a failed read must fail the webhook (provider redelivers) rather
+                # than activate the subscription with no invoice to show for it.
+                order = await self._get_order(event.order_id)
+                gross, currency, tax, paid_at = order_invoice_fields(order, event.order_id)
+                if user.email is None:
+                    raise RuntimeError(f"User {user.id} has no email; cannot issue invoice for order {event.order_id}")
+                await issue_invoice(
+                    self.db,
+                    user_id=sub.user_id,
+                    user_email=user.email,
+                    external_reference=_topup_external_ref(event.provider, event.order_id),
+                    gross_minor=gross,
+                    currency=currency,
+                    tax_minor=tax,
+                    payment_date=paid_at,
+                    line_label=f"{get_tier(sub.tier).name} subscription",
+                    # A provider read failure leaves has_period False without stale-but-plausible
+                    # dates on sub — the invoice then omits the period rather than showing one
+                    # that doesn't match what actually got billed.
+                    period_start=sub.current_period_start if has_period else None,
+                    period_end=sub.current_period_end if has_period else None,
                 )
         elif event.type == PaymentEventType.order_failed:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
@@ -837,7 +916,7 @@ class PaymentManager:
 
         if event.order_id:
             try:
-                order = await self.provider.get_order(event.order_id)
+                order = await self._get_order(event.order_id)
                 channel = order.get("channel_data") or {}
                 rev_sub_id = channel.get("subscription_id")
                 if rev_sub_id:
@@ -870,7 +949,7 @@ class PaymentManager:
         if not order_id:
             return False
         try:
-            order = await self.provider.get_order(order_id)
+            order = await self._get_order(order_id)
         except Exception:
             logger.warning(f"Failed to read order {order_id} to classify it", exc_info=True)
             return False

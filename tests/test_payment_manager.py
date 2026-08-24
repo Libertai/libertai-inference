@@ -97,7 +97,14 @@ class FakeProvider(PaymentProvider):
         )
 
     async def get_order(self, order_id: str) -> dict:
-        return self.orders.get(order_id, {})
+        # Every order id the manager looks up belongs to a real, already-created order at the
+        # provider — unset ids fall back to a plausible payment payload rather than {}, so
+        # activation's invoice fetch doesn't KeyError in tests that don't care about invoices;
+        # zero amount keeps it a no-op for issuance, so an invoice only exists when a test seeds one.
+        return self.orders.get(
+            order_id,
+            {"amount": 0, "currency": "USD", "type": "payment", "completed_at": "2026-01-01T00:00:00+00:00"},
+        )
 
 
 async def _make_user(db) -> User:
