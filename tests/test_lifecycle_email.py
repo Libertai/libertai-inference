@@ -25,7 +25,7 @@ async def _make_user(email: str | None):
 async def _send(user_id, email_type="welcome", **kwargs) -> bool:
     async with AsyncSessionLocal() as db:
         user = await db.get(User, user_id)
-        sent = await lifecycle.send_lifecycle_email(db, user, email_type, "Subject", "<p>Hi</p>", **kwargs)
+        sent = await lifecycle.send_lifecycle_email(db, user, email_type, "paid_welcome", {"tier": "go"}, **kwargs)
         await db.commit()
         return sent
 
@@ -139,3 +139,21 @@ async def test_unsubscribe_endpoints(async_client):
     assert resp.status_code == 204
 
     assert (await async_client.get("/emails/unsubscribe", params={"token": "garbage"})).status_code == 400
+
+
+async def test_unsubscribe_survives_a_deleted_account(async_client):
+    """The link was valid; there is simply nothing left to opt out."""
+    user_id = await _make_user("lifecycle-deleted@example.com")
+    token = lifecycle.build_unsubscribe_token(user_id)
+    async with AsyncSessionLocal() as db:
+        await db.delete(await db.get(User, user_id))
+        await db.commit()
+
+    assert (await async_client.get("/emails/unsubscribe", params={"token": token})).status_code == 200
+    assert (await async_client.post("/emails/unsubscribe", params={"token": token})).status_code == 204
+
+
+async def test_email_logo_served(async_client):
+    resp = await async_client.get("/emails/logo.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"

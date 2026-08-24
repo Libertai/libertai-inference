@@ -26,6 +26,7 @@ from src.models.plan_subscription import ACTIVE_STATUSES, UNPAID_CHECKOUT_STATUS
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
+from src.services.lifecycle_email import send_lifecycle_email
 from src.services.payments.base import (
     CheckoutResult,
     PaymentCapability,
@@ -396,6 +397,16 @@ class PaymentManager:
         # fresh row that carries none of the wind-down state, silently converting the request
         # into a renewing, more expensive subscription.
         await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        await send_lifecycle_email(
+            self.db,
+            user,
+            "cancellation_confirmed",
+            "cancellation_confirmed",
+            {"until": sub.current_period_end},
+            transactional=True,
+            once=False,
+            resend_after=timedelta(hours=1),
+        )
         await self.db.flush()
         return {
             "message": "Subscription will be cancelled at end of billing period",
@@ -743,6 +754,11 @@ class PaymentManager:
             # subscriptions read as a single "Go -> Plus" event downstream.
             if upgraded_from is not None and upgraded_from != sub.tier:
                 await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
+            # First charge only; the send log dedups per tier across resubscriptions.
+            if already_activated is None:
+                await send_lifecycle_email(
+                    self.db, user, f"paid_welcome_{sub.tier}", "paid_welcome", {"tier": sub.tier}
+                )
         elif event.type == PaymentEventType.order_failed:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # A card declined on the hosted checkout, not a failed subscription payment:
@@ -758,6 +774,7 @@ class PaymentManager:
             else:
                 sub.status = "overdue"
                 await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
+                await self._send_payment_failed_email(user, sub)
         elif event.type == PaymentEventType.subscription_overdue:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # Not a card decline — a provider-side overdue notice on a row that was never
@@ -767,6 +784,7 @@ class PaymentManager:
             else:
                 sub.status = "overdue"
                 await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
+                await self._send_payment_failed_email(user, sub)
         elif event.type == PaymentEventType.subscription_cancelled:
             sub.status = "cancelled"
             await self._log_event(sub, "cancelled", event.provider_event_id, event.metadata)
@@ -777,6 +795,19 @@ class PaymentManager:
             await self._log_event(sub, "finished", event.provider_event_id, event.metadata)
 
         await self.db.flush()
+
+    async def _send_payment_failed_email(self, user: User, sub: PlanSubscription) -> None:
+        # Providers retry failed charges: pace to one notice per incident, not per attempt.
+        await send_lifecycle_email(
+            self.db,
+            user,
+            "payment_failed",
+            "payment_failed",
+            {"tier": sub.tier},
+            transactional=True,
+            once=False,
+            resend_after=timedelta(days=3),
+        )
 
     async def _order_completed(self, sub: PlanSubscription, order_id: str | None) -> bool:
         """Has this subscription already been successfully billed for ``order_id``?"""

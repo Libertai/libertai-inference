@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% set subject = "Your " ~ (tier | capitalize) ~ " plan is active" %}
+{% block body %}
+<p style="{{ p }}">Thank you for upgrading to the {{ tier | capitalize }} plan, it is now active on your account.</p>
+<p style="{{ p }}">If you have a question or run into a problem, just reply to this email and we'll be happy to assist you.</p>
+<p style="margin:24px 0"><a href="{{ frontend }}/plans" style="{{ btn }}">Open my account</a></p>
+{% endblock %}

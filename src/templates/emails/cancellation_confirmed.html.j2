@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% set subject = "Your subscription has been cancelled" %}
+{% block body %}
+<p style="{{ p }}">Your LibertAI subscription has been cancelled. You keep full access to your plan{% if until %} until {{ until.strftime("%B %d, %Y") }}{% endif %}, and nothing further will be billed.</p>
+<p style="{{ p }}">If you change your mind, you can <a href="{{ frontend }}/plans" style="color:#6747ff">resume your subscription</a> at no cost any time before then.</p>
+<p style="{{ p }}">We are sorry to see you go. If there is anything we could have done better, feel free to reply and let us know.</p>
+{% endblock %}
