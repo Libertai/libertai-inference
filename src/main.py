@@ -7,6 +7,7 @@ from src.routes.auth import router as auth_router
 from src.routes.chat import router as chat_router
 from src.routes.credits import router as credits_router
 from src.routes.emails import router as emails_router
+from src.routes.invoices import router as invoices_router
 from src.routes.liberclaw import router as liberclaw_router
 from src.routes.payments import router as payments_router
 from src.routes.stats import router as stats_router
@@ -48,3 +49,4 @@ app.include_router(liberclaw_router)
 app.include_router(x402_router)
 app.include_router(payments_router)
 app.include_router(usage_router)
+app.include_router(invoices_router)
