@@ -11,6 +11,7 @@ from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
+from src.models.invoice import Invoice
 from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
@@ -45,6 +46,8 @@ async def _cleanup(user_id):
         await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
         # PlanSubscriptionEvent rows cascade-delete with PlanSubscription.
         await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id == user_id))
+        # Invoices RESTRICT-delete on their user (10-year retention), so they must go first.
+        await db.execute(delete(Invoice).where(Invoice.user_id == user_id))
         await db.execute(delete(User).where(User.id == user_id))
         await db.commit()
 
@@ -140,6 +143,11 @@ async def test_topup_then_webhook_credits_user(async_client, monkeypatch):
         return CheckoutResult(checkout_url="http://pay/checkout", order_id="ord_route_1")
 
     monkeypatch.setattr(revolut, "create_topup", fake_create_topup)
+
+    async def fake_get_order(order_id: str):
+        return {"amount": 1250, "currency": "USD", "type": "payment", "completed_at": "2026-08-01T10:00:00+00:00"}
+
+    monkeypatch.setattr(revolut, "get_order", fake_get_order)
 
     try:
         # 1. Open a top-up checkout -> records a pending credit transaction.
