@@ -252,3 +252,20 @@ def test_registry_hides_disabled_providers():
     registry.register(ThirdwebPaymentProvider(contract_address=None))
     assert registry.available_for_chains([]) == []
     assert registry.available_for_chains(["base"]) == []
+
+
+def test_revolut_subscription_event_carries_subscription_id():
+    body = json.dumps({"event": "SUBSCRIPTION_CANCELLED", "subscription_id": "sub_123"}).encode()
+    ts = str(int(time.time() * 1000))
+    event = _provider().parse_webhook(_sign(body, ts), body)
+    assert event.type == PaymentEventType.subscription_cancelled
+    assert event.provider_subscription_id == "sub_123"
+
+
+def test_revolut_subscription_event_id_distinguishes_subscriptions():
+    ts = str(int(time.time() * 1000))
+    ids = []
+    for sub_id in ("sub_a", "sub_b"):
+        body = json.dumps({"event": "SUBSCRIPTION_OVERDUE", "subscription_id": sub_id}).encode()
+        ids.append(_provider().parse_webhook(_sign(body, ts), body).provider_event_id)
+    assert ids[0] != ids[1]
