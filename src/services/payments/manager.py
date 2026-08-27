@@ -865,8 +865,14 @@ class PaymentManager:
                 await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
                 await self._send_payment_failed_email(user, sub)
         elif event.type == PaymentEventType.subscription_cancelled:
-            sub.status = "cancelled"
-            await self._log_event(sub, "cancelled", event.provider_event_id, event.metadata)
+            if sub.status in UNPAID_CHECKOUT_STATUSES:
+                # A checkout nobody ever paid, dropped by the provider — an abandoned
+                # checkout, not a subscription that ran and churned. The provider having
+                # cancelled it is what makes the local row safe to retire.
+                await self._record_checkout_retired(sub, cancelled=True)
+            else:
+                sub.status = "cancelled"
+                await self._log_event(sub, "cancelled", event.provider_event_id, event.metadata)
         elif event.type == PaymentEventType.subscription_initiated:
             await self._log_event(sub, "initiated", event.provider_event_id, event.metadata)
         elif event.type == PaymentEventType.subscription_finished:

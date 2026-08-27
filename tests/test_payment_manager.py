@@ -480,6 +480,123 @@ async def test_renewal_failure_marks_overdue(db):
 
 
 @pytest.mark.asyncio
+async def test_successful_retry_restores_an_overdue_subscription(db):
+    """The provider retries a declined renewal for weeks: a retry that finally clears must
+    hand the tier back on its own, with no operator action."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
+    )
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
+    )
+    assert await mgr.current_tier(user.id) == "free"
+
+    # The retry settles the SAME order the decline was reported against.
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
+    )
+
+    sub = await mgr._active_subscription(user.id, lock=False)
+    assert sub.status == "active"
+    assert sub.tier == "plus"
+    assert await mgr.current_tier(user.id) == "plus"
+    assert "renewed" in await _event_types(db, sub.id)
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_of_an_overdue_sub_frees_the_slot(db):
+    """The provider gives up on a never-paid renewal and cancels. That has to release the
+    one-live-subscription slot, or the user can never subscribe again."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:setup_1",
+            provider_subscription_id="psub_1",
+            order_id="setup_1",
+            metadata={"order_id": "setup_1"},
+        )
+    )
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_DECLINED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
+    )
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_1",
+            provider_subscription_id="psub_1",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    assert await mgr._active_subscription(user.id, lock=False) is None
+    # The real proof the slot is free: a fresh checkout opens without tripping the index.
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_of_an_unpaid_checkout_expires_it(db):
+    """The provider drops a checkout nobody ever paid. That is an abandoned checkout, not a
+    cancelled subscription: recording it as churn counts a user who never converted."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    sub_id = (await mgr._active_subscription(user.id, lock=False)).id
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_1",
+            provider_subscription_id="psub_1",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    sub = (await db.execute(select(PlanSubscription).where(PlanSubscription.id == sub_id))).scalar_one()
+    assert sub.status == "expired"
+    assert "expired_abandoned_checkout" in await _event_types(db, sub_id)
+
+
+@pytest.mark.asyncio
 async def test_declined_card_on_upgrade_checkout_stays_pending_upgrade(db):
     """``overdue`` sits inside the live-subscription index: writing it on an upgrade
 
