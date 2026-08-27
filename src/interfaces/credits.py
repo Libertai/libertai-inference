@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated
 
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
@@ -63,51 +63,34 @@ class ThirdwebPurchaseData(BaseModel):
     userId: str
 
 
-# Token definition used in both webhook types
+# Only the fields the handlers act on: Thirdweb sends a superset that varies per token and
+# chain, and a field we never read must not fail validation.
 class ThirdwebToken(BaseModel):
     chainId: int
-    address: str
     symbol: str
-    name: str
     decimals: int
-    priceUsd: float
-    iconUri: str
 
 
-# Transaction reference for onchain transactions
 class ThirdwebTransactionReference(BaseModel):
     chainId: int
     transactionHash: str
 
 
-# Onchain transaction webhook payload
 class ThirdwebOnchainTransactionData(BaseModel):
-    transactionId: str
-    paymentId: str
-    clientId: str
-    action: Literal["BUY", "SELL"]
-    status: Literal["COMPLETED", "PENDING"]
-    originToken: ThirdwebToken
-    originAmount: str
+    status: str
     destinationToken: ThirdwebToken
     destinationAmount: str
-    sender: str
     receiver: str
-    type: str
     transactions: list[ThirdwebTransactionReference]
     purchaseData: ThirdwebPurchaseData
 
 
-# Onramp transaction webhook payload
 class ThirdwebOnrampTransactionData(BaseModel):
     id: str
-    onramp: str
     token: ThirdwebToken
     amount: str
-    currency: str
-    currencyAmount: float
     receiver: str
-    status: Literal["PENDING", "COMPLETED"]
+    status: str
     purchaseData: ThirdwebPurchaseData
 
 
