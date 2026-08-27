@@ -47,6 +47,30 @@ _EVENT_MAP: dict[str, PaymentEventType] = {
     "SUBSCRIPTION_FINISHED": PaymentEventType.subscription_finished,
 }
 
+_SUBSCRIPTION_EVENTS = {
+    PaymentEventType.subscription_initiated,
+    PaymentEventType.subscription_cancelled,
+    PaymentEventType.subscription_overdue,
+    PaymentEventType.subscription_finished,
+}
+
+
+def _subscription_id(data: dict, event_type: PaymentEventType) -> str | None:
+    """Pull the subscription id out of a webhook payload.
+
+    Subscription events carry no ``order_id``, and Revolut does not document where the
+    subscription id sits, so every plausible location is read. A value that is not a
+    subscription id matches no ``provider_subscription_id`` and the event is dropped, so a
+    wrong read cannot attach an event to the wrong subscription.
+    """
+    nested = data.get("data")
+    nested = nested if isinstance(nested, dict) else {}
+    candidates = [data.get("subscription_id"), nested.get("subscription_id")]
+    if event_type in _SUBSCRIPTION_EVENTS:
+        candidates.append(nested.get("id"))
+    return next((c for c in candidates if isinstance(c, str) and c), None)
+
+
 # Max age for webhook timestamps (5 minutes), in milliseconds.
 WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000
 
@@ -281,16 +305,26 @@ class RevolutProvider(PaymentProvider):
 
         order_id = data.get("order_id")
         ext_ref = data.get("merchant_order_ext_ref")
+        subscription_id = _subscription_id(data, event_type)
+
+        metadata = {
+            "raw_event": raw_event,
+            "order_id": order_id,
+            "merchant_order_ext_ref": ext_ref,
+        }
+        if event_type in _SUBSCRIPTION_EVENTS and not subscription_id:
+            # The payload shape is undocumented: carrying the keys makes an unresolvable
+            # subscription event report where the id actually lives.
+            metadata["payload_keys"] = sorted(data.keys())
 
         return PaymentEvent(
             provider=PROVIDER_ID,
             type=event_type,
-            provider_event_id=f"{raw_event}:{order_id or ''}",
-            provider_subscription_id=None,  # resolved by the manager via order lookup
+            # Keyed per subscription, not per cycle: a repeated notice for the same
+            # subscription dedups away, which the per-order events already cover.
+            provider_event_id=f"{raw_event}:{order_id or subscription_id or ''}",
+            # Order events resolve through an order lookup in the manager instead.
+            provider_subscription_id=subscription_id,
             order_id=order_id,
-            metadata={
-                "raw_event": raw_event,
-                "order_id": order_id,
-                "merchant_order_ext_ref": ext_ref,
-            },
+            metadata=metadata,
         )
