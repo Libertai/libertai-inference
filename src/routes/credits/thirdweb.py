@@ -2,9 +2,10 @@ import hashlib
 import hmac
 import time
 import uuid
+from typing import Any
 
-from fastapi import Header, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from web3 import Web3
 
@@ -31,36 +32,14 @@ MAX_WEBHOOK_AGE = 300
 class ThirdwebWebhookPayload(BaseModel):
     version: int
     type: str
-    data: ThirdwebOnchainTransactionData | ThirdwebOnrampTransactionData
-
-    @property
-    def is_onchain_transaction(self) -> bool:
-        return self.type == "pay.onchain-transaction"
-
-    @property
-    def is_onramp_transaction(self) -> bool:
-        return self.type == "pay.onramp-transaction"
-
-    @property
-    def onchain_data(self) -> ThirdwebOnchainTransactionData | None:
-        if self.is_onchain_transaction:
-            return self.data  # type: ignore
-        return None
-
-    @property
-    def onramp_data(self) -> ThirdwebOnrampTransactionData | None:
-        if self.is_onramp_transaction:
-            return self.data  # type: ignore
-        return None
+    data: dict[str, Any]
 
 
 @router.post("/thirdweb/webhook", description="Receive webhooks from Thirdweb")  # type: ignore
-async def thirdweb_webhook(
-    request: Request,
-    payload: ThirdwebWebhookPayload,
-    signature: str = Header(None, alias="X-Pay-Signature"),
-    timestamp: str = Header(None, alias="X-Pay-Timestamp"),
-) -> None:
+async def thirdweb_webhook(request: Request) -> None:
+    signature = request.headers.get("X-Pay-Signature") or request.headers.get("X-Payload-Signature")
+    timestamp = request.headers.get("X-Pay-Timestamp") or request.headers.get("X-Timestamp")
+
     # Verify the webhook signature
     if not signature:
         logger.warning("Missing signature header in webhook request")
@@ -100,14 +79,40 @@ async def thirdweb_webhook(
         logger.warning("Invalid webhook signature")
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    logger.debug(f"Received Thirdweb webhook: {payload.model_dump_json()}")
+    logger.debug(f"Received Thirdweb webhook: {body_str}")
 
-    if payload.is_onchain_transaction:
-        await _handle_onchain_transaction(payload.onchain_data)
-    elif payload.is_onramp_transaction:
-        await _handle_onramp_transaction(payload.onramp_data)
+    # Parsed here rather than as a route argument so an unreadable payload can be logged in full.
+    try:
+        payload = ThirdwebWebhookPayload.model_validate_json(body)
+        if payload.version < 2:
+            logger.warning(f"Ignoring retired v{payload.version} webhook: {body_str}")
+            return
+        if payload.type == "pay.onchain-transaction":
+            data: ThirdwebOnchainTransactionData | ThirdwebOnrampTransactionData = (
+                ThirdwebOnchainTransactionData.model_validate(payload.data)
+            )
+        elif payload.type == "pay.onramp-transaction":
+            data = ThirdwebOnrampTransactionData.model_validate(payload.data)
+        else:
+            logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
+            return
+    except ValidationError as e:
+        logger.error(f"Unreadable Thirdweb webhook payload: {e}. Body: {body_str}")
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+
+    if isinstance(data, ThirdwebOnchainTransactionData):
+        await _handle_onchain_transaction(data)
     else:
-        logger.debug(f"Ignoring unsupported webhook type: {payload.type}")
+        await _handle_onramp_transaction(data)
+
+
+def _credit_status(status: str) -> CreditTransactionStatus | None:
+    """None for a terminal non-success (FAILED, REFUNDED, ...): nothing to credit."""
+    if status == "COMPLETED":
+        return CreditTransactionStatus.completed
+    if status == "PENDING":
+        return CreditTransactionStatus.pending
+    return None
 
 
 async def _credit_thirdweb_purchase(
@@ -124,10 +129,7 @@ async def _credit_thirdweb_purchase(
     )
 
 
-async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | None) -> None:
-    if data is None:
-        raise HTTPException(status_code=400, detail="Missing onchain transaction data")
-
+async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData) -> None:
     if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
         logger.warning(f"Transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
@@ -149,18 +151,20 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
             logger.warning(f"Unsupported destination token chain: {data.destinationToken.chainId}")
             return
 
+        tx_status = _credit_status(data.status)
+        if tx_status is None:
+            logger.warning(f"Ignoring onchain transaction {external_reference} with status {data.status}")
+            return
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
             )
             existing_transaction = result.scalars().first()
 
-        tx_status = (
-            CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
-        )
-
         if existing_transaction is not None:
-            await CreditService.update_transaction_status(external_reference, CreditTransactionStatus.completed)
+            if tx_status == CreditTransactionStatus.completed:
+                await CreditService.update_transaction_status(external_reference, tx_status)
             return
 
         await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
@@ -170,10 +174,7 @@ async def _handle_onchain_transaction(data: ThirdwebOnchainTransactionData | Non
         raise HTTPException(status_code=500, detail=f"Error processing onchain webhook: {e!s}")
 
 
-async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None) -> None:
-    if data is None:
-        raise HTTPException(status_code=400, detail="Missing onramp transaction data")
-
+async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData) -> None:
     if Web3.to_checksum_address(data.receiver) != config.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE:
         logger.warning(f"Onramp transaction not destined for LTAI payment processor ({data.receiver}), ignoring it")
         return
@@ -190,19 +191,20 @@ async def _handle_onramp_transaction(data: ThirdwebOnrampTransactionData | None)
             logger.warning(f"Unsupported onramp token chain: {data.token.chainId}")
             return
 
+        tx_status = _credit_status(data.status)
+        if tx_status is None:
+            logger.warning(f"Ignoring onramp transaction {external_reference} with status {data.status}")
+            return
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(CreditTransaction).where(CreditTransaction.external_reference == external_reference)
             )
             existing_transaction = result.scalars().first()
 
-        tx_status = (
-            CreditTransactionStatus.completed if data.status == "COMPLETED" else CreditTransactionStatus.pending
-        )
-
         if existing_transaction is not None:
-            if data.status == "COMPLETED":
-                await CreditService.update_transaction_status(external_reference, CreditTransactionStatus.completed)
+            if tx_status == CreditTransactionStatus.completed:
+                await CreditService.update_transaction_status(external_reference, tx_status)
             return
 
         await _credit_thirdweb_purchase(data.purchaseData, amount_usd, external_reference, tx_status)
