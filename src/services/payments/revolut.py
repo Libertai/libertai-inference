@@ -15,6 +15,7 @@ import time
 import httpx
 
 from src.services.payments.base import (
+    LIVE_PROVIDER_STATES,
     CheckoutResult,
     PaymentCapability,
     PaymentEvent,
@@ -256,6 +257,47 @@ class RevolutProvider(PaymentProvider):
             state=data["state"],
             current_cycle_start=cycle_start,
             current_cycle_end=cycle_end,
+        )
+
+    async def missed_activation_event(self, provider_subscription_id: str) -> PaymentEvent | None:
+        """Rebuild the ORDER_COMPLETED this subscription's paid cycle should have sent.
+
+        Keyed exactly as ``parse_webhook`` would key it, so a redelivery that arrives after
+        this has run dedups against it instead of billing the cycle a second time.
+        """
+        resp = await self.client.get(f"/api/subscriptions/{provider_subscription_id}")
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("state") not in LIVE_PROVIDER_STATES:
+            return None
+        cycle_id = data.get("current_cycle_id")
+        if not cycle_id:
+            return None
+
+        cycle = await self.get_cycle(provider_subscription_id, cycle_id)
+        order_id = cycle.get("order_id")
+        if not order_id:
+            return None
+
+        # The cycle names an order whatever became of it; only the order says it was paid,
+        # and a refund settles as its own completed order.
+        order = await self.get_order(order_id)
+        if order.get("state") != "completed" or order.get("type") == "refund":
+            return None
+
+        raw_event = "ORDER_COMPLETED"
+        return PaymentEvent(
+            provider=PROVIDER_ID,
+            type=PaymentEventType.order_completed,
+            provider_event_id=f"{raw_event}:{order_id}",
+            provider_subscription_id=provider_subscription_id,
+            order_id=order_id,
+            metadata={
+                "raw_event": raw_event,
+                "order_id": order_id,
+                "merchant_order_ext_ref": None,
+                "reconciled": True,
+            },
         )
 
     async def get_cycle(self, provider_subscription_id: str, cycle_id: str) -> dict:

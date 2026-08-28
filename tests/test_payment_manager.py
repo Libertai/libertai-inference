@@ -12,6 +12,7 @@ from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.payments.base import (
+    LIVE_PROVIDER_STATES,
     CheckoutResult,
     PaymentCapability,
     PaymentEvent,
@@ -94,6 +95,21 @@ class FakeProvider(PaymentProvider):
             state=self.sub_state,
             current_cycle_start=(now - timedelta(days=10)).isoformat(),
             current_cycle_end=(now + timedelta(days=self.cycle_end_days)).isoformat(),
+        )
+
+    async def missed_activation_event(self, provider_subscription_id: str) -> PaymentEvent | None:
+        if provider_subscription_id in self.sub_read_failures:
+            raise RuntimeError(f"provider read failed for {provider_subscription_id}")
+        if self.sub_state not in LIVE_PROVIDER_STATES:
+            return None
+        order_id = f"reconciled-order-{provider_subscription_id}"
+        return PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id=f"ORDER_COMPLETED:{order_id}",
+            provider_subscription_id=provider_subscription_id,
+            order_id=order_id,
+            metadata={"reconciled": True},
         )
 
     async def get_order(self, order_id: str) -> dict:
@@ -2043,3 +2059,143 @@ async def test_sweep_isolates_a_failing_row_from_the_rest(db):
     assert broken.status == "pending_upgrade"
     assert healthy.status == "expired"
     assert "psub_ok" in provider.cancelled
+
+
+# --- a webhook the provider never delivered (LiberClaw incident, 2026-08-28) ---
+
+
+@pytest.mark.asyncio
+async def test_checkout_does_not_cancel_a_subscription_live_at_the_provider(db):
+    """A payment whose webhook was lost leaves a row indistinguishable from an abandoned
+    checkout, and nothing local records the payment. Retiring it cancels a subscription the
+    user is paying for."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+
+    provider.sub_state = "active"  # paid; the webhook never arrived to say so
+    with pytest.raises(ValueError, match="still being confirmed"):
+        await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+
+    assert provider.cancelled == []
+    await db.refresh(sub)
+    assert sub.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_checkout_still_retires_a_checkout_the_provider_agrees_was_never_paid(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    psid = sub.provider_subscription_id
+
+    provider.sub_state = "pending"
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+
+    assert provider.cancelled == [psid]
+    await db.refresh(sub)
+    assert sub.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_provider_is_not_permission_to_cancel(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    provider.sub_read_failures.add(sub.provider_subscription_id)
+
+    with pytest.raises(ValueError, match="still being confirmed"):
+        await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_upgrade_does_not_cancel_a_paid_upgrade_checkout(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    sub.status = "active"
+    sub.current_period_start = datetime.now() - timedelta(days=1)
+    sub.current_period_end = datetime.now() + timedelta(days=20)
+    await db.flush()
+    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+
+    provider.sub_state = "active"
+    with pytest.raises(ValueError, match="still being confirmed"):
+        await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_adopts_a_payment_whose_webhook_was_lost(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    provider.sub_state = "active"
+
+    assert await mgr.reconcile_pending() == 1
+    await db.refresh(sub)
+    assert sub.status == "active"
+    assert sub.current_period_end is not None
+    events = (
+        (
+            await db.execute(
+                select(PlanSubscriptionEvent.event_type).where(PlanSubscriptionEvent.subscription_id == sub.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert "activated" in events
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_leaves_an_unpaid_checkout_alone(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+
+    assert await mgr.reconcile_pending() == 0
+    await db.refresh(sub)
+    assert sub.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_late_redelivery_dedups_against_the_reconciled_activation(db):
+    """The rebuilt event carries the id the provider would have sent, so the same payment
+    cannot bill twice when the delivery finally lands."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(user.id, lock=False)
+    provider.sub_state = "active"
+    assert await mgr.reconcile_pending() == 1
+
+    replay = await provider.missed_activation_event(sub.provider_subscription_id)
+    await mgr.handle_event(replay)
+
+    activations = (
+        await db.execute(
+            select(func.count())
+            .select_from(PlanSubscriptionEvent)
+            .where(
+                PlanSubscriptionEvent.subscription_id == sub.id,
+                PlanSubscriptionEvent.event_type.in_(("activated", "renewed")),
+            )
+        )
+    ).scalar()
+    assert activations == 1

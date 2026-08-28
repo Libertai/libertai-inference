@@ -70,6 +70,18 @@ async def expire_subscriptions() -> int:
         except Exception:
             await db.rollback()
             logger.error("sweep_abandoned_upgrade_checkouts failed", exc_info=True)
+
+    # After the retirements above, so a row this adopts is not one they just retired.
+    async with AsyncSessionLocal() as db:
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        try:
+            adopted = await manager.reconcile_pending()
+            await db.commit()
+            if adopted:
+                logger.warning(f"Reconciled {adopted} subscription(s) paid at the provider with no webhook")
+        except Exception:
+            await db.rollback()
+            logger.error("reconcile_pending failed", exc_info=True)
     return count
 
 
