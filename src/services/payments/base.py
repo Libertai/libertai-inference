@@ -53,6 +53,11 @@ class CheckoutResult:
     order_id: str | None = None
 
 
+# Provider states meaning the subscription is real: money has moved, or the mandate is
+# live. A local row backed by one of these was paid for, however unpaid it looks locally.
+LIVE_PROVIDER_STATES = frozenset({"active", "overdue", "paused"})
+
+
 @dataclass
 class SubscriptionInfo:
     """Subscription status as reported by the provider."""
@@ -139,6 +144,15 @@ class PaymentProvider(ABC):
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
+        raise UnsupportedCapability(f"{self.id} does not support subscriptions")
+
+    async def missed_activation_event(self, provider_subscription_id: str) -> PaymentEvent | None:
+        """The activation event this subscription should have sent, if it is paid and live.
+
+        Lets a sweep recover a payment whose webhook was lost: providers retry a failed
+        delivery only a few times before giving up for good, so redelivery is not a
+        durable safety net. Returns None when the provider agrees nothing was paid.
+        """
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
     async def get_cycle(self, provider_subscription_id: str, cycle_id: str) -> dict:

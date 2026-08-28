@@ -269,3 +269,88 @@ def test_revolut_subscription_event_id_distinguishes_subscriptions():
         body = json.dumps({"event": "SUBSCRIPTION_OVERDUE", "subscription_id": sub_id}).encode()
         ids.append(_provider().parse_webhook(_sign(body, ts), body).provider_event_id)
     assert ids[0] != ids[1]
+
+
+# --- rebuilding an activation the provider never delivered ---
+
+
+class _ReadResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _ReadClient:
+    """Serves the three reads the reconstruction makes, by URL."""
+
+    is_closed = False  # the provider's client property checks this before reusing it
+
+    def __init__(self, routes: dict[str, dict]):
+        self.routes = routes
+        self.requested: list[str] = []
+
+    async def get(self, url: str) -> _ReadResponse:
+        self.requested.append(url)
+        return _ReadResponse(self.routes[url])
+
+
+SUB_ID = "sub-1"
+CYCLE_ID = "cycle-1"
+ORDER_ID = "order-1"
+
+
+def _wire(provider, *, state="active", cycle=None, order=None):
+    routes = {
+        f"/api/subscriptions/{SUB_ID}": {"id": SUB_ID, "state": state, "current_cycle_id": CYCLE_ID},
+        f"/api/subscriptions/{SUB_ID}/cycles/{CYCLE_ID}": cycle if cycle is not None else {"order_id": ORDER_ID},
+        f"/api/orders/{ORDER_ID}": order if order is not None else {"state": "completed", "type": "payment"},
+    }
+    provider._client = _ReadClient(routes)
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_missed_activation_event_is_keyed_like_a_real_delivery():
+    """A late redelivery must dedup against it, so the id has to match parse_webhook's."""
+    event = await _wire(_provider()).missed_activation_event(SUB_ID)
+    assert event is not None
+    assert event.type == PaymentEventType.order_completed
+    assert event.provider_event_id == f"ORDER_COMPLETED:{ORDER_ID}"
+    assert event.provider_subscription_id == SUB_ID
+    assert event.order_id == ORDER_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["pending", "cancelled", "finished"])
+async def test_no_event_when_the_subscription_is_not_live(state):
+    assert await _wire(_provider(), state=state).missed_activation_event(SUB_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_no_event_when_the_cycle_names_no_order():
+    assert await _wire(_provider(), cycle={}).missed_activation_event(SUB_ID) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "order",
+    [
+        {"state": "pending", "type": "payment"},
+        # A refund settles as its own completed order; taken as a payment it would activate
+        # a subscription on money that was handed back.
+        {"state": "completed", "type": "refund"},
+    ],
+)
+async def test_no_event_when_the_order_is_not_a_completed_payment(order):
+    assert await _wire(_provider(), order=order).missed_activation_event(SUB_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_a_non_subscription_provider_reports_it_cannot_reconcile():
+    with pytest.raises(UnsupportedCapability):
+        await SolanaPaymentProvider(contract_address=None).missed_activation_event("x")

@@ -29,6 +29,7 @@ from src.services.geo import vat_rate_for_currency
 from src.services.invoice import issue_invoice
 from src.services.lifecycle_email import send_lifecycle_email
 from src.services.payments.base import (
+    LIVE_PROVIDER_STATES,
     CheckoutResult,
     PaymentCapability,
     PaymentEvent,
@@ -118,6 +119,11 @@ async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscriptio
         .scalars()
         .all()
     )
+
+
+# Refusal for a checkout whose predecessor turned out to be paid: the row stays put until
+# reconcile_pending activates it, so a retry shortly after succeeds or finds it active.
+PAYMENT_BEING_CONFIRMED = "A payment on your subscription is still being confirmed — please try again in a few minutes"
 
 
 def _user_lock_key(user_id: uuid.UUID) -> int:
@@ -315,8 +321,12 @@ class PaymentManager:
             sub.status = "expired"
         await self._log_event(sub, "expired_abandoned_checkout")
 
-    async def _retire_unpaid_checkouts(self, user_id: uuid.UUID, statuses: tuple[str, ...]) -> None:
-        """Expire the user's never-paid checkout rows in ``statuses``.
+    async def _retire_unpaid_checkouts(self, user_id: uuid.UUID, statuses: tuple[str, ...]) -> int:
+        """Expire the user's never-paid checkout rows in ``statuses``, returning how many it kept.
+
+        A kept row is one that turned out to be paid. Callers that go on to open a new checkout
+        must refuse on a non-zero count: the row still occupies its partial unique index, and
+        reconcile_pending will activate it within the hour.
 
         Its own query, never ``_active_subscription``: that helper's ``scalar_one_or_none``
         matches at most one row, and a mid-upgrade user legitimately has two. Missing period
@@ -339,14 +349,24 @@ class PaymentManager:
             .all()
         )
         paid_ids = await paid_subscription_ids(self.db, rows)
+        kept = 0
         for row in rows:
             if row.id in paid_ids:
                 logger.warning(f"Sub {row.id} has a payment on record despite no period dates, not retiring it")
+                kept += 1
+                continue
+            if await self._live_at_provider(row):
+                # Paid, but the activation webhook never landed to record it, so nothing local
+                # says so. Cancelling here would cancel a subscription the user is paying for;
+                # reconcile_pending adopts it instead.
+                logger.warning(f"Sub {row.id} is live at the provider with no activation recorded, not retiring it")
+                kept += 1
                 continue
             cancelled = await self._cancel_on_provider(row)
             await self._record_checkout_retired(row, cancelled=cancelled)
         if rows:
             await self.db.flush()
+        return kept
 
     async def _open_checkout(
         self, user: User, tier: str, redirect_url: str, currency: str, status: str
@@ -403,12 +423,14 @@ class PaymentManager:
         existing = await self._active_subscription(user.id)
         if existing:
             if existing.status == "pending" and existing.current_period_start is None:
-                await self._retire_unpaid_checkouts(user.id, ("pending",))
+                if await self._retire_unpaid_checkouts(user.id, ("pending",)):
+                    raise ValueError(PAYMENT_BEING_CONFIRMED)
             else:
                 raise ValueError("User already has an active subscription")
         # An upgrade checkout is invisible to _active_subscription, so retire it explicitly:
         # otherwise a user whose subscription lapsed mid-upgrade holds two payable checkouts.
-        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        if await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",)):
+            raise ValueError(PAYMENT_BEING_CONFIRMED)
         return await self._open_checkout(user, tier, redirect_url, currency, "pending")
 
     async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
@@ -433,7 +455,8 @@ class PaymentManager:
         if not is_upgrade(live.tier, new_tier):
             raise ValueError(f"Cannot upgrade from {live.tier} to {new_tier}")
 
-        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        if await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",)):
+            raise ValueError(PAYMENT_BEING_CONFIRMED)
         return await self._open_checkout(user, new_tier, redirect_url, currency, "pending_upgrade")
 
     async def cancel(self, user: User) -> dict:
@@ -531,6 +554,24 @@ class PaymentManager:
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
             "new_tier": new_tier,
         }
+
+    async def _live_at_provider(self, sub: PlanSubscription) -> bool:
+        """Whether the provider reports this subscription as paid and live.
+
+        An unreadable provider answers True: not knowing is not permission to cancel, and
+        the cost of waiting is a checkout the user must retry, against a subscription
+        cancelled out from under a paying customer.
+        """
+        if sub.provider == "manual" or not sub.provider_subscription_id:
+            return False
+        try:
+            info = await self.provider.get_subscription(sub.provider_subscription_id)
+        except UnsupportedCapability:
+            return False
+        except Exception:
+            logger.warning(f"Could not read provider state for sub {sub.id}; treating it as live", exc_info=True)
+            return True
+        return info.state in LIVE_PROVIDER_STATES
 
     async def _cancel_on_provider(self, sub: PlanSubscription) -> bool:
         """True when the provider-side subscription is known to be cancelled.
@@ -1029,6 +1070,53 @@ class PaymentManager:
                 "they stay payable until the next pass"
             )
         return touched
+
+    async def reconcile_pending(self) -> int:
+        """Adopt payments the provider took but whose webhook never reached us.
+
+        A delivery that fails is retried only a handful of times over about half an hour and
+        then dropped for good, which leaves the customer charged, on the free tier, and holding
+        a row indistinguishable from an abandoned checkout. Nothing else asks the provider
+        whether a pending row was in fact paid. Returns the count adopted.
+
+        The event is rebuilt with the id the provider would have sent, so a late redelivery
+        dedups against it, and is replayed through ``handle_event`` rather than a second
+        activation path — invoicing, supersede and the welcome email must not diverge here.
+        """
+        if not self.provider.supports(PaymentCapability.subscription):
+            return 0
+        rows = (
+            (
+                await self.db.execute(
+                    select(PlanSubscription).where(
+                        PlanSubscription.status.in_(("pending", "pending_upgrade", "overdue")),
+                        PlanSubscription.provider == self.provider.id,
+                        PlanSubscription.provider_subscription_id.is_not(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        adopted = 0
+        for sub in rows:
+            # Re-read rather than trusting the query's IS NOT NULL: it narrows the column for
+            # the reader, not for the type checker, and a later filter change would go unnoticed.
+            provider_subscription_id = sub.provider_subscription_id
+            if provider_subscription_id is None:
+                continue
+            try:
+                event = await self.provider.missed_activation_event(provider_subscription_id)
+                if event is None:
+                    continue
+                logger.warning(
+                    f"Adopting sub {sub.id} (user {sub.user_id}): paid at the provider, no webhook recorded"
+                )
+                await self.handle_event(event)
+                adopted += 1
+            except Exception:
+                logger.error(f"Reconcile failed for sub {sub.id}", exc_info=True)
+        return adopted
 
     async def check_expirations(self) -> int:
         """Expire subscriptions past their period end (24h grace to avoid racing webhooks).
