@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.credit_transaction import CreditTransaction
-from src.models.plan_subscription import ACTIVE_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
+from src.models.plan_subscription import ACTIVE_STATUSES, ENDED_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.geo import vat_rate_for_currency
@@ -121,9 +121,27 @@ async def paid_subscription_ids(db: AsyncSession, subs: Sequence[PlanSubscriptio
     )
 
 
+# How long before a cycle ends check_expirations cancels a wind-down at the provider.
+PROVIDER_CANCEL_LEAD = timedelta(hours=2)
+
 # Refusal for a checkout whose predecessor turned out to be paid: the row stays put until
 # reconcile_pending activates it, so a retry shortly after succeeds or finds it active.
 PAYMENT_BEING_CONFIRMED = "A payment on your subscription is still being confirmed — please try again in a few minutes"
+
+
+def _in_wind_down_cancel_window(sub: PlanSubscription) -> bool:
+    """Is a provider cancellation of ``sub`` one check_expirations just asked for?
+
+    The flag alone is not enough: it is set a whole cycle earlier, and a provider cancellation
+    before this window is the user cancelling at the provider — terminal and refunded there, so
+    leaving the row live would keep an entitlement (and a resumable row) against a subscription
+    that no longer exists.
+    """
+    return (
+        sub.cancel_at_period_end
+        and sub.current_period_end is not None
+        and sub.current_period_end <= datetime.now() + PROVIDER_CANCEL_LEAD
+    )
 
 
 def _user_lock_key(user_id: uuid.UUID) -> int:
@@ -911,6 +929,10 @@ class PaymentManager:
                 # checkout, not a subscription that ran and churned. The provider having
                 # cancelled it is what makes the local row safe to retire.
                 await self._record_checkout_retired(sub, cancelled=True)
+            elif sub.status in ENDED_STATUSES or _in_wind_down_cancel_window(sub):
+                # Echo of a cancel we issued (upgrade supersede, or the pre-renewal wind-down
+                # cancel): the ending is already recorded, and a wind-down still owes its cycle.
+                await self._log_event(sub, "provider_cancel_confirmed", event.provider_event_id, event.metadata)
             else:
                 sub.status = "cancelled"
                 await self._log_event(sub, "cancelled", event.provider_event_id, event.metadata)
@@ -1133,7 +1155,7 @@ class PaymentManager:
         # round trip each, blocking every subscription mutation of every user matched for the
         # length of the pass. The only local write is the cycle refresh below, and its values
         # come from the provider, so a concurrent webhook writing them too is not a conflict.
-        pre_cutoff = datetime.now() + timedelta(hours=2)
+        pre_cutoff = datetime.now() + PROVIDER_CANCEL_LEAD
         pending_cancel = await self.db.execute(
             select(PlanSubscription).where(
                 PlanSubscription.status.in_(["active", "overdue"]),

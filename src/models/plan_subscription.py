@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 ACTIVE_STATUSES = ("pending", "active", "overdue")
 # Checkout rows that were never paid. Expiring one always logs ``expired_abandoned_checkout``.
 UNPAID_CHECKOUT_STATUSES = ("pending", "pending_upgrade")
+# Statuses of a row whose paying life is over; nothing brings it back.
+ENDED_STATUSES = ("cancelled", "expired")
 
 
 class PlanSubscription(Base):

@@ -2199,3 +2199,160 @@ async def test_a_late_redelivery_dedups_against_the_reconciled_activation(db):
         )
     ).scalar()
     assert activations == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_echo_of_an_upgrade_is_not_recorded_as_churn(db):
+    """Recording the provider's echo ends the same row twice and shows the upgrade as a churn."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    old = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="active",
+        provider_subscription_id="psub_old",
+        current_period_start=datetime.now() - timedelta(days=10),
+        current_period_end=datetime.now() + timedelta(days=20),
+    )
+    new = PlanSubscription(
+        user_id=user.id, tier="plus", provider="fake", status="pending_upgrade", provider_subscription_id="psub_new"
+    )
+    db.add_all([old, new])
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_completed,
+            provider_event_id="ORDER_COMPLETED:ord_1",
+            provider_subscription_id="psub_new",
+            order_id="ord_1",
+        )
+    )
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_old",
+            provider_subscription_id="psub_old",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    events = await _event_types(db, old.id)
+    assert "cancelled_for_upgrade" in events
+    assert "cancelled" not in events
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_echo_of_a_wind_down_leaves_the_cycle_running(db):
+    """The wind-down cancel runs up to 2h before the cycle ends; acting on its echo would cut
+    the paid-for cycle short and pre-empt the expiry pass's ``expired``."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    sub = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="active",
+        provider_subscription_id="psub_1",
+        current_period_start=datetime.now() - timedelta(days=29),
+        current_period_end=datetime.now() + timedelta(hours=1),
+        cancel_at_period_end=True,
+        pending_tier="free",
+    )
+    db.add(sub)
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_1",
+            provider_subscription_id="psub_1",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    await db.refresh(sub)
+    assert sub.status == "active"
+    assert await mgr.current_tier(user.id) == "go"
+    assert "cancelled" not in await _event_types(db, sub.id)
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_of_a_live_sub_is_still_churn(db):
+    """A cancel we did not initiate — the user cancelling at the provider — ends the row."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    sub = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="active",
+        provider_subscription_id="psub_1",
+        current_period_start=datetime.now() - timedelta(days=10),
+        current_period_end=datetime.now() + timedelta(days=20),
+    )
+    db.add(sub)
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_1",
+            provider_subscription_id="psub_1",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    await db.refresh(sub)
+    assert sub.status == "cancelled"
+    assert "cancelled" in await _event_types(db, sub.id)
+
+
+@pytest.mark.asyncio
+async def test_provider_cancel_early_in_a_wind_down_cycle_is_still_churn(db):
+    """A cancel request sets ``cancel_at_period_end`` a whole cycle before our own provider
+    cancel goes out. A provider cancellation before that window is the user's, and ignoring it
+    would leave a resumable row against a subscription that no longer exists at the provider."""
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    sub = PlanSubscription(
+        user_id=user.id,
+        tier="go",
+        provider="fake",
+        status="active",
+        provider_subscription_id="psub_1",
+        current_period_start=datetime.now() - timedelta(days=5),
+        current_period_end=datetime.now() + timedelta(days=25),
+        cancel_at_period_end=True,
+        pending_tier="free",
+    )
+    db.add(sub)
+    await db.flush()
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.subscription_cancelled,
+            provider_event_id="SUBSCRIPTION_CANCELLED:psub_1",
+            provider_subscription_id="psub_1",
+            order_id=None,
+            metadata={},
+        )
+    )
+
+    await db.refresh(sub)
+    assert sub.status == "cancelled"
+    assert "cancelled" in await _event_types(db, sub.id)
+    with pytest.raises(ValueError, match="No active subscription"):
+        await mgr.resume(user)
