@@ -226,6 +226,7 @@ class StatsService:
                             cast(InferenceCall.used_at, Date).label("date"),
                             func.sum(InferenceCall.input_tokens).label("input_tokens"),
                             func.sum(InferenceCall.output_tokens).label("output_tokens"),
+                            func.sum(InferenceCall.cached_tokens).label("cached_tokens"),
                         )
                         .where(*base_filter)
                         .group_by(cast(InferenceCall.used_at, Date))
@@ -238,17 +239,25 @@ class StatsService:
                 for row in daily_stats:
                     inp = row.input_tokens or 0
                     out = row.output_tokens or 0
+                    cached = row.cached_tokens or 0
                     total_input += inp
                     total_output += out
-                    daily_data[row.date.strftime("%Y-%m-%d")] = {"input_tokens": inp, "output_tokens": out}
+                    daily_data[row.date.strftime("%Y-%m-%d")] = {
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "cached_tokens": cached,
+                    }
 
+                empty_day = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
                 daily_usage = {}
                 current_date = start_date
                 while current_date <= end_date:
                     day_str = current_date.strftime("%Y-%m-%d")
-                    d = daily_data.get(day_str, {"input_tokens": 0, "output_tokens": 0})
+                    d = daily_data.get(day_str, empty_day)
                     daily_usage[day_str] = DailyTokens(
-                        input_tokens=d["input_tokens"], output_tokens=d["output_tokens"]
+                        input_tokens=d["input_tokens"],
+                        output_tokens=d["output_tokens"],
+                        cached_tokens=d["cached_tokens"],
                     )
                     current_date += timedelta(days=1)
 

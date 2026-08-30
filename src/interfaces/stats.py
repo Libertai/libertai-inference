@@ -31,10 +31,12 @@ class UsageByEntity(BaseModel):
 
 
 class DailyTokens(BaseModel):
-    """Input and output tokens for a single day."""
+    """Input, output and cached tokens for a single day."""
 
     input_tokens: int
     output_tokens: int
+    # Subset of input_tokens, not an addition to them.
+    cached_tokens: int
 
 
 class UsageStats(BaseModel):
