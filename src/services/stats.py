@@ -1430,6 +1430,10 @@ class StatsService:
     # also terminal. ``expired_abandoned_checkout`` (never-activated checkout) stays excluded: it
     # has no activation to end.
     _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade", "expired_insufficient_credits")
+    # Events that leave a cycle unbilled. ``payment_failed`` (card declined on a live sub) and
+    # ``overdue`` (provider-side notice) are two reports of the same incident, so either opens the
+    # window and the first one wins.
+    _UNPAID_EVENTS = ("payment_failed", "overdue")
     # Terminal events that count as churn (excludes cancelled_for_upgrade, an upgrade replacement).
     _CHURN_TERMINAL_EVENTS = tuple(e for e in _TERMINAL_EVENTS if e != "cancelled_for_upgrade")
 
@@ -1439,6 +1443,9 @@ class StatsService:
 
         - activated_on: day of the first ``activated`` event, None if never activated.
         - ended_on: day of the first terminal event (exclusive — no MRR that day), None if live.
+        - unpaid_from: day of the failure that opened the sub's current unpaid window, None when
+          nothing is outstanding. A later ``renewed``/``activated`` closes the window: the late
+          payment covers the days it spanned, so they are worth full MRR after all.
         - tier_changes: [(activation_day, initial_tier)] + one entry per ``downgraded`` event.
           Initial tier from the ``created`` event metadata, falling back to the row's current tier
           (covers rows predating event logging).
@@ -1449,20 +1456,25 @@ class StatsService:
             activated_on: date | None = None
             ended_on: date | None = None
             terminal_event: str | None = None
+            unpaid_from: date | None = None
             initial_tier: str | None = None
             downgrades: list[tuple[date, str]] = []
             for e in events:
                 day = e.created_at.date()
                 if e.event_type == "created" and e.metadata_json and e.metadata_json.get("tier"):
                     initial_tier = e.metadata_json["tier"]
-                elif e.event_type == "activated" and activated_on is None:
-                    activated_on = day
+                elif e.event_type in ("activated", "renewed"):
+                    if activated_on is None and e.event_type == "activated":
+                        activated_on = day
+                    unpaid_from = None
                 elif e.event_type == "downgraded" and e.metadata_json and e.metadata_json.get("to"):
                     downgrades.append((day, e.metadata_json["to"]))
                 elif e.event_type == "downgraded":
                     logger.warning(
                         f"downgraded event {e.id} (subscription {sub.id}) missing tier metadata; MRR keeps prior tier"
                     )
+                elif e.event_type in StatsService._UNPAID_EVENTS and unpaid_from is None:
+                    unpaid_from = day
                 elif e.event_type in StatsService._TERMINAL_EVENTS and ended_on is None:
                     ended_on = day
                     terminal_event = e.event_type
@@ -1474,6 +1486,7 @@ class StatsService:
                     "user_id": sub.user_id,
                     "activated_on": activated_on,
                     "ended_on": ended_on,
+                    "unpaid_from": unpaid_from,
                     "terminal_event": terminal_event,
                     "tier_changes": tier_changes,
                 }
@@ -1692,13 +1705,25 @@ class StatsService:
         return start_date.replace(day=1)
 
     @staticmethod
+    def _billed_tier_at(timeline: dict, day: date) -> str | None:
+        """The sub's tier on ``day`` for revenue purposes, or None if it earns nothing that day.
+
+        Narrower than ``_tier_at``, which answers what the user is entitled to: an unpaid sub keeps
+        its entitlement (see ``ACTIVE_STATUSES``) while earning nothing, so only MRR reads this.
+        """
+        unpaid_from = timeline.get("unpaid_from")
+        if unpaid_from is not None and day >= unpaid_from:
+            return None
+        return StatsService._tier_at(timeline, day)
+
+    @staticmethod
     def _mrr_daily(timelines: list[dict], start_date: date, end_date: date) -> list[MrrDay]:
         daily: list[MrrDay] = []
         day = start_date
         while day <= end_date:
             total = 0.0
             for t in timelines:
-                tier = StatsService._tier_at(t, day)
+                tier = StatsService._billed_tier_at(t, day)
                 if tier:
                     total += _tier_price(tier)
             daily.append(MrrDay(date=day.strftime("%Y-%m-%d"), mrr=round(total, 2)))
@@ -1709,7 +1734,7 @@ class StatsService:
     def _mrr_by_tier_on(timelines: list[dict], day: date) -> dict[str, float]:
         by_tier: dict[str, float] = {}
         for t in timelines:
-            tier = StatsService._tier_at(t, day)
+            tier = StatsService._billed_tier_at(t, day)
             if tier:
                 by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier)
         return by_tier
@@ -1723,6 +1748,12 @@ class StatsService:
         standard convention and it matters more here than on a card rail: most credits subscribers
         so far buy a single month and switch off renewal within seconds of activating, so the
         credits series leads its own forward run-rate by a wide margin.
+
+        A cycle that failed to bill is the exception: it earns nothing from the failure day on, even
+        though the sub stays entitled and live until the provider cancels it (~30 days of retries on
+        Revolut). Churn is still dated at that cancellation — MRR and churn part ways here on
+        purpose. A retry that eventually succeeds closes the window and restores those days, so a
+        past series can move up when a late payment lands.
         """
         try:
             async with AsyncSessionLocal() as db:

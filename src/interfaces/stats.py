@@ -436,6 +436,10 @@ class GlobalSubscriptionsRevenueStats(BaseModel):
     dominated by granted credits: at time of writing 5 of 21 live credits subscriptions were
     voucher-funded and carried 79% of the rail's nominal MRR.
 
+    A subscription earns no MRR from the day a cycle fails to bill until the day a retry covers it;
+    one that never recovers earns nothing for the rest of its life, though it still churns on its
+    cancellation day rather than on the failure.
+
     ``topups_daily`` covers completed Revolut credit purchases, excluding ``upgrade_remainder``
     grants and pending checkouts. Its window is widened back to the first day of ``start_date``'s
     calendar month so the client can draw a correct month-to-date line for a mid-month range.

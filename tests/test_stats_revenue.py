@@ -379,3 +379,105 @@ async def test_revenue_topups_table():
     page2 = await StatsService.get_global_revenue_topups(TOPUPS_START, TOPUPS_END, limit=1, offset=1)
     assert page2.total == 4
     assert [t.amount for t in page2.topups] == [5.0]
+
+
+def test_replay_unresolved_payment_failure_marks_unpaid_from():
+    sub = FakeSub(tier="plus")
+    t = _timeline(
+        sub,
+        [
+            FakeEvent("activated", datetime(2026, 1, 2)),
+            FakeEvent("payment_failed", datetime(2026, 2, 2)),
+            FakeEvent("cancelled", datetime(2026, 3, 4)),
+        ],
+    )
+    assert t["unpaid_from"] == date(2026, 2, 2)
+    assert t["ended_on"] == date(2026, 3, 4)
+
+
+def test_replay_recovered_payment_failure_clears_unpaid_from():
+    sub = FakeSub(tier="plus")
+    t = _timeline(
+        sub,
+        [
+            FakeEvent("activated", datetime(2026, 1, 2)),
+            FakeEvent("payment_failed", datetime(2026, 2, 2)),
+            FakeEvent("renewed", datetime(2026, 2, 5)),
+        ],
+    )
+    assert t["unpaid_from"] is None
+
+
+def test_replay_overdue_event_also_opens_the_unpaid_window():
+    sub = FakeSub(tier="plus")
+    t = _timeline(sub, [FakeEvent("activated", datetime(2026, 1, 2)), FakeEvent("overdue", datetime(2026, 2, 2))])
+    assert t["unpaid_from"] == date(2026, 2, 2)
+
+
+def test_replay_repeated_failures_keep_the_first_failure_day():
+    sub = FakeSub(tier="plus")
+    t = _timeline(
+        sub,
+        [
+            FakeEvent("activated", datetime(2026, 1, 2)),
+            FakeEvent("payment_failed", datetime(2026, 2, 2)),
+            FakeEvent("payment_failed", datetime(2026, 2, 9)),
+            FakeEvent("overdue", datetime(2026, 2, 16)),
+        ],
+    )
+    assert t["unpaid_from"] == date(2026, 2, 2)
+
+
+def test_mrr_stops_on_the_failure_day_not_the_cancel_day():
+    """The tail between a failed payment and the provider's eventual cancel is worth nothing."""
+    sub = FakeSub(tier="plus")
+    timelines = [
+        {
+            "user_id": sub.user_id,
+            "activated_on": date(2026, 1, 1),
+            "ended_on": date(2026, 3, 4),
+            "unpaid_from": date(2026, 2, 2),
+            "tier_changes": [(date(2026, 1, 1), "plus")],
+        }
+    ]
+    daily = StatsService._mrr_daily(timelines, date(2026, 2, 1), date(2026, 2, 3))
+    assert [(d.date, d.mrr) for d in daily] == [
+        ("2026-02-01", 20.0),
+        ("2026-02-02", 0.0),  # failure day: unpaid from here on
+        ("2026-02-03", 0.0),
+    ]
+    assert StatsService._mrr_by_tier_on(timelines, date(2026, 2, 3)) == {}
+
+
+def test_mrr_ignores_a_failure_that_was_paid_off():
+    """A recovered failure leaves no notch: the late payment covered those days."""
+    sub = FakeSub(tier="plus")
+    timelines = [
+        {
+            "user_id": sub.user_id,
+            "activated_on": date(2026, 1, 1),
+            "ended_on": None,
+            "unpaid_from": None,
+            "tier_changes": [(date(2026, 1, 1), "plus")],
+        }
+    ]
+    daily = StatsService._mrr_daily(timelines, date(2026, 2, 1), date(2026, 2, 3))
+    assert [d.mrr for d in daily] == [20.0, 20.0, 20.0]
+
+
+def test_subscriber_counts_ignore_the_unpaid_window():
+    """An unpaid sub still holds entitlement, so tier attribution keeps counting it."""
+    sub = FakeSub(tier="plus")
+    timelines = [
+        {
+            "user_id": sub.user_id,
+            "activated_on": date(2026, 1, 1),
+            "ended_on": None,
+            "unpaid_from": date(2026, 2, 2),
+            "tier_changes": [(date(2026, 1, 1), "plus")],
+        }
+    ]
+    assert StatsService._tier_by_user_day(timelines, date(2026, 2, 3)) == {sub.user_id: "plus"}
+    assert StatsService._subscribers_by_tier_day(timelines, date(2026, 2, 3), date(2026, 2, 3)) == {
+        (date(2026, 2, 3), "plus"): 1
+    }
