@@ -111,8 +111,8 @@ async def test_sent_from_the_monitored_mailbox(monkeypatch):
     user_id = await _make_user("lifecycle-sender@example.com")
 
     assert await _send(user_id, "welcome") is True
-    assert captured == [config.SMTP_FROM_LIFECYCLE]
-    assert "noreply" not in config.SMTP_FROM_LIFECYCLE
+    assert captured == [config.EMAIL_FROM_LIFECYCLE]
+    assert "noreply" not in config.EMAIL_FROM_LIFECYCLE
 
 
 async def test_failed_transport_not_recorded(monkeypatch):

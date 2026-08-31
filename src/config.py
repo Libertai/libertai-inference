@@ -40,17 +40,12 @@ class _Config:
     GITHUB_CLIENT_ID: str
     GITHUB_CLIENT_SECRET: str
 
-    # Magic-link / email (SMTP; falls back to console logging when SMTP_HOST is unset)
+    # Magic-link / email (Resend; falls back to console logging when RESEND_API_KEY is unset)
     MAGIC_LINK_SECRET: str
-    SMTP_HOST: str
-    SMTP_PORT: int
-    SMTP_USER: str
-    SMTP_PASSWORD: str
-    SMTP_FROM: str
-    # Lifecycle emails invite a reply, so they come from a monitored mailbox. Must be an address
-    # the SMTP account owns: Proton rejects the send outright ("sender address rejected") otherwise.
-    SMTP_FROM_LIFECYCLE: str
-    SMTP_USE_TLS: bool
+    RESEND_API_KEY: str
+    EMAIL_FROM: str
+    # Lifecycle emails invite a reply, so they come from a monitored mailbox.
+    EMAIL_FROM_LIFECYCLE: str
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
     ENCRYPTION_KEY: str
@@ -121,13 +116,9 @@ class _Config:
 
         # Magic-link / email
         self.MAGIC_LINK_SECRET = os.getenv("MAGIC_LINK_SECRET", "")
-        self.SMTP_HOST = os.getenv("SMTP_HOST", "")
-        self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-        self.SMTP_USER = os.getenv("SMTP_USER", "")
-        self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-        self.SMTP_FROM = os.getenv("SMTP_FROM", "LibertAI <noreply@libertai.io>")
-        self.SMTP_FROM_LIFECYCLE = os.getenv("SMTP_FROM_LIFECYCLE", "LibertAI <hello@libertai.io>")
-        self.SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
+        self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+        self.EMAIL_FROM = os.getenv("EMAIL_FROM", "LibertAI <noreply@libertai.io>")
+        self.EMAIL_FROM_LIFECYCLE = os.getenv("EMAIL_FROM_LIFECYCLE", "LibertAI <support@libertai.io>")
 
         # Token encryption (Fernet)
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")

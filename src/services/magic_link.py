@@ -104,7 +104,7 @@ def _build_email_html(link: str, code: str) -> str:
 
 
 async def send_magic_link_email(email: str, token: str, code: str, redirect_base: str | None = None) -> None:
-    """Send the magic-link email. With no SMTP host configured (dev), the transport logs it instead.
+    """Send the magic-link email. With no Resend key configured (dev), the transport logs it instead.
 
     `redirect_base` is the origin of the app the user signed in from (chat vs console); the link
     points back there when it's an allowed frontend, else falls back to FRONTEND_URL."""
@@ -114,7 +114,7 @@ async def send_magic_link_email(email: str, token: str, code: str, redirect_base
         # Runs as a BackgroundTask: an uncaught error would be swallowed silently. Log it instead.
         logger.error(f"FRONTEND_URL is not configured; cannot send magic-link email to {email}")
         return
-    if not config.SMTP_HOST:
+    if not config.RESEND_API_KEY:
         # Log the code/link (not just the generic transport mock line) so dev login is usable.
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return

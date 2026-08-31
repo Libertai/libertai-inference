@@ -219,7 +219,7 @@ async def update_me(request: UpdateProfileRequest, user: User = Depends(get_curr
 async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTasks) -> None:
     """Send a magic-link email (token + 6-digit code).
 
-    The email is dispatched in the background so SMTP latency/failures never block the
+    The email is dispatched in the background so send latency/failures never block the
     login request (the magic link is persisted before we return).
     """
     async with AsyncSessionLocal() as db:
