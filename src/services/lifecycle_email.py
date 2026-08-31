@@ -147,7 +147,7 @@ async def send_lifecycle_email(
         }
 
     subject, html = render_email(template, user, ctx, unsubscribe_url=unsubscribe_url)
-    if not await send_email(user.email, subject, html, headers, sender=config.SMTP_FROM_LIFECYCLE):
+    if not await send_email(user.email, subject, html, headers, sender=config.EMAIL_FROM_LIFECYCLE):
         return False
 
     db.add(LifecycleEmailSend(user_id=user.id, email_type=email_type, transactional=transactional))
