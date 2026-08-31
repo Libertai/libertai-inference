@@ -15,6 +15,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
+from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.auth_tokens import create_access_token
 from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY
@@ -33,11 +34,15 @@ async def _setup(
     windows: bool = False,
     tier_usage: float = 0.0,
     overflow: float = 0.0,
+    sub_tier: str | None = None,
+    sub_status: str = "active",
+    sub_period_end: datetime | None = None,
 ) -> tuple[uuid.UUID, str]:
     """User + one API key, returning (user_id, raw key).
 
     ``windows`` opens both entitlement windows now; ``tier_usage`` seeds plan-covered
-    usage inside them, ``overflow`` seeds prepaid-covered usage this month.
+    usage inside them, ``overflow`` seeds prepaid-covered usage this month. ``sub_tier``
+    adds a plan subscription.
     """
     now = datetime.now()
     async with AsyncSessionLocal() as db:
@@ -81,6 +86,16 @@ async def _setup(
             call = InferenceCall(api_key_id=key.id, credits_used=overflow, model_name="m", tier_credits_used=0.0)
             call.used_at = now - timedelta(minutes=20)
             db.add(call)
+        if sub_tier:
+            db.add(
+                PlanSubscription(
+                    user_id=user.id,
+                    tier=sub_tier,
+                    provider="manual",
+                    status=sub_status,
+                    current_period_end=sub_period_end,
+                )
+            )
         if prepaid:
             db.add(
                 CreditTransaction(
@@ -97,6 +112,7 @@ async def _setup(
 
 async def _cleanup(user_id: uuid.UUID) -> None:
     async with AsyncSessionLocal() as db:
+        await db.execute(delete(PlanSubscription).where(PlanSubscription.user_id == user_id))
         await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user_id))
         await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
         await db.execute(delete(ApiKeyDB).where(ApiKeyDB.user_id == user_id))
@@ -241,7 +257,63 @@ async def test_usage_never_exposes_raw_credit_amounts(async_client):
     user_id, key = await _setup(windows=True, tier_usage=0.1)
     try:
         body = (await async_client.get("/usage", headers=_bearer(key))).json()
-        assert set(body) == {"plan", "window_5h", "weekly", "extra_usage_credits"}
+        assert set(body) == {"plan", "window_5h", "weekly", "current_period_end", "extra_usage_credits"}
         assert set(body["window_5h"]) == {"used_percent", "resets_at"}
     finally:
         await _cleanup(user_id)
+
+
+async def test_usage_reports_no_period_end_without_a_subscription(async_client):
+    user_id, key = await _setup()
+    try:
+        body = (await async_client.get("/usage", headers=_bearer(key))).json()
+        assert body["plan"] == "free"
+        assert body["current_period_end"] is None
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_usage_reports_period_end_of_the_active_subscription(async_client):
+    period_end = datetime.now().replace(microsecond=0) + timedelta(days=12)
+    user_id, key = await _setup(sub_tier="plus", sub_period_end=period_end)
+    try:
+        body = (await async_client.get("/usage", headers=_bearer(key))).json()
+        assert body["plan"] == "plus"
+        assert datetime.fromisoformat(body["current_period_end"]).replace(tzinfo=None) == period_end
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_usage_period_end_serialized_as_utc(async_client):
+    """Same naive-UTC column trap as resets_at: without an offset JS reads it as browser-local."""
+    user_id, key = await _setup(sub_tier="plus", sub_period_end=datetime.now() + timedelta(days=3))
+    try:
+        body = (await async_client.get("/usage", headers=_bearer(key))).json()
+        assert body["current_period_end"].endswith("+00:00")
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_usage_period_end_is_null_when_the_provider_dates_are_unknown(async_client):
+    """Activation keeps a subscription whose cycle dates could not be read from the provider."""
+    user_id, key = await _setup(sub_tier="plus", sub_period_end=None)
+    try:
+        body = (await async_client.get("/usage", headers=_bearer(key))).json()
+        assert body["plan"] == "plus"
+        assert body["current_period_end"] is None
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_usage_ignores_a_non_active_subscription(async_client):
+    """An unpaid or ended row grants no tier, so it contributes no period end either."""
+    for status in ("pending", "cancelled", "expired"):
+        user_id, key = await _setup(
+            sub_tier="plus", sub_status=status, sub_period_end=datetime.now() + timedelta(days=5)
+        )
+        try:
+            body = (await async_client.get("/usage", headers=_bearer(key))).json()
+            assert body["plan"] == "free", status
+            assert body["current_period_end"] is None, status
+        finally:
+            await _cleanup(user_id)

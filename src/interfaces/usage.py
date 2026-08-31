@@ -17,6 +17,10 @@ class UsageResponse(BaseModel):
     plan: str
     window_5h: UsageWindow
     weekly: UsageWindow
+    # End of the paid subscription's current cycle, None on the free tier. A renewing
+    # subscription moves it forward each cycle; it is the date the plan stops only for a
+    # subscription already set to cancel.
+    current_period_end: UtcDatetime | None
     # Prepaid balance still spendable once the plan allowance runs out, with the account's
     # monthly extra-credit cap already applied — so it is what the next call can actually draw on.
     extra_usage_credits: float

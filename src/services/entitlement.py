@@ -88,6 +88,10 @@ class AllowanceState:
     # Monthly extra-credit cap (None = unlimited) and attempted overflow spend this calendar month.
     monthly_extra_credit_cap: float | None = None
     extra_credits_used_this_month: float = 0.0
+    # End of the active subscription's paid cycle (None without one, or when the provider's
+    # dates are unknown). It moves forward on renewal; it is a lapse date only for a
+    # subscription set to cancel.
+    current_period_end: datetime | None = None
 
 
 def used_percent(used: float, limit: float) -> float:
@@ -160,20 +164,23 @@ async def _active_window(db: AsyncSession, user_id: uuid.UUID, kind: str, now: d
     return window if window and window.expires_at > now else None
 
 
-async def get_active_tier(db: AsyncSession, user_id: uuid.UUID) -> str:
-    sub = (
-        (
-            await db.execute(
-                select(PlanSubscription.tier).where(
-                    PlanSubscription.user_id == user_id,
-                    PlanSubscription.status == "active",
-                )
+async def get_active_plan(db: AsyncSession, user_id: uuid.UUID) -> tuple[str, datetime | None]:
+    """Tier and cycle end of the user's active subscription (no subscription => free, no end).
+
+    The end is nullable even on an active row: activation keeps the subscription when the
+    provider's cycle dates can't be read.
+    """
+    row = (
+        await db.execute(
+            select(PlanSubscription.tier, PlanSubscription.current_period_end).where(
+                PlanSubscription.user_id == user_id,
+                PlanSubscription.status == "active",
             )
         )
-        .scalars()
-        .first()
-    )
-    return sub or DEFAULT_TIER
+    ).first()
+    if row is None:
+        return DEFAULT_TIER, None
+    return row[0], row[1]
 
 
 async def _usage_since(db: AsyncSession, user_id: uuid.UUID, cutoff: datetime) -> float:
@@ -299,7 +306,8 @@ async def get_allowance_state(
     that only need the window fields (the per-call billing split) — the cap then reads
     as unlimited in the returned state."""
     now = now or datetime.now()
-    tier = get_tier(await get_active_tier(db, user_id))
+    active_tier, current_period_end = await get_active_plan(db, user_id)
+    tier = get_tier(active_tier)
 
     window_5h = await _active_window(db, user_id, WINDOW_5H, now)
     window_weekly = await _active_window(db, user_id, WINDOW_WEEKLY, now)
@@ -331,4 +339,5 @@ async def get_allowance_state(
         weekly_resets_at=window_weekly.expires_at if window_weekly else None,
         monthly_extra_credit_cap=cap,
         extra_credits_used_this_month=month_overflow,
+        current_period_end=current_period_end,
     )

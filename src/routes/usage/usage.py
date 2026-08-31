@@ -23,6 +23,7 @@ async def get_usage(user: User = Depends(get_user_from_api_key)) -> UsageRespons
             used_percent=used_percent(state.weekly_used, state.weekly_limit),
             resets_at=state.weekly_resets_at,
         ),
+        current_period_end=state.current_period_end,
         extra_usage_credits=effective_prepaid(
             state.prepaid_balance, state.monthly_extra_credit_cap, state.extra_credits_used_this_month
         ),
