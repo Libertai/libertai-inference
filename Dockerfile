@@ -2,6 +2,10 @@ FROM python:3.12
 
 WORKDIR /app
 
+# Naive TIMESTAMP columns hold UTC and are compared against Python-side clocks; a non-UTC
+# container would write local time into them.
+ENV TZ=UTC
+
 # WeasyPrint needs Pango >=1.44 at runtime; DejaVu is the invoice template font.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core \

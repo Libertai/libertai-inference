@@ -13,12 +13,21 @@ its schema is built from the SQLAlchemy models each session.
 """
 
 import os
+import time
 
 import psycopg
 import pytest_asyncio
 from dotenv import load_dotenv
 from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# Naive TIMESTAMP columns hold UTC, and dedup/expiry compare a DB ``current_timestamp``
+# against a Python ``datetime.now()`` — the two clocks must agree. Deployments run UTC;
+# a developer machine on any other offset shifts every Python-side "now" and breaks those
+# comparisons across a boundary (a month-start dedup window resends, a fresh window reads
+# as expired). Set before src, so nothing caches the old zone.
+os.environ["TZ"] = "UTC"
+time.tzset()
 
 # --- Resolve the test database URL and force it into the env BEFORE importing src ---
 load_dotenv()  # does not override already-set env vars
