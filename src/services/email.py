@@ -9,6 +9,28 @@ logger = setup_logger(__name__)
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Shared client so batched sends (the lifecycle cron) reuse pooled keep-alive connections.
+
+    Built lazily on first send: a module-level client would bind its pool to whatever event loop
+    imported it.
+    """
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=15)
+    return _client
+
+
+async def close_client() -> None:
+    """Close the shared client to release connections. Called from the app lifespan."""
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
+
 
 async def send_email(
     to: str, subject: str, html: str, headers: dict[str, str] | None = None, sender: str | None = None
@@ -32,12 +54,11 @@ async def send_email(
         payload["headers"] = headers
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                _RESEND_ENDPOINT,
-                json=payload,
-                headers={"Authorization": f"Bearer {config.RESEND_API_KEY}"},
-            )
+        response = await _get_client().post(
+            _RESEND_ENDPOINT,
+            json=payload,
+            headers={"Authorization": f"Bearer {config.RESEND_API_KEY}"},
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         # Resend puts the reason (unverified domain, invalid recipient) in the body, not the status.
