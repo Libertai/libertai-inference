@@ -27,6 +27,9 @@ class _Config:
 
     ADMIN_SECRET: str
     LIBERCLAW_SECRET: str
+    # Accepted alongside LIBERCLAW_SECRET during rotation, so redeploying with a new secret
+    # doesn't 401 in-flight callers still sending the old one.
+    LIBERCLAW_SECRET_PREVIOUS: str | None
 
     LIBERTAI_CHAT_API_KEY: str
     LIBERTAI_CHAT_API_BASE_URL: str
@@ -102,6 +105,7 @@ class _Config:
 
         self.ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
         self.LIBERCLAW_SECRET: str = os.getenv("LIBERCLAW_SECRET", "")
+        self.LIBERCLAW_SECRET_PREVIOUS = os.getenv("LIBERCLAW_SECRET_PREVIOUS") or None
 
         self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
