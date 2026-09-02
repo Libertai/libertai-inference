@@ -305,6 +305,19 @@ class RevolutProvider(PaymentProvider):
         resp.raise_for_status()
         return resp.json()
 
+    async def get_current_cycle(self, provider_subscription_id: str) -> dict:
+        resp = await self.client.get(f"/api/subscriptions/{provider_subscription_id}")
+        resp.raise_for_status()
+        data = resp.json()
+        current_cycle_id = data.get("current_cycle_id")
+        if not current_cycle_id:
+            raise ValueError(f"Subscription {provider_subscription_id} has no current cycle")
+        cycle = await self.get_cycle(provider_subscription_id, current_cycle_id)
+        # The cycle payload isn't documented to carry its own id (only order_id/dates/
+        # previous_cycle_id are verified); the id used to fetch it is the authoritative one.
+        cycle.setdefault("id", current_cycle_id)
+        return cycle
+
     async def get_order(self, order_id: str) -> dict:
         resp = await self.client.get(f"/api/orders/{order_id}")
         resp.raise_for_status()

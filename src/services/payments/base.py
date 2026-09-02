@@ -158,6 +158,12 @@ class PaymentProvider(ABC):
     async def get_cycle(self, provider_subscription_id: str, cycle_id: str) -> dict:
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
+    async def get_current_cycle(self, provider_subscription_id: str) -> dict:
+        """The subscription's current cycle (carries its ``order_id``), resolved from a raw
+        subscription fetch's ``current_cycle_id``. Lets a caller resolve "the order currently
+        being billed" from nothing but a subscription id (sweep/backfill path)."""
+        raise UnsupportedCapability(f"{self.id} does not support subscriptions")
+
     async def get_order(self, order_id: str) -> dict:
         raise UnsupportedCapability(f"{self.id} does not expose orders")
 

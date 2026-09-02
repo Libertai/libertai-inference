@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from datetime import datetime, timedelta
 
@@ -172,8 +173,19 @@ def verify_admin_token(x_admin_token: str = Header(...)) -> None:
     # If we got here, the token is valid
 
 
+def _tokens_match(a: str, b: str) -> bool:
+    # hmac.compare_digest rejects non-ASCII str (raises TypeError); headers decode as
+    # latin-1, so any byte >= 0x80 in a forged token would 500 instead of 401. Bytes have
+    # no such restriction, and encoding both sides identically preserves the comparison.
+    return hmac.compare_digest(a.encode(), b.encode())
+
+
 def verify_liberclaw_token(x_liberclaw_token: str = Header(...)) -> None:
-    """Verify the Liberclaw token from header."""
+    """Verify the Liberclaw token from header.
+
+    Accepts the current secret and, if configured, the previous one — so a secret
+    rotation has a window where both are valid instead of 401ing in-flight callers.
+    """
     if not config.LIBERCLAW_SECRET:
         logger.error("LIBERCLAW_SECRET not configured")
         raise HTTPException(
@@ -181,7 +193,11 @@ def verify_liberclaw_token(x_liberclaw_token: str = Header(...)) -> None:
             detail="Liberclaw authentication not configured",
         )
 
-    if x_liberclaw_token != config.LIBERCLAW_SECRET:
+    valid = _tokens_match(x_liberclaw_token, config.LIBERCLAW_SECRET) or (
+        config.LIBERCLAW_SECRET_PREVIOUS is not None
+        and _tokens_match(x_liberclaw_token, config.LIBERCLAW_SECRET_PREVIOUS)
+    )
+    if not valid:
         logger.warning("Invalid Liberclaw token attempt")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
