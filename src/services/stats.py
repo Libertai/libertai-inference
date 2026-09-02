@@ -1887,20 +1887,21 @@ class StatsService:
     ) -> GlobalSubscriptionsChurnStats:
         """Weekly new vs churned subs. Weeks start Monday and are clipped to the requested range.
 
-        An activation is not "new" if the same user had another sub terminated with
-        ``cancelled_for_upgrade`` in the same ISO week (upgrade replacement). This match is by
-        ISO week, so an upgrade pair straddling a week boundary (old sub ends Sunday, new
-        activates Monday) counts as +1 new / 0 churned instead of being netted out — inherent
-        to week bucketing, rare.
+        Each sub terminated with ``cancelled_for_upgrade`` cancels out ONE activation by the same
+        user in the same ISO week (the replacement sub), so a user who subscribes and upgrades in
+        one week is still +1 new. This match is by ISO week, so an upgrade pair straddling a week
+        boundary (old sub ends Sunday, new activates Monday) counts as +1 new / 0 churned instead
+        of being netted out — inherent to week bucketing, rare.
         """
 
         def week_of(day: date) -> date:
             return day - timedelta(days=day.weekday())
 
-        upgrade_weeks: dict = {}
+        replacements: dict[tuple[uuid.UUID, date], int] = {}
         for t in timelines:
             if t["terminal_event"] == "cancelled_for_upgrade" and t["ended_on"]:
-                upgrade_weeks.setdefault(t["user_id"], set()).add(week_of(t["ended_on"]))
+                key = (t["user_id"], week_of(t["ended_on"]))
+                replacements[key] = replacements.get(key, 0) + 1
 
         weeks: dict[date, dict[str, int]] = {}
         w = week_of(start_date)
@@ -1912,9 +1913,13 @@ class StatsService:
         total_churned = 0
         for t in timelines:
             a = t["activated_on"]
-            if a and start_date <= a <= end_date and week_of(a) not in upgrade_weeks.get(t["user_id"], set()):
-                weeks[week_of(a)]["new"] += 1
-                total_new += 1
+            if a and start_date <= a <= end_date:
+                key = (t["user_id"], week_of(a))
+                if replacements.get(key):
+                    replacements[key] -= 1
+                else:
+                    weeks[week_of(a)]["new"] += 1
+                    total_new += 1
             e = t["ended_on"]
             if e and start_date <= e <= end_date and t["terminal_event"] in StatsService._CHURN_TERMINAL_EVENTS:
                 weeks[week_of(e)]["churned"] += 1

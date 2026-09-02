@@ -85,3 +85,18 @@ def test_activation_refused_is_not_terminal_or_mapped():
     )[0]
     assert timeline["ended_on"] is None  # a row that never activated has no timeline to end
     assert timeline["terminal_event"] is None
+
+
+def test_first_week_subscriber_who_upgrades_counts_as_new():
+    """Subscribing and upgrading in the same week is +1 new: only the replacement activation is
+    netted out, not every activation the user made that week."""
+    u = uuid.uuid4()
+    timelines = [
+        _tl(u, date(2026, 1, 5), date(2026, 1, 5), "cancelled_for_upgrade"),  # go, upgraded same day
+        _tl(u, date(2026, 1, 5)),  # plus, the replacement
+    ]
+    stats = StatsService._churn_from_timelines(timelines, date(2026, 1, 5), date(2026, 1, 11))
+    week = stats.weekly[0]
+    assert week.new == 1
+    assert week.churned == 0
+    assert stats.total_new == 1
