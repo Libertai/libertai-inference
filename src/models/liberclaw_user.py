@@ -21,6 +21,9 @@ class LiberclawUser(Base):
     user_type: Mapped[str] = mapped_column(String, nullable=False)
     tier: Mapped[str] = mapped_column(String, nullable=False, default="free")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.current_timestamp())
+    # LiberClaw's own users.id, set by the api-key call. Identity bridge to Invoice.liberclaw_account_id
+    # (never key ownership on this row's user_id/user_type — that's the email-based identity, and emails recycle).
+    liberclaw_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID, nullable=True, index=True)
 
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="liberclaw_user")
     credit_grants: Mapped[list["LiberclawCreditGrant"]] = relationship(
@@ -29,7 +32,10 @@ class LiberclawUser(Base):
 
     __table_args__ = (UniqueConstraint("user_id", "user_type", name="unique_liberclaw_user"),)
 
-    def __init__(self, user_id: str, user_type: str, tier: str = "free"):
+    def __init__(
+        self, user_id: str, user_type: str, tier: str = "free", liberclaw_account_id: uuid.UUID | None = None
+    ):
         self.user_id = user_id
         self.user_type = user_type
         self.tier = tier
+        self.liberclaw_account_id = liberclaw_account_id
