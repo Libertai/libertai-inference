@@ -17,6 +17,7 @@ from src.models.user import User
 from src.models.user_billing_details import UserBillingDetails
 from src.routes.invoices import router
 from src.services.auth import get_current_user
+from src.services.invoice import SERIES_LTAI
 from src.services.invoice_pdf import get_or_render_pdf
 
 MAX_PAGE_SIZE = 100
@@ -56,18 +57,23 @@ async def list_invoices(
     user: User = Depends(get_current_user),
 ) -> InvoiceListResponse:
     page_size = min(page_size, MAX_PAGE_SIZE)
+    # LCLW rows must never surface here, even after phase-1 sets user_id on them.
     async with AsyncSessionLocal() as db:
         rows = (
             await db.execute(
                 select(Invoice)
-                .where(Invoice.user_id == user.id)
+                .where(Invoice.user_id == user.id, Invoice.series == SERIES_LTAI)
                 .order_by(Invoice.issued_at.desc(), Invoice.seq.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
         ).scalars()
         total = (
-            await db.execute(select(func.count()).select_from(Invoice).where(Invoice.user_id == user.id))
+            await db.execute(
+                select(func.count())
+                .select_from(Invoice)
+                .where(Invoice.user_id == user.id, Invoice.series == SERIES_LTAI)
+            )
         ).scalar_one()
         return InvoiceListResponse(
             items=[InvoiceResponse.model_validate(row, from_attributes=True) for row in rows], total=total
@@ -76,9 +82,14 @@ async def list_invoices(
 
 @router.get("/{invoice_id}/pdf")
 async def download_invoice_pdf(invoice_id: uuid.UUID, user: User = Depends(get_current_user)) -> Response:
+    # LCLW rows must never surface here, even after phase-1 sets user_id on them.
     async with AsyncSessionLocal() as db:
         invoice = (
-            await db.execute(select(Invoice).where(Invoice.id == invoice_id, Invoice.user_id == user.id))
+            await db.execute(
+                select(Invoice).where(
+                    Invoice.id == invoice_id, Invoice.user_id == user.id, Invoice.series == SERIES_LTAI
+                )
+            )
         ).scalar_one_or_none()
         if invoice is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")

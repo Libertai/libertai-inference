@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from src.models.base import AsyncSessionLocal
 from src.models.invoice import Invoice
@@ -108,6 +108,35 @@ async def test_cannot_see_others_invoice_pdf(async_client):
         assert missing_resp.status_code == 404
     finally:
         await _cleanup(owner.id, other.id)
+
+
+async def test_lclw_invoice_not_served_on_ltai_pdf_route_even_after_user_id_merge(async_client):
+    """Simulates phase-1's identity merge (sets user_id on an LCLW row) to prove the
+    LTAI pdf route still won't serve it: ownership by user_id alone isn't enough."""
+    user, headers = await _auth_user()
+    try:
+        async with AsyncSessionLocal() as db:
+            lclw = await issue_invoice(
+                db,
+                series="LCLW",
+                liberclaw_account_id=uuid.uuid4(),
+                user_email=user.email,
+                external_reference=f"revolut:{uuid.uuid4().hex}",
+                gross_minor=700,
+                currency="EUR",
+                tax_minor=None,
+                payment_date=datetime(2026, 9, 1),
+                line_label="LiberClaw Starter subscription",
+            )
+            await db.commit()
+            # Phase-1 identity merge sets user_id on an LCLW row without rewriting the archive.
+            await db.execute(update(Invoice).where(Invoice.id == lclw.id).values(user_id=user.id))
+            await db.commit()
+
+        resp = await async_client.get(f"/invoices/{lclw.id}/pdf", headers=headers)
+        assert resp.status_code == 404
+    finally:
+        await _cleanup(user.id)
 
 
 async def test_pdf_download_content_type_and_cache_headers(async_client):

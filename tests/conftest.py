@@ -73,6 +73,7 @@ import src.models.chat_request
 import src.models.credit_transaction
 import src.models.entitlement_window
 import src.models.inference_call
+import src.models.liberclaw_billing_details
 import src.models.liberclaw_credit_grant
 import src.models.liberclaw_user
 import src.models.lifecycle_email_send
