@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     TIMESTAMP,
     UUID,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -32,11 +33,19 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
-    # LTAI-YYYY-NNNN; (year, seq) is the gap-free per-year sequence behind it.
+    # {series}-YYYY-NNNN; (series, year, seq) is the gap-free per-series-per-year sequence behind it.
     number: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    series: Mapped[str] = mapped_column(String, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    # LiberClaw's immutable users.id — lives in another database, so no FK; ownership must
+    # never key on the email-based liberclaw_users identity (emails recycle).
+    liberclaw_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID, nullable=True)
+    # Source subscription/cycle for LCLW rows: makes per-cycle uniqueness checkable and
+    # gives phase 1 the order<->cycle mapping from the archive itself.
+    provider_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    cycle_id: Mapped[str | None] = mapped_column(String, nullable=True)
     issued_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, default=func.current_timestamp())
     payment_date: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     # Same convention as credit_transactions: "revolut:<order_id>". Idempotency key.
@@ -57,17 +66,21 @@ class Invoice(Base):
     template_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("year", "seq", name="uq_invoices_year_seq"),
+        UniqueConstraint("series", "year", "seq", name="uq_invoices_series_year_seq"),
         # Access path of the list endpoint (per-user, newest first); the table only ever grows.
         Index("ix_invoices_user_id_issued_at", "user_id", "issued_at"),
+        Index("ix_invoices_liberclaw_account_id_issued_at", "liberclaw_account_id", "issued_at"),
+        # >= 1, not == 1: the phase-1 identity merge may add user_id to LCLW rows without
+        # rewriting an immutable archive.
+        CheckConstraint("num_nonnulls(user_id, liberclaw_account_id) >= 1", name="check_invoice_has_owner"),
     )
 
     def __init__(
         self,
         number: str,
+        series: str,
         year: int,
         seq: int,
-        user_id: uuid.UUID,
         issued_at: datetime,
         payment_date: datetime,
         external_reference: str,
@@ -79,13 +92,21 @@ class Invoice(Base):
         line_label: str,
         seller: dict,
         buyer: dict,
+        user_id: uuid.UUID | None = None,
+        liberclaw_account_id: uuid.UUID | None = None,
+        provider_subscription_id: str | None = None,
+        cycle_id: str | None = None,
         period_start: datetime | None = None,
         period_end: datetime | None = None,
     ):
         self.number = number
+        self.series = series
         self.year = year
         self.seq = seq
         self.user_id = user_id
+        self.liberclaw_account_id = liberclaw_account_id
+        self.provider_subscription_id = provider_subscription_id
+        self.cycle_id = cycle_id
         self.issued_at = issued_at
         self.payment_date = payment_date
         self.external_reference = external_reference
@@ -100,4 +121,4 @@ class Invoice(Base):
         self.period_start = period_start
         self.period_end = period_end
 
-    user: Mapped["User"] = relationship("User", back_populates="invoices")
+    user: Mapped["User | None"] = relationship("User", back_populates="invoices")

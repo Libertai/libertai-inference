@@ -18,6 +18,7 @@ def _invoice(**overrides):
     base = {
         "id": uuid.uuid4(),
         "number": "LTAI-2026-0042",
+        "series": "LTAI",
         "year": 2026,
         "seq": 42,
         "user_id": uuid.uuid4(),

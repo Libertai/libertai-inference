@@ -22,6 +22,8 @@ logger = setup_logger(__name__)
 
 # Series prefix is per-product: LiberClaw's port uses its own series ("LCLW").
 INVOICE_NUMBER_PREFIX = "LTAI"
+SERIES_LTAI = "LTAI"
+SERIES_LCLW = "LCLW"
 
 SELLER_SNAPSHOT: dict = {
     "legal_name": "INTELLIGENCE ARTIFICIELLE GENERALE",
@@ -96,6 +98,7 @@ async def issue_invoice(
 
     invoice = Invoice(
         number=f"{INVOICE_NUMBER_PREFIX}-{year}-{seq:04d}",
+        series=INVOICE_NUMBER_PREFIX,
         year=year,
         seq=seq,
         user_id=user_id,

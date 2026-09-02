@@ -13,12 +13,14 @@ from src.models.user import User
 from src.models.user_billing_details import UserBillingDetails
 
 
-def _invoice(user_id, *, seq=1, ref=None):
+def _invoice(user_id=None, *, seq=1, ref=None, series="LTAI", liberclaw_account_id=None, number=None):
     return Invoice(
-        number=f"LTAI-2026-{seq:04d}",
+        number=number or f"{series}-2026-{seq:04d}",
         year=2026,
         seq=seq,
+        series=series,
         user_id=user_id,
+        liberclaw_account_id=liberclaw_account_id,
         issued_at=datetime(2026, 8, 24),
         payment_date=datetime(2026, 8, 1),
         external_reference=ref or f"revolut:ord_{uuid.uuid4().hex[:8]}",
@@ -67,3 +69,46 @@ async def test_billing_details_roundtrip(db):
     await db.flush()
     row = (await db.execute(select(UserBillingDetails).where(UserBillingDetails.user_id == user.id))).scalar_one()
     assert row.as_snapshot()["name"] == "ACME SARL"
+
+
+@pytest.mark.asyncio
+async def test_owner_check_requires_some_owner(db):
+    inv = _invoice(user_id=None)  # helper must allow None and omit liberclaw_account_id
+    db.add(inv)
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_liberclaw_owned_invoice_needs_no_user(db):
+    inv = _invoice(
+        user_id=None,
+        liberclaw_account_id=uuid.uuid4(),
+        series="LCLW",
+        number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+    )
+    db.add(inv)
+    await db.flush()
+    await db.commit()
+    await db.execute(delete(Invoice).where(Invoice.id == inv.id))
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_same_year_seq_allowed_across_series(db):
+    seq = uuid.uuid4().int % 9000 + 1000
+    user = User(email=f"inv-{uuid.uuid4().hex[:8]}@test.io")
+    db.add(user)
+    await db.flush()
+    db.add(_invoice(user.id, seq=seq, series="LTAI", number=f"LTAI-2026-{seq:04d}"))
+    db.add(
+        _invoice(
+            None,
+            seq=seq,
+            series="LCLW",
+            liberclaw_account_id=uuid.uuid4(),
+            number=f"LCLW-2026-{seq:04d}",
+        )
+    )
+    await db.flush()
