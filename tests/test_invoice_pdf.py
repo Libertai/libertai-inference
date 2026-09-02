@@ -112,6 +112,25 @@ def test_billing_details_rendered_and_escaped():
     assert "75002Paris".replace(" ", "") in text.replace(" ", "")
 
 
+def test_lclw_invoice_carries_claw_branding_and_same_seller():
+    inv = _invoice(
+        series="LCLW",
+        number="LCLW-2026-0042",
+        liberclaw_account_id=uuid.uuid4(),
+        user_id=None,
+        line_label="LiberClaw Starter subscription",
+    )
+    html = _render_html(inv)
+    assert 'viewBox="0 0 256 256"' in html and "LiberClaw" in html
+    text = _pdf_text(render_invoice_pdf(inv))
+    assert "INTELLIGENCE ARTIFICIELLE GENERALE" in re.sub(r"\s+", " ", text)
+
+
+def test_ltai_branding_unchanged():
+    html = _render_html(_invoice())
+    assert 'viewBox="0 0 852 149"' in html and "LiberClaw" not in html
+
+
 def test_facturx_xml_embedded_and_consistent():
     pdf = render_invoice_pdf(_invoice())
     _, xml_bytes = get_facturx_xml_from_pdf(pdf)
