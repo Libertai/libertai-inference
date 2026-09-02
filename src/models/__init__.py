@@ -8,6 +8,7 @@ from src.models.credit_transaction import CreditTransaction, CreditTransactionPr
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.invoice import Invoice
+from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
 from src.models.magic_link import MagicLink
@@ -30,6 +31,7 @@ __all__ = [
     "EntitlementWindow",
     "InferenceCall",
     "Invoice",
+    "LiberclawBillingDetails",
     "LiberclawCreditGrant",
     "LiberclawUser",
     "MagicLink",

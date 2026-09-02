@@ -5,7 +5,10 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
 
+from src.models.invoice import Invoice
+from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.user import User
 from src.models.user_billing_details import UserBillingDetails
 from src.services.invoice import issue_invoice
@@ -157,4 +160,78 @@ async def test_buyer_snapshot_includes_billing_details(db):
     )
     assert inv.buyer["email"] == user.email
     assert inv.buyer["name"] == "ACME SARL"
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_lclw_series_starts_at_one_while_ltai_rows_exist(db):
+    user = await _user(db)
+    ltai = await issue_invoice(
+        db,
+        user_id=user.id,
+        user_email=user.email,
+        external_reference=f"revolut:{uuid.uuid4().hex[:8]}",
+        gross_minor=1000,
+        currency="USD",
+        tax_minor=None,
+        payment_date=datetime(2026, 9, 1),
+        line_label="x",
+    )
+    await db.commit()
+    max_lclw_seq_before = (
+        await db.execute(select(func.coalesce(func.max(Invoice.seq), 0)).where(Invoice.series == "LCLW"))
+    ).scalar_one()
+    acct = uuid.uuid4()
+    lclw = await issue_invoice(
+        db,
+        series="LCLW",
+        liberclaw_account_id=acct,
+        user_email="c@d.e",
+        external_reference=f"revolut:{uuid.uuid4().hex[:8]}",
+        gross_minor=700,
+        currency="EUR",
+        tax_minor=None,
+        payment_date=datetime(2026, 9, 1),
+        line_label="LiberClaw Starter subscription",
+        provider_subscription_id="psub_x",
+        cycle_id="cyc_1",
+    )
+    await db.commit()
+    assert lclw.number.startswith("LCLW-") and lclw.seq == max_lclw_seq_before + 1
+    assert lclw.seq != ltai.seq or lclw.series != ltai.series  # explicit: separate sequences
+
+
+@pytest.mark.asyncio
+async def test_exactly_one_owner_required(db):
+    with pytest.raises(ValueError):
+        await issue_invoice(
+            db,
+            user_email="a@b.c",
+            external_reference="revolut:x",
+            gross_minor=100,
+            currency="USD",
+            tax_minor=None,
+            payment_date=datetime(2026, 9, 1),
+            line_label="x",
+        )
+
+
+@pytest.mark.asyncio
+async def test_lclw_buyer_uses_liberclaw_billing_details(db):
+    acct = uuid.uuid4()
+    db.add(LiberclawBillingDetails(liberclaw_account_id=acct, name="Claw Corp", country="France"))
+    await db.flush()
+    inv = await issue_invoice(
+        db,
+        series="LCLW",
+        liberclaw_account_id=acct,
+        user_email="c@d.e",
+        external_reference=f"revolut:{uuid.uuid4().hex[:8]}",
+        gross_minor=700,
+        currency="EUR",
+        tax_minor=None,
+        payment_date=datetime(2026, 9, 1),
+        line_label="LiberClaw Starter subscription",
+    )
+    assert inv.buyer["name"] == "Claw Corp" and inv.buyer["email"] == "c@d.e"
     await db.commit()
