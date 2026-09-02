@@ -6,6 +6,9 @@
   @page { size: A4; margin: 2cm; }
   body { font-family: "DejaVu Sans", sans-serif; font-size: 10pt; color: #1a1a1a; }
   .logo { width: 5.2cm; height: auto; }
+  .logo-row { display: flex; align-items: center; }
+  .logo-mark { width: 1.4cm; }
+  .wordmark { font-size: 16pt; font-weight: bold; vertical-align: middle; margin-left: 0.3cm; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; }
   .header .meta { text-align: right; }
   .header .meta h1 { font-size: 18pt; margin: 0 0 0.2em 0; letter-spacing: 0.06em; }
@@ -35,7 +38,10 @@
 </head>
 <body>
   <div class="header">
-    <svg viewBox="0 0 852 149" xmlns="http://www.w3.org/2000/svg" class="logo">{{ logo_paths }}</svg>
+    <div class="logo-row">
+      <svg viewBox="{{ logo_viewbox }}" xmlns="http://www.w3.org/2000/svg" class="logo{% if wordmark %} logo-mark{% endif %}">{{ logo_paths }}</svg>
+      {% if wordmark %}<span class="wordmark">{{ wordmark }}</span>{% endif %}
+    </div>
     <div class="meta">
       <h1>INVOICE</h1>
       <p class="number">{{ inv.number }}</p>
