@@ -23,8 +23,15 @@ LIBERCLAW_NET_CREDITS = InferenceCall.credits_used - sql_func.coalesce(Inference
 
 class LiberclawService:
     @staticmethod
-    async def get_or_create_api_key(user_id: str, user_type: str) -> LiberclawApiKeyResponse:
-        """Get existing or create new API key for a Liberclaw user."""
+    async def get_or_create_api_key(
+        user_id: str, user_type: str, liberclaw_account_id: uuid.UUID | None = None
+    ) -> LiberclawApiKeyResponse:
+        """Get existing or create new API key for a Liberclaw user.
+
+        ``liberclaw_account_id`` is stored when the row is created, and backfilled if
+        an existing row still has none — but never overwritten once set, since it is
+        the identity bridge invoices key off of.
+        """
         async with AsyncSessionLocal() as db:
             lc_user = (
                 (
@@ -39,9 +46,13 @@ class LiberclawService:
             )
 
             if not lc_user:
-                lc_user = LiberclawUser(user_id=user_id, user_type=user_type)
+                lc_user = LiberclawUser(
+                    user_id=user_id, user_type=user_type, liberclaw_account_id=liberclaw_account_id
+                )
                 db.add(lc_user)
                 await db.flush()
+            elif lc_user.liberclaw_account_id is None and liberclaw_account_id is not None:
+                lc_user.liberclaw_account_id = liberclaw_account_id
 
             existing_key = (
                 (

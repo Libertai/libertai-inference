@@ -47,7 +47,11 @@ _ISSUE_STATUS_CODES = {
 async def get_or_create_api_key(request: LiberclawApiKeyRequest) -> LiberclawApiKeyResponse:
     """Get or create an API key for a Liberclaw user."""
     try:
-        return await LiberclawService.get_or_create_api_key(user_id=request.user_id, user_type=request.user_type)
+        return await LiberclawService.get_or_create_api_key(
+            user_id=request.user_id,
+            user_type=request.user_type,
+            liberclaw_account_id=request.liberclaw_account_id,
+        )
     except Exception as e:
         logger.error(f"Error in get_or_create_api_key: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

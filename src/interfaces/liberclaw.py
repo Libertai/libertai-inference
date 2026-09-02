@@ -7,6 +7,9 @@ from pydantic import BaseModel, EmailStr, model_validator
 class LiberclawApiKeyRequest(BaseModel):
     user_id: str
     user_type: str
+    # LiberClaw's own users.id. Identity bridge to Invoice.liberclaw_account_id —
+    # stored on the LiberclawUser row when provided (never overwritten once set).
+    liberclaw_account_id: uuid.UUID | None = None
 
 
 class LiberclawTierUpdate(BaseModel):
