@@ -347,7 +347,9 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
 async def get_admin_all_api_keys() -> ApiKeyAdminListResponse:
     try:
         result = await ApiKeyService.get_admin_all_api_keys()
-        return ApiKeyAdminListResponse(keys=result.valid, invalid_keys=result.invalid)
+        return ApiKeyAdminListResponse(
+            keys=result.valid, invalid_keys=result.invalid, tiers=result.tiers
+        )
     except Exception as e:
         logger.error(f"Error getting all API keys: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")

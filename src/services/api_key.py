@@ -51,6 +51,9 @@ CLI_KEY_TTL_DAYS = 90
 class AdminApiKeys(NamedTuple):
     valid: list[str]
     invalid: dict[str, InvalidKeyInfo]
+    # key -> active tier name ("free", "go", "plus", "max" for user-owned keys;
+    # the liberclaw tier for liberclaw keys). Internal/shared keys are absent.
+    tiers: dict[str, str] = {}
 
 
 class ApiKeyService:
@@ -532,6 +535,7 @@ class ApiKeyService:
 
                 valid: list[str] = []
                 invalid: dict[str, InvalidKeyInfo] = {}
+                tiers: dict[str, str] = {}
                 now = datetime.now()
                 expired_keep_cutoff = now - timedelta(days=30)
 
@@ -713,6 +717,7 @@ class ApiKeyService:
                         lc_user = key.liberclaw_user
                         if lc_user is None:
                             continue
+                        tiers[key.key] = lc_user.tier
                         tier_config = get_tier_config(lc_user.tier)
                         effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0)
                         if liberclaw_usage.get(key.id, 0.0) >= effective_limit:
@@ -730,6 +735,7 @@ class ApiKeyService:
                         # Dual-window entitlement: free tier (or larger paid windows) by
                         # default, prepaid balance as the overflow path.
                         tier = get_tier(active_tiers.get(user_id, DEFAULT_TIER))
+                        tiers[key.key] = tier.name
                         prepaid = balances.get(user_id, 0.0)
                         source = compute_source(
                             tier,
@@ -750,7 +756,7 @@ class ApiKeyService:
                     # valid liberclaw/api/cli/chat/pool keys pass through
                     valid.append(key.key)
 
-                return AdminApiKeys(valid=valid, invalid=invalid)
+                return AdminApiKeys(valid=valid, invalid=invalid, tiers=tiers)
 
         except Exception as e:
             logger.error(f"Error getting all API keys: {e!s}", exc_info=True)
