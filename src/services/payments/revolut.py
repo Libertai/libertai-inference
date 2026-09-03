@@ -323,6 +323,31 @@ class RevolutProvider(PaymentProvider):
         resp.raise_for_status()
         return resp.json()
 
+    async def list_orders(self, *, limit: int = 500) -> list[dict]:
+        """Every order on the merchant account, newest first — reconcile-only tooling
+        (not part of the abstract provider interface).
+
+        Live-verified against production 2026-09-03: ``GET /api/orders`` silently ignores
+        every pagination param (``created_before``, ``starting_after``, ``cursor`` all
+        return the identical newest-first page); ``limit`` caps at 500 (``limit=1000`` is a
+        validation error). At that cap the account's complete history fit in one page (316
+        orders back to 2026-02-17), but there is no working way to fetch past it — a page
+        that comes back exactly at ``limit`` may be silently truncated and must never be
+        treated as the full ledger, so this raises instead of the reconcile trusting a
+        partial result.
+        """
+        resp = await self.client.get("/api/orders", params={"limit": limit})
+        resp.raise_for_status()
+        orders: list[dict] = resp.json()
+        if len(orders) >= limit:
+            raise RuntimeError(
+                f"Revolut order listing returned {len(orders)} orders at limit={limit} — "
+                "this API version has no working pagination, so the result may be truncated. "
+                "Reconcile cannot be trusted until this is resolved (newer API version or "
+                "a support ticket), not by raising the limit further."
+            )
+        return orders
+
     # ---- inbound webhook ----
     def parse_webhook(self, headers: dict, body: bytes) -> PaymentEvent:
         timestamp = headers.get("revolut-request-timestamp", "")
