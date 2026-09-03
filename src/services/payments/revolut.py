@@ -338,7 +338,8 @@ class RevolutProvider(PaymentProvider):
         """
         resp = await self.client.get("/api/orders", params={"limit": limit})
         resp.raise_for_status()
-        orders: list[dict] = resp.json()
+        # The live endpoint wraps the list: {"orders": [...]}.
+        orders: list[dict] = resp.json()["orders"]
         if len(orders) >= limit:
             raise RuntimeError(
                 f"Revolut order listing returned {len(orders)} orders at limit={limit} — "

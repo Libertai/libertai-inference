@@ -366,8 +366,9 @@ class _OrdersListResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def json(self) -> list[dict]:
-        return self._orders
+    def json(self) -> dict:
+        # Mirrors the live endpoint's envelope: {"orders": [...]}.
+        return {"orders": self._orders}
 
 
 class _OrdersListClient:
