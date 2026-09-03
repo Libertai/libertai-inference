@@ -34,13 +34,16 @@ import src.models.liberclaw_user
 import src.models.lifecycle_email_send
 import src.models.magic_link
 import src.models.oauth_connection
+import src.models.plan_subscription_event
 import src.models.session
+import src.models.user
 import src.models.user_billing_details
 import src.models.wallet_connection  # noqa: F401
 from src.models.base import AsyncSessionLocal
 from src.models.invoice import Invoice
 from src.models.plan_subscription import PlanSubscription
 from src.services.invoice import SERIES_LCLW
+from src.services.payments.manager import TOPUP_EXT_REF_PREFIX
 from src.services.payments.registry import payment_registry
 from src.utils.logger import setup_logger
 
@@ -56,7 +59,7 @@ def classify_order(order: dict, own_subscription_ids: set[str]) -> str:
     logs these for manual triage.
     """
     ext_ref = order.get("merchant_order_ext_ref") or ""
-    if ext_ref.startswith("topup:"):
+    if ext_ref.startswith(TOPUP_EXT_REF_PREFIX):
         return "own"
     channel_data = order.get("channel_data") or {}
     sub_id = channel_data.get("subscription_id")
@@ -104,10 +107,22 @@ async def check_lclw_cycle_uniqueness(db: AsyncSession) -> list[str]:
 
 async def check_orders_have_matching_invoice(db: AsyncSession, orders: list[dict]) -> list[str]:
     """Invariant 3: exactly one invoice across both series per enumerated order, with
-    gross/currency matching the settled amount."""
+    gross/currency matching the settled amount.
+
+    Zero-amount orders are excluded: issuance deliberately skips them (issue_invoice
+    no-ops on gross_minor <= 0), so no invoice is ever expected for one. An order
+    missing "amount" can't be checked either way — it's logged and skipped rather
+    than crashing the run.
+    """
     violations = []
     for order in orders:
         order_id = order["id"]
+        amount = order.get("amount")
+        if amount is None:
+            logger.error(f"Unclassifiable order in reconcile (missing amount): {order_id}")
+            continue
+        if amount == 0:
+            continue
         ref = f"revolut:{order_id}"
         rows = (
             await db.execute(select(Invoice.gross_amount, Invoice.currency).where(Invoice.external_reference == ref))
@@ -119,7 +134,7 @@ async def check_orders_have_matching_invoice(db: AsyncSession, orders: list[dict
             violations.append(f"{order_id}: {len(rows)} invoices found")
             continue
         gross_amount, currency = rows[0]
-        expected_gross = (Decimal(order["amount"]) / 100).quantize(Decimal("0.01"))
+        expected_gross = (Decimal(amount) / 100).quantize(Decimal("0.01"))
         if gross_amount != expected_gross or currency != order.get("currency"):
             violations.append(
                 f"{order_id}: gross mismatch (invoice={gross_amount} {currency}, "

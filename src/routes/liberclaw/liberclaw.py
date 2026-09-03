@@ -132,10 +132,7 @@ async def issue_invoice(body: LiberclawInvoiceIssueRequest) -> Response:
     """
     provider = payment_registry.get("revolut")
     async with AsyncSessionLocal() as db:
-        try:
-            result = await issue_for_liberclaw(db, provider, body)
-        except ValueError as e:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        result = await issue_for_liberclaw(db, provider, body)
         await db.commit()
     return JSONResponse(
         status_code=_ISSUE_STATUS_CODES.get(result.status, status.HTTP_200_OK),
@@ -152,7 +149,9 @@ async def list_invoices(
     page_size = min(page_size, MAX_PAGE_SIZE)
     async with AsyncSessionLocal() as db:
         if not await account_is_known(db, liberclaw_account_id):
-            logger.error(
+            # info, not error: the bridge only fills via sync_key_entitlement, so most
+            # accounts are unseen here at flag flip — this fires on every such read.
+            logger.info(
                 f"LiberClaw invoice list read for account never seen by the identity bridge: {liberclaw_account_id}"
             )
         rows = (
@@ -173,7 +172,8 @@ async def list_invoices(
             )
         ).scalar_one()
     if total == 0:
-        logger.error(f"No LiberClaw invoices found for account {liberclaw_account_id}")
+        # info, not error: every routine no-invoice Settings view hits this.
+        logger.info(f"No LiberClaw invoices found for account {liberclaw_account_id}")
     return InvoiceListResponse(items=items, total=total)
 
 
@@ -239,12 +239,15 @@ async def download_invoice_pdf(invoice_id: uuid.UUID, liberclaw_account_id: uuid
 async def get_billing_details(liberclaw_account_id: uuid.UUID) -> BillingDetailsResponse:
     async with AsyncSessionLocal() as db:
         if not await account_is_known(db, liberclaw_account_id):
-            logger.error(
+            # info, not error: the bridge only fills via sync_key_entitlement, so most
+            # accounts are unseen here at flag flip — this fires on every such read.
+            logger.info(
                 f"LiberClaw billing-details read for account never seen by the identity bridge: {liberclaw_account_id}"
             )
         details = await db.get(LiberclawBillingDetails, liberclaw_account_id)
         if details is None:
-            logger.error(f"No LiberClaw billing details found for account {liberclaw_account_id}")
+            # info, not error: every routine no-details Settings view hits this.
+            logger.info(f"No LiberClaw billing details found for account {liberclaw_account_id}")
             return BillingDetailsResponse()
         return BillingDetailsResponse(**details.as_snapshot())
 

@@ -5,8 +5,11 @@ the three invariant queries, seeded against real Invoice rows.
 import uuid
 from datetime import datetime
 
+import pytest
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 
+from scripts import reconcile_invoices
 from scripts.reconcile_invoices import (
     check_lclw_cycle_uniqueness,
     check_orders_have_matching_invoice,
@@ -107,18 +110,18 @@ async def test_sequence_gapless_clean_when_contiguous():
 # --------------------------------------------------------------------- invariant 2: LCLW cycle uniqueness
 
 
-async def test_lclw_cycle_uniqueness_detects_duplicate():
+async def test_lclw_cycle_uniqueness_rejected_at_insert():
+    """uq_invoices_lclw_sub_cycle (a DB-level partial unique index) now enforces this
+    invariant directly, so a duplicate (provider_subscription_id, cycle_id) can no longer
+    reach the table for check_lclw_cycle_uniqueness to find — the second insert fails."""
     sub_id = f"psub_{uuid.uuid4().hex}"
     cycle_id = "cyc_1"
     ref_a = f"revolut:{uuid.uuid4().hex}"
     ref_b = f"revolut:{uuid.uuid4().hex}"
     try:
         await _seed(ref_a, provider_subscription_id=sub_id, cycle_id=cycle_id)
-        await _seed(ref_b, provider_subscription_id=sub_id, cycle_id=cycle_id)
-
-        async with AsyncSessionLocal() as db:
-            violations = await check_lclw_cycle_uniqueness(db)
-        assert any(sub_id in v and cycle_id in v for v in violations)
+        with pytest.raises(IntegrityError):
+            await _seed(ref_b, provider_subscription_id=sub_id, cycle_id=cycle_id)
     finally:
         await _cleanup(ref_a, ref_b)
 
@@ -172,3 +175,31 @@ async def test_orders_have_matching_invoice_detects_gross_mismatch():
         assert any("gross mismatch" in v for v in violations)
     finally:
         await _cleanup(ref)
+
+
+async def test_orders_have_matching_invoice_skips_zero_amount_order():
+    """issue_invoice no-ops on gross_minor <= 0, so a zero-amount completed order must
+    never be flagged for lacking an invoice."""
+    order = {"id": f"ord_{uuid.uuid4().hex}", "amount": 0, "currency": "EUR"}
+    async with AsyncSessionLocal() as db:
+        violations = await check_orders_have_matching_invoice(db, [order])
+    assert violations == []
+
+
+async def test_orders_have_matching_invoice_logs_and_skips_missing_amount(monkeypatch):
+    """An order missing "amount" can't be checked either way -- it must be logged and
+    skipped, not crash the run with a KeyError.
+
+    reconcile_invoices' logger has propagate=False (see src/utils/logger.py), which
+    keeps its records out of caplog's root-logger capture -- so this asserts on the
+    logger call directly instead.
+    """
+    order = {"id": f"ord_{uuid.uuid4().hex}", "currency": "EUR"}
+    logged: list[str] = []
+    monkeypatch.setattr(reconcile_invoices.logger, "error", lambda msg: logged.append(msg))
+
+    async with AsyncSessionLocal() as db:
+        violations = await check_orders_have_matching_invoice(db, [order])
+
+    assert violations == []
+    assert any(order["id"] in msg for msg in logged)

@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -73,6 +74,14 @@ class Invoice(Base):
         # >= 1, not == 1: the phase-1 identity merge may add user_id to LCLW rows without
         # rewriting an immutable archive.
         CheckConstraint("num_nonnulls(user_id, liberclaw_account_id) >= 1", name="check_invoice_has_owner"),
+        # DB-level backstop for the per-cycle-per-subscription uniqueness reconcile checks.
+        Index(
+            "uq_invoices_lclw_sub_cycle",
+            "provider_subscription_id",
+            "cycle_id",
+            unique=True,
+            postgresql_where=text("series = 'LCLW' AND cycle_id IS NOT NULL"),
+        ),
     )
 
     def __init__(

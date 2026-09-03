@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import delete, select
 
 from src.config import config
@@ -18,11 +19,17 @@ from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from src.services.invoice import issue_invoice
+from src.services.invoice import SERIES_LTAI, issue_invoice
 from src.services.payments.registry import payment_registry
 from tests.test_payment_manager import FakeProvider
 
-HEADERS = {"x-liberclaw-token": config.LIBERCLAW_SECRET}
+TEST_SECRET = "test-liberclaw-secret"
+HEADERS = {"x-liberclaw-token": TEST_SECRET}
+
+
+@pytest.fixture(autouse=True)
+def _liberclaw_secret(monkeypatch):
+    monkeypatch.setattr(config, "LIBERCLAW_SECRET", TEST_SECRET)
 
 
 class LiberclawFakeProvider(FakeProvider):
@@ -179,6 +186,42 @@ async def test_duplicate_resubmit_same_number_no_provider_call(async_client, mon
         assert fake.get_order_calls == calls_after_first  # lock-free pre-check: no provider I/O
     finally:
         await _cleanup(account_id=account_id)
+
+
+async def test_external_reference_claimed_by_ltai_is_rejected_foreign(async_client, monkeypatch):
+    """The unique external_reference collision issue_invoice reports as None can be won by an
+    LTAI-series row (unrelated to this order's foreign-order screen). The fallback re-read must
+    never leak that row's number over the LCLW channel."""
+    fake = _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    order_id = f"ord_{uuid.uuid4().hex}"
+    fake.orders[order_id] = _order(channel_data={})
+    user = await _make_user()
+    try:
+        async with AsyncSessionLocal() as db:
+            await issue_invoice(
+                db,
+                series=SERIES_LTAI,
+                user_id=user.id,
+                user_email=user.email,
+                external_reference=f"revolut:{order_id}",
+                gross_minor=1200,
+                currency="EUR",
+                tax_minor=None,
+                payment_date=datetime(2026, 9, 1),
+                line_label="Prepaid credits",
+            )
+            await db.commit()
+
+        resp = await async_client.post(
+            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
+        )
+        assert resp.status_code == 409
+        assert resp.json()["status"] == "rejected_foreign"
+        assert resp.json()["number"] is None
+        assert await _invoice_count(account_id) == 0
+    finally:
+        await _cleanup(account_id=account_id, user_id=user.id)
 
 
 # --------------------------------------------------------------------- 3. issue by provider_subscription_id
@@ -650,6 +693,7 @@ async def test_unknown_tier_is_422(async_client, monkeypatch):
         "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, tier="enterprise")
     )
     assert resp.status_code == 422
+    assert resp.json()["status"] == "unresolvable"
 
 
 async def test_both_order_references_given_is_422(async_client):
@@ -663,6 +707,15 @@ async def test_both_order_references_given_is_422(async_client):
 
 async def test_neither_order_reference_given_is_422(async_client):
     resp = await async_client.post("/liberclaw/invoices", headers=HEADERS, json=_post())
+    assert resp.status_code == 422
+
+
+async def test_cycle_id_with_order_id_is_422(async_client):
+    resp = await async_client.post(
+        "/liberclaw/invoices",
+        headers=HEADERS,
+        json=_post(order_id="ord_x", cycle_id="cyc_1"),
+    )
     assert resp.status_code == 422
 
 

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from weasyprint import HTML
 
 from src.models.invoice import Invoice
+from src.services.invoice import SERIES_LCLW
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -318,7 +319,7 @@ def build_cii_xml(inv: Invoice) -> bytes:
 
 
 def _render_html(invoice: Invoice) -> str:
-    if invoice.series == "LCLW":
+    if invoice.series == SERIES_LCLW:
         logo = Markup(f'<path d="{CLAW_LOGO_PATH}" fill="#111111"/>')
         viewbox, wordmark = "0 0 256 256", "LiberClaw"
     else:
