@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
 
 from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -53,7 +53,7 @@ class AdminApiKeys(NamedTuple):
     invalid: dict[str, InvalidKeyInfo]
     # key -> active tier name ("free", "go", "plus", "max" for user-owned keys;
     # the liberclaw tier for liberclaw keys). Internal/shared keys are absent.
-    tiers: dict[str, str] = {}
+    tiers: ClassVar[dict[str, str]] = {}
 
 
 class ApiKeyService:
