@@ -23,27 +23,45 @@ LIBERCLAW_NET_CREDITS = InferenceCall.credits_used - sql_func.coalesce(Inference
 
 class LiberclawService:
     @staticmethod
+    async def resolve_by_account_id(db, account_id: uuid.UUID) -> LiberclawUser | None:
+        """Identity-bridge lookup by liberclaw_account_id. Stable across the email
+        changes that used to mint duplicate rows — callers holding an account id
+        must try this before falling back to (user_id, user_type)."""
+        return (
+            (await db.execute(select(LiberclawUser).where(LiberclawUser.liberclaw_account_id == account_id)))
+            .scalars()
+            .first()
+        )
+
+    @staticmethod
     async def get_or_create_api_key(
         user_id: str, user_type: str, liberclaw_account_id: uuid.UUID | None = None
     ) -> LiberclawApiKeyResponse:
         """Get existing or create new API key for a Liberclaw user.
 
-        ``liberclaw_account_id`` is stored when the row is created, and backfilled if
-        an existing row still has none — but never overwritten once set, since it is
-        the identity bridge invoices key off of.
+        Resolves by ``liberclaw_account_id`` first (falls back to (user_id, user_type)
+        for legacy rows with no account id yet). ``liberclaw_account_id`` is stored
+        when the row is created, and backfilled if an existing row still has none —
+        but never overwritten once set, since it is the identity bridge invoices key
+        off of. When resolution hits on account id and the stored email differs from
+        the incoming one, the stored email is refreshed in place (same row).
         """
         async with AsyncSessionLocal() as db:
-            lc_user = (
-                (
-                    await db.execute(
-                        select(LiberclawUser).where(
-                            LiberclawUser.user_id == user_id, LiberclawUser.user_type == user_type
+            lc_user = None
+            if liberclaw_account_id is not None:
+                lc_user = await LiberclawService.resolve_by_account_id(db, liberclaw_account_id)
+            if lc_user is None:
+                lc_user = (
+                    (
+                        await db.execute(
+                            select(LiberclawUser).where(
+                                LiberclawUser.user_id == user_id, LiberclawUser.user_type == user_type
+                            )
                         )
                     )
+                    .scalars()
+                    .first()
                 )
-                .scalars()
-                .first()
-            )
 
             if not lc_user:
                 lc_user = LiberclawUser(
@@ -51,8 +69,13 @@ class LiberclawService:
                 )
                 db.add(lc_user)
                 await db.flush()
-            elif lc_user.liberclaw_account_id is None and liberclaw_account_id is not None:
-                lc_user.liberclaw_account_id = liberclaw_account_id
+            else:
+                if lc_user.liberclaw_account_id is None and liberclaw_account_id is not None:
+                    lc_user.liberclaw_account_id = liberclaw_account_id
+                # user_id is only email-shaped for user_type="email" — discord/telegram
+                # ids don't get refreshed off of a LiberClaw email change.
+                if user_type == "email" and lc_user.user_id != user_id:
+                    lc_user.user_id = user_id
 
             existing_key = (
                 (
@@ -126,26 +149,42 @@ class LiberclawService:
             return True
 
     @staticmethod
-    async def update_tier(user_id: str, user_type: str, tier: str) -> None:
-        """Update tier for a Liberclaw user. Raises ValueError if tier invalid or user not found."""
+    async def update_tier(
+        user_id: str, user_type: str, tier: str, liberclaw_account_id: uuid.UUID | None = None
+    ) -> None:
+        """Update tier for a Liberclaw user. Raises ValueError if tier invalid or user not found.
+
+        Resolves by ``liberclaw_account_id`` first when given (falls back to
+        (user_id, user_type)), refreshing the stored email in place on an account-id
+        hit — same as ``get_or_create_api_key``.
+        """
         if tier not in LIBERCLAW_TIERS:
             raise ValueError(f"Invalid tier '{tier}'. Valid tiers: {list(LIBERCLAW_TIERS.keys())}")
 
         async with AsyncSessionLocal() as db:
-            lc_user = (
-                (
-                    await db.execute(
-                        select(LiberclawUser).where(
-                            LiberclawUser.user_id == user_id, LiberclawUser.user_type == user_type
+            lc_user = None
+            if liberclaw_account_id is not None:
+                lc_user = await LiberclawService.resolve_by_account_id(db, liberclaw_account_id)
+            if lc_user is None:
+                lc_user = (
+                    (
+                        await db.execute(
+                            select(LiberclawUser).where(
+                                LiberclawUser.user_id == user_id, LiberclawUser.user_type == user_type
+                            )
                         )
                     )
+                    .scalars()
+                    .first()
                 )
-                .scalars()
-                .first()
-            )
 
             if not lc_user:
                 raise ValueError(f"Liberclaw user not found: {user_id} ({user_type})")
+
+            if lc_user.liberclaw_account_id is None and liberclaw_account_id is not None:
+                lc_user.liberclaw_account_id = liberclaw_account_id
+            if user_type == "email" and lc_user.user_id != user_id:
+                lc_user.user_id = user_id
 
             lc_user.tier = tier
             await db.commit()
@@ -267,16 +306,51 @@ class LiberclawService:
             if not lc_user:
                 raise ValueError(f"Liberclaw user not found: {user_id} ({user_type})")
 
-            db.add(
-                LiberclawCreditGrant(
-                    liberclaw_user_id=lc_user.id,
-                    amount=amount,
-                    external_reference=external_reference,
+            return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference)
+
+    @staticmethod
+    async def grant_extra_credits_by_account_id(
+        db, account_id: uuid.UUID, amount: float, external_reference: str
+    ) -> float:
+        """Fixed-amount grant keyed by liberclaw_account_id, for callers that already
+        hold the account id rather than (user_id, user_type). Idempotent on
+        ``external_reference`` like ``grant_extra_credits``. Raises ValueError on an
+        unknown account.
+        """
+        existing = (
+            (
+                await db.execute(
+                    select(LiberclawCreditGrant).where(LiberclawCreditGrant.external_reference == external_reference)
                 )
             )
-            await db.commit()
-            logger.info(f"Granted {amount} extra credits to liberclaw user {lc_user.id} ({external_reference})")
-            return amount
+            .scalars()
+            .first()
+        )
+        if existing:
+            return existing.amount
+
+        lc_user = await LiberclawService.resolve_by_account_id(db, account_id)
+        if not lc_user:
+            logger.error(f"grant_extra_credits_by_account_id: unknown liberclaw account {account_id}")
+            raise ValueError(f"Liberclaw account not found: {account_id}")
+
+        return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference)
+
+    @staticmethod
+    async def _create_grant(db, lc_user_id: uuid.UUID, amount: float, external_reference: str) -> float:
+        """Insert + commit a credit grant row. Callers must have already checked
+        ``external_reference`` for an existing grant (idempotency is their concern,
+        not this helper's)."""
+        db.add(
+            LiberclawCreditGrant(
+                liberclaw_user_id=lc_user_id,
+                amount=amount,
+                external_reference=external_reference,
+            )
+        )
+        await db.commit()
+        logger.info(f"Granted {amount} extra credits to liberclaw user {lc_user_id} ({external_reference})")
+        return amount
 
     @staticmethod
     async def lock_grants(db, liberclaw_user_id: uuid.UUID) -> list[LiberclawCreditGrant]:
