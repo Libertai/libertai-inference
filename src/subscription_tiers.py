@@ -28,6 +28,10 @@ logger = setup_logger(__name__)
 DEFAULT_TIER = "free"
 DEFAULT_CURRENCY = "USD"
 
+# Product namespaces for the tier registry. Series stay LTAI (libertai) / LCLW (liberclaw).
+PRODUCT_LIBERTAI = "libertai"
+PRODUCT_LIBERCLAW = "liberclaw"
+
 
 @dataclass(frozen=True)
 class TierConfig:
@@ -163,12 +167,91 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
 TIER_ORDER: dict[str, int] = {name: i for i, name in enumerate(SUBSCRIPTION_TIERS)}
 PAID_TIERS: set[str] = {name for name, cfg in SUBSCRIPTION_TIERS.items() if cfg.is_paid}
 
+LIBERCLAW_SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
+    "free": TierConfig(
+        name="free",
+        price_cents=0,
+        currency="EUR",
+        window_5h_credits=0.0,
+        weekly_credits=0.0,
+        provider_plan_ids={},
+    ),
+    "starter": TierConfig(
+        name="starter",
+        price_cents=700,
+        currency="EUR",
+        window_5h_credits=0.0,
+        weekly_credits=0.0,
+        provider_plan_ids={
+            "revolut": {
+                "EUR": {
+                    "plan_id": "a9a0b97f-753f-4e13-ac60-f86733809dce",
+                    "variation_id": "88e34b68-abea-497a-9743-01874274dcdf",
+                },
+            }
+        },
+    ),
+    "pro": TierConfig(
+        name="pro",
+        price_cents=1900,
+        currency="EUR",
+        window_5h_credits=0.0,
+        weekly_credits=0.0,
+        provider_plan_ids={
+            "revolut": {
+                "EUR": {
+                    "plan_id": "c4c23aef-c39d-419d-99b6-f84034102615",
+                    "variation_id": "2bdb31f1-78d5-48ad-88eb-c9c41fac57ef",
+                },
+            }
+        },
+    ),
+    "team": TierConfig(
+        name="team",
+        price_cents=4900,
+        currency="EUR",
+        window_5h_credits=0.0,
+        weekly_credits=0.0,
+        provider_plan_ids={
+            "revolut": {
+                "EUR": {
+                    "plan_id": "d66f42c8-5b08-4dc0-9bd1-8f17f3f70b7b",
+                    "variation_id": "71a36c44-4277-495d-9258-6eba1c325559",
+                },
+            }
+        },
+    ),
+}
 
-def get_tier(tier: str) -> TierConfig:
-    cfg = SUBSCRIPTION_TIERS.get(tier)
+# Product -> tier name -> config. LiberClaw entries are billed in EUR only, unlike LTAI's USD/EUR plans.
+TIERS: dict[str, dict[str, TierConfig]] = {
+    PRODUCT_LIBERTAI: SUBSCRIPTION_TIERS,
+    PRODUCT_LIBERCLAW: LIBERCLAW_SUBSCRIPTION_TIERS,
+}
+DEFAULT_TIERS: dict[str, str] = {product: "free" for product in TIERS}
+
+
+def _tiers_for(product: str) -> dict[str, TierConfig]:
+    # Reads the SUBSCRIPTION_TIERS *name* (not TIERS[PRODUCT_LIBERTAI]) so tests that
+    # monkeypatch module-level SUBSCRIPTION_TIERS keep working for the default product.
+    if product == PRODUCT_LIBERTAI:
+        return SUBSCRIPTION_TIERS
+    return TIERS.get(product, {})
+
+
+def get_tier(tier: str, product: str = PRODUCT_LIBERTAI) -> TierConfig:
+    cfg = _tiers_for(product).get(tier)
     if cfg is None:
         raise ValueError(f"Unknown tier: {tier}")
     return cfg
+
+
+def tier_order(product: str = PRODUCT_LIBERTAI) -> dict[str, int]:
+    return {name: i for i, name in enumerate(_tiers_for(product))}
+
+
+def paid_tiers(product: str = PRODUCT_LIBERTAI) -> set[str]:
+    return {name for name, cfg in _tiers_for(product).items() if cfg.is_paid}
 
 
 @lru_cache(maxsize=1)
@@ -177,24 +260,29 @@ def _revolut_plan_overrides() -> dict:
 
     Lets an environment point at a different Revolut merchant environment than the
     in-code production ids — e.g. beta runs against the SANDBOX, whose plans have
-    their own ids. Shape: {"go": {"USD": {"plan_id": ..., "variation_id": ...}, ...}, ...}.
+    their own ids. Shape: {"libertai": {"go": {"USD": {...}}}, "liberclaw": {"starter": {...}}}.
+    A top-level key matching an LTAI tier name is the legacy (pre-product) shape —
+    beta env compatibility — and is treated as {"libertai": <raw>}.
     Tiers/currencies absent from the override fall back to the in-code ids.
     """
     raw = config.REVOLUT_PLAN_IDS
     if not raw:
         return {}
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         logger.error("REVOLUT_PLAN_IDS is not valid JSON; ignoring the override")
         return {}
+    if any(key in SUBSCRIPTION_TIERS for key in parsed):
+        return {PRODUCT_LIBERTAI: parsed}
+    return parsed
 
 
-def get_provider_plan(tier: str, provider: str, currency: str) -> dict[str, str]:
+def get_provider_plan(tier: str, provider: str, currency: str, product: str = PRODUCT_LIBERTAI) -> dict[str, str]:
     """Return the {plan_id, variation_id} for a tier on a given provider in a given currency."""
-    plan = get_tier(tier).provider_plan_ids.get(provider, {}).get(currency)
+    plan = get_tier(tier, product).provider_plan_ids.get(provider, {}).get(currency)
     if provider == "revolut":
-        plan = _revolut_plan_overrides().get(tier, {}).get(currency) or plan
+        plan = _revolut_plan_overrides().get(product, {}).get(tier, {}).get(currency) or plan
     if not plan:
         raise ValueError(f"Tier {tier!r} is not sold through provider {provider!r} in currency {currency!r}")
     if any(value.startswith("TODO") for value in plan.values()):
@@ -204,9 +292,11 @@ def get_provider_plan(tier: str, provider: str, currency: str) -> dict[str, str]
     return plan
 
 
-def is_upgrade(current_tier: str, new_tier: str) -> bool:
-    return TIER_ORDER.get(new_tier, 0) > TIER_ORDER.get(current_tier, 0)
+def is_upgrade(current_tier: str, new_tier: str, product: str = PRODUCT_LIBERTAI) -> bool:
+    order = tier_order(product)
+    return order.get(new_tier, 0) > order.get(current_tier, 0)
 
 
-def is_downgrade(current_tier: str, new_tier: str) -> bool:
-    return TIER_ORDER.get(new_tier, 0) < TIER_ORDER.get(current_tier, 0)
+def is_downgrade(current_tier: str, new_tier: str, product: str = PRODUCT_LIBERTAI) -> bool:
+    order = tier_order(product)
+    return order.get(new_tier, 0) < order.get(current_tier, 0)
