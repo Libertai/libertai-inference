@@ -354,3 +354,55 @@ async def test_no_event_when_the_order_is_not_a_completed_payment(order):
 async def test_a_non_subscription_provider_reports_it_cannot_reconcile():
     with pytest.raises(UnsupportedCapability):
         await SolanaPaymentProvider(contract_address=None).missed_activation_event("x")
+
+
+# --- list_orders: single-page fetch, no working pagination on this API version ---
+
+
+class _OrdersListResponse:
+    def __init__(self, orders: list[dict]):
+        self._orders = orders
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> list[dict]:
+        return self._orders
+
+
+class _OrdersListClient:
+    is_closed = False
+
+    def __init__(self, orders: list[dict]):
+        self.orders = orders
+        self.requested_params: dict | None = None
+
+    async def get(self, path: str, params: dict | None = None) -> _OrdersListResponse:
+        assert path == "/api/orders"
+        self.requested_params = params
+        return _OrdersListResponse(self.orders)
+
+
+@pytest.mark.asyncio
+async def test_list_orders_returns_all_orders_under_the_cap():
+    provider = _provider()
+    client = _OrdersListClient([{"id": f"ord_{i}"} for i in range(3)])
+    provider._client = client
+
+    orders = await provider.list_orders()
+
+    assert [o["id"] for o in orders] == ["ord_0", "ord_1", "ord_2"]
+    assert client.requested_params == {"limit": 500}
+
+
+@pytest.mark.asyncio
+async def test_list_orders_raises_when_page_is_exactly_at_the_limit():
+    """A page landing exactly at ``limit`` can't be told apart from a truncated one —
+    this API version's pagination params are silently ignored, so it must never be
+    treated as the complete ledger."""
+    provider = _provider()
+    client = _OrdersListClient([{"id": f"ord_{i}"} for i in range(5)])
+    provider._client = client
+
+    with pytest.raises(RuntimeError, match="may be truncated"):
+        await provider.list_orders(limit=5)
