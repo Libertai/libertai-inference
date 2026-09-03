@@ -83,3 +83,14 @@ class IssueResult(BaseModel):
     status: str
     invoice_id: uuid.UUID | None = None
     number: str | None = None
+
+
+class SubscriptionCycle(BaseModel):
+    cycle_id: str
+    order_id: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+class SubscriptionCyclesResponse(BaseModel):
+    cycles: list[SubscriptionCycle]

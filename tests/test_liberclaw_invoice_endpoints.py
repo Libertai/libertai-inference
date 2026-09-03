@@ -664,3 +664,93 @@ async def test_both_order_references_given_is_422(async_client):
 async def test_neither_order_reference_given_is_422(async_client):
     resp = await async_client.post("/liberclaw/invoices", headers=HEADERS, json=_post())
     assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------- 11. subscription-cycles listing
+
+
+async def test_subscription_cycles_walks_chain_newest_first(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+    sub_id = "psub_chain"
+    fake.cycles["cyc_3"] = {
+        "order_id": "ord_3",
+        "start_date": "2026-09-01",
+        "end_date": "2026-10-01",
+        "previous_cycle_id": "cyc_2",
+    }
+    fake.cycles["cyc_2"] = {
+        "order_id": "ord_2",
+        "start_date": "2026-08-01",
+        "end_date": "2026-09-01",
+        "previous_cycle_id": "cyc_1",
+    }
+    fake.cycles["cyc_1"] = {"order_id": "ord_1", "start_date": "2026-07-01", "end_date": "2026-08-01"}
+    fake.current_cycle_ids[sub_id] = "cyc_3"
+
+    resp = await async_client.get(
+        "/liberclaw/subscription-cycles", headers=HEADERS, params={"provider_subscription_id": sub_id}
+    )
+    assert resp.status_code == 200
+    cycles = resp.json()["cycles"]
+    assert [c["cycle_id"] for c in cycles] == ["cyc_3", "cyc_2", "cyc_1"]
+    assert [c["order_id"] for c in cycles] == ["ord_3", "ord_2", "ord_1"]
+    assert cycles[0]["start_date"] == "2026-09-01"
+
+
+async def test_subscription_cycles_includes_null_order_id(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+    sub_id = "psub_null_order"
+    fake.cycles["cyc_1"] = {"order_id": None, "start_date": "2026-07-01", "end_date": "2026-08-01"}
+    fake.current_cycle_ids[sub_id] = "cyc_1"
+
+    resp = await async_client.get(
+        "/liberclaw/subscription-cycles", headers=HEADERS, params={"provider_subscription_id": sub_id}
+    )
+    assert resp.status_code == 200
+    cycles = resp.json()["cycles"]
+    assert len(cycles) == 1
+    assert cycles[0]["order_id"] is None
+
+
+async def test_subscription_cycles_caps_at_36(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+    sub_id = "psub_long_chain"
+    n = 40
+    for i in range(n):
+        cycle_id = f"cyc_{i}"
+        previous = f"cyc_{i + 1}" if i + 1 < n else None
+        fake.cycles[cycle_id] = {"order_id": f"ord_{i}", "previous_cycle_id": previous}
+    fake.current_cycle_ids[sub_id] = "cyc_0"
+
+    resp = await async_client.get(
+        "/liberclaw/subscription-cycles", headers=HEADERS, params={"provider_subscription_id": sub_id}
+    )
+    assert resp.status_code == 200
+    cycles = resp.json()["cycles"]
+    assert len(cycles) == 36
+    assert cycles[0]["cycle_id"] == "cyc_0"
+    assert cycles[-1]["cycle_id"] == "cyc_35"
+
+
+async def test_subscription_cycles_unresolvable_sub_is_422(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+
+    async def _raise(*args, **kwargs):
+        raise ValueError("Subscription unknown_sub has no current cycle")
+
+    fake.get_current_cycle = _raise
+
+    resp = await async_client.get(
+        "/liberclaw/subscription-cycles", headers=HEADERS, params={"provider_subscription_id": "unknown_sub"}
+    )
+    assert resp.status_code == 422
+
+
+async def test_subscription_cycles_requires_token(async_client, monkeypatch):
+    _install_fake_provider(monkeypatch)
+    resp = await async_client.get(
+        "/liberclaw/subscription-cycles",
+        headers={"x-liberclaw-token": "wrong"},
+        params={"provider_subscription_id": "psub_x"},
+    )
+    assert resp.status_code == 401
