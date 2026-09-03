@@ -1,5 +1,7 @@
+import asyncio
 import uuid
 
+import httpx
 from fastapi import Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -19,6 +21,8 @@ from src.interfaces.liberclaw import (
     LiberclawInvoiceIssueRequest,
     LiberclawTierUpdate,
     LiberclawUserResponse,
+    SubscriptionCycle,
+    SubscriptionCyclesResponse,
 )
 from src.models.base import AsyncSessionLocal
 from src.models.invoice import Invoice
@@ -35,6 +39,14 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 MAX_PAGE_SIZE = 100
+
+# Hops walked back via previous_cycle_id before giving up — bounds one request's cost
+# against a malformed or unexpectedly long chain.
+MAX_CYCLES = 36
+
+# Sleep between successive get_cycle hops — caps this walk at ~10 provider calls/s
+# regardless of the caller's own pacing (the backfill script's 2 req/s is separate).
+CYCLE_WALK_DELAY_SECONDS = 0.1
 
 # HTTP status per issuance outcome; anything else (issued, duplicate, skipped_*) is 200.
 _ISSUE_STATUS_CODES = {
@@ -163,6 +175,38 @@ async def list_invoices(
     if total == 0:
         logger.error(f"No LiberClaw invoices found for account {liberclaw_account_id}")
     return InvoiceListResponse(items=items, total=total)
+
+
+@router.get("/subscription-cycles", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def list_subscription_cycles(provider_subscription_id: str) -> SubscriptionCyclesResponse:
+    """Walk a subscription's cycle chain for the LiberClaw backfill script.
+
+    Newest first, via ``get_current_cycle`` then ``previous_cycle_id`` (capped at
+    MAX_CYCLES hops). Entries may carry a null ``order_id`` — callers skip them.
+    """
+    provider = payment_registry.get("revolut")
+    cycles: list[SubscriptionCycle] = []
+    try:
+        cycle = await provider.get_current_cycle(provider_subscription_id)
+        cycle_id = cycle.get("id")
+        while cycle_id is not None and len(cycles) < MAX_CYCLES:
+            cycles.append(
+                SubscriptionCycle(
+                    cycle_id=cycle_id,
+                    order_id=cycle.get("order_id"),
+                    start_date=cycle.get("start_date"),
+                    end_date=cycle.get("end_date"),
+                )
+            )
+            previous_cycle_id = cycle.get("previous_cycle_id")
+            if previous_cycle_id is None:
+                break
+            await asyncio.sleep(CYCLE_WALK_DELAY_SECONDS)
+            cycle = await provider.get_cycle(provider_subscription_id, previous_cycle_id)
+            cycle_id = previous_cycle_id
+    except (ValueError, httpx.HTTPError) as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    return SubscriptionCyclesResponse(cycles=cycles)
 
 
 @router.get("/invoices/{invoice_id}/pdf", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
