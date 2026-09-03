@@ -171,6 +171,9 @@ class ApiKeyListResponse(BaseModel):
 class ApiKeyAdminListResponse(BaseModel):
     keys: list[str]
     invalid_keys: dict[str, InvalidKeyInfo] = {}
+    # key -> active tier name ("free"/"go"/"plus"/"max"; liberclaw tier for
+    # liberclaw keys). Internal/shared keys are absent.
+    tiers: dict[str, str] = {}
 
 
 class ChatApiKeyResponse(BaseModel):
