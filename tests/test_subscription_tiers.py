@@ -6,14 +6,19 @@ import os
 import pytest
 
 import src.subscription_tiers as tiers
+from src import liberclaw_tiers
 from src.config import config
 from src.subscription_tiers import (
     DEFAULT_CURRENCY,
+    DEFAULT_TIERS,
     PAID_TIERS,
+    PRODUCT_LIBERCLAW,
     SUBSCRIPTION_TIERS,
     TIER_ORDER,
+    TIERS,
     get_provider_plan,
     get_tier,
+    is_downgrade,
     is_upgrade,
 )
 
@@ -152,3 +157,37 @@ def test_order_and_paid_set():
     assert PAID_TIERS == {"go", "plus", "max"}
     assert is_upgrade("free", "max") is True
     assert is_upgrade("max", "go") is False
+
+
+def test_liberclaw_tiers_exist_with_free():
+    assert set(TIERS[PRODUCT_LIBERCLAW]) == {"free", "starter", "pro", "team"}
+    assert TIERS[PRODUCT_LIBERCLAW]["free"].price_cents == 0
+    assert TIERS[PRODUCT_LIBERCLAW]["starter"].price_cents == 700
+    assert TIERS[PRODUCT_LIBERCLAW]["pro"].price_cents == 1900
+    assert TIERS[PRODUCT_LIBERCLAW]["team"].price_cents == 4900
+
+
+def test_liberclaw_default_tier_and_ordering():
+    assert DEFAULT_TIERS[PRODUCT_LIBERCLAW] == "free"
+    assert is_upgrade("starter", "pro", product=PRODUCT_LIBERCLAW)
+    assert is_downgrade("team", "free", product=PRODUCT_LIBERCLAW)
+    assert not is_upgrade("pro", "pro", product=PRODUCT_LIBERCLAW)
+
+
+def test_liberclaw_plans_are_eur_only():
+    plan = get_provider_plan("starter", "revolut", "EUR", product=PRODUCT_LIBERCLAW)
+    assert plan == {
+        "plan_id": "a9a0b97f-753f-4e13-ac60-f86733809dce",
+        "variation_id": "88e34b68-abea-497a-9743-01874274dcdf",
+    }
+    with pytest.raises(ValueError):
+        get_provider_plan("starter", "revolut", "USD", product=PRODUCT_LIBERCLAW)
+
+
+def test_libertai_signatures_unchanged_by_default():
+    assert get_tier("go").price_cents == 800  # no product arg == LTAI
+
+
+def test_tier_names_match_entitlement_registry():
+    # Money registry and entitlement-caps registry must never drift (spec: corrected premises).
+    assert set(TIERS[PRODUCT_LIBERCLAW]) == set(liberclaw_tiers.LIBERCLAW_TIERS)
