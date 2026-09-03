@@ -88,7 +88,10 @@ async def issue_for_liberclaw(
     db: AsyncSession, provider: PaymentProvider, payload: LiberclawInvoiceIssueRequest
 ) -> IssueResult:
     if payload.tier not in LIBERCLAW_TIERS:
-        raise ValueError(f"Unknown LiberClaw tier: {payload.tier!r}")
+        # Stays inside the {status: ...} envelope like every other 422 outcome here — a
+        # bare HTTPException detail would be a different shape for the client to parse.
+        logger.error(f"LiberClaw invoice issuance for unknown tier: {payload.tier!r}")
+        return _audited("unresolvable", payload.liberclaw_account_id, payload.order_id)
     if not await account_is_known(db, payload.liberclaw_account_id):
         logger.error(
             f"LiberClaw invoice issuance for account never seen by the identity bridge: {payload.liberclaw_account_id}"
@@ -194,9 +197,18 @@ async def issue_for_liberclaw(
         # Our lock-free pre-check missed a race that issue_invoice's lock-held check caught.
         # A collision on an ext_ref we did not just create is never routine.
         logger.error(f"issue_invoice reported a duplicate for {external_reference} it did not just create")
-        existing_number = (
-            await db.execute(select(Invoice.number).where(Invoice.external_reference == external_reference))
-        ).scalar_one()
-        return _audited("duplicate", payload.liberclaw_account_id, order_id, number=existing_number)
+        claiming = (
+            await db.execute(
+                select(Invoice.number, Invoice.series).where(Invoice.external_reference == external_reference)
+            )
+        ).one()
+        if claiming.series != SERIES_LCLW:
+            # The row that won the race is on another series (e.g. LTAI) — never leak its
+            # number over this channel.
+            logger.error(
+                f"issue_invoice collision for {external_reference} was claimed by series {claiming.series!r}, not LCLW"
+            )
+            return _audited("rejected_foreign", payload.liberclaw_account_id, order_id)
+        return _audited("duplicate", payload.liberclaw_account_id, order_id, number=claiming.number)
 
     return _audited("issued", payload.liberclaw_account_id, order_id, invoice_id=invoice.id, number=invoice.number)

@@ -20,7 +20,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("invoices", sa.Column("series", sa.String(), nullable=True))
+    # server_default kept permanently (not dropped post-backfill): old replicas mid-rolling-deploy
+    # INSERT without a series column and would otherwise violate the NOT NULL below.
+    op.add_column("invoices", sa.Column("series", sa.String(), nullable=True, server_default="LTAI"))
     op.execute("UPDATE invoices SET series = 'LTAI'")
     op.alter_column("invoices", "series", existing_type=sa.String(), nullable=False)
     op.add_column("invoices", sa.Column("liberclaw_account_id", sa.UUID(), nullable=True))

@@ -13,7 +13,17 @@ from src.models.user import User
 from src.models.user_billing_details import UserBillingDetails
 
 
-def _invoice(user_id=None, *, seq=1, ref=None, series="LTAI", liberclaw_account_id=None, number=None):
+def _invoice(
+    user_id=None,
+    *,
+    seq=1,
+    ref=None,
+    series="LTAI",
+    liberclaw_account_id=None,
+    number=None,
+    provider_subscription_id=None,
+    cycle_id=None,
+):
     return Invoice(
         number=number or f"{series}-2026-{seq:04d}",
         year=2026,
@@ -21,6 +31,8 @@ def _invoice(user_id=None, *, seq=1, ref=None, series="LTAI", liberclaw_account_
         series=series,
         user_id=user_id,
         liberclaw_account_id=liberclaw_account_id,
+        provider_subscription_id=provider_subscription_id,
+        cycle_id=cycle_id,
         issued_at=datetime(2026, 8, 24),
         payment_date=datetime(2026, 8, 1),
         external_reference=ref or f"revolut:ord_{uuid.uuid4().hex[:8]}",
@@ -109,6 +121,99 @@ async def test_same_year_seq_allowed_across_series(db):
             series="LCLW",
             liberclaw_account_id=uuid.uuid4(),
             number=f"LCLW-2026-{seq:04d}",
+        )
+    )
+    await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_lclw_duplicate_sub_cycle_rejected(db):
+    sub_id = f"psub_{uuid.uuid4().hex}"
+    cycle_id = "cyc_1"
+    account_id = uuid.uuid4()
+    db.add(
+        _invoice(
+            None,
+            seq=1,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id=cycle_id,
+        )
+    )
+    await db.flush()
+    db.add(
+        _invoice(
+            None,
+            seq=2,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id=cycle_id,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_lclw_distinct_cycles_allowed(db):
+    sub_id = f"psub_{uuid.uuid4().hex}"
+    account_id = uuid.uuid4()
+    db.add(
+        _invoice(
+            None,
+            seq=1,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id="cyc_1",
+        )
+    )
+    db.add(
+        _invoice(
+            None,
+            seq=2,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id="cyc_2",
+        )
+    )
+    await db.flush()
+
+
+@pytest.mark.asyncio
+async def test_lclw_null_cycle_id_unaffected_by_uniqueness(db):
+    """The partial index only guards non-NULL cycle_id — rows without one (e.g. pre-cycle
+    invoices) can share a provider_subscription_id freely."""
+    sub_id = f"psub_{uuid.uuid4().hex}"
+    account_id = uuid.uuid4()
+    db.add(
+        _invoice(
+            None,
+            seq=1,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id=None,
+        )
+    )
+    db.add(
+        _invoice(
+            None,
+            seq=2,
+            series="LCLW",
+            liberclaw_account_id=account_id,
+            number=f"LCLW-2026-{uuid.uuid4().int % 9000 + 1000}",
+            provider_subscription_id=sub_id,
+            cycle_id=None,
         )
     )
     await db.flush()

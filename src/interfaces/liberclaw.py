@@ -76,6 +76,8 @@ class LiberclawInvoiceIssueRequest(BaseModel):
     def _exactly_one_order_reference(self) -> "LiberclawInvoiceIssueRequest":
         if (self.order_id is None) == (self.provider_subscription_id is None):
             raise ValueError("Provide exactly one of order_id or provider_subscription_id")
+        if self.cycle_id is not None and self.order_id is not None:
+            raise ValueError("cycle_id may only accompany provider_subscription_id")
         return self
 
 
