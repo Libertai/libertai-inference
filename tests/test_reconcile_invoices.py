@@ -52,27 +52,27 @@ async def _seed(ref: str, **overrides) -> Invoice:
 
 def test_classify_own_topup():
     order = {"merchant_order_ext_ref": "topup:abc", "channel_data": {}}
-    assert classify_order(order, own_subscription_ids=set()) == "own"
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "own"
 
 
 def test_classify_own_subscription():
     order = {"channel_data": {"subscription_id": "psub_own"}}
-    assert classify_order(order, own_subscription_ids={"psub_own"}) == "own"
+    assert classify_order(order, own_subscription_ids={"psub_own"}, own_topup_order_ids=set()) == "own"
 
 
 def test_classify_liberclaw_positive():
     order = {"channel_data": {"subscription_id": "lc_sub_1"}, "description": "LiberClaw Pro #3"}
-    assert classify_order(order, own_subscription_ids=set()) == "liberclaw"
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "liberclaw"
 
 
 def test_classify_unclassifiable_without_description_corroboration():
     order = {"channel_data": {"subscription_id": "lc_sub_1"}, "description": "Something else"}
-    assert classify_order(order, own_subscription_ids=set()) == "unclassifiable"
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "unclassifiable"
 
 
 def test_classify_unclassifiable_no_subscription_id():
     order = {"channel_data": {}}
-    assert classify_order(order, own_subscription_ids=set()) == "unclassifiable"
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "unclassifiable"
 
 
 # --------------------------------------------------------------------- invariant 1: gap-free sequence
@@ -203,3 +203,10 @@ async def test_orders_have_matching_invoice_logs_and_skips_missing_amount(monkey
 
     assert violations == []
     assert any(order["id"] in msg for msg in logged)
+
+
+def test_topup_without_ext_ref_classified_own_via_credit_transactions():
+    """The orders-list payload omits merchant_order_ext_ref; a matching
+    credit_transactions row is the definitive topup marker."""
+    order = {"id": "ord_topup_1", "state": "completed", "type": "payment"}
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids={"ord_topup_1"}) == "own"

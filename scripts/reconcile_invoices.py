@@ -40,6 +40,7 @@ import src.models.user
 import src.models.user_billing_details
 import src.models.wallet_connection  # noqa: F401
 from src.models.base import AsyncSessionLocal
+from src.models.credit_transaction import CreditTransaction
 from src.models.invoice import Invoice
 from src.models.plan_subscription import PlanSubscription
 from src.services.invoice import SERIES_LCLW
@@ -50,16 +51,17 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-def classify_order(order: dict, own_subscription_ids: set[str]) -> str:
+def classify_order(order: dict, own_subscription_ids: set[str], own_topup_order_ids: set[str]) -> str:
     """Label an enumerated order for the report.
 
-    "own": inference's own order (a topup ext_ref, or a subscription id matching a local
+    "own": inference's own order (a topup — matched via credit_transactions, because the
+    list payload omits ``merchant_order_ext_ref`` — or a subscription id matching a local
     plan_subscriptions row). "liberclaw": a foreign subscription id corroborated by a
     "LiberClaw" description prefix. "unclassifiable": neither signal lines up — the caller
     logs these for manual triage.
     """
     ext_ref = order.get("merchant_order_ext_ref") or ""
-    if ext_ref.startswith(TOPUP_EXT_REF_PREFIX):
+    if ext_ref.startswith(TOPUP_EXT_REF_PREFIX) or order.get("id") in own_topup_order_ids:
         return "own"
     channel_data = order.get("channel_data") or {}
     sub_id = channel_data.get("subscription_id")
@@ -167,11 +169,23 @@ async def main() -> None:
             ).scalars()
             if sub_id is not None
         }
+        # The list payload omits merchant_order_ext_ref, so topups are recognized by their
+        # credit_transactions rows ("revolut:<order_id>") instead.
+        own_topup_order_ids = {
+            ref.split(":", 1)[1]
+            for ref in (
+                await db.execute(
+                    select(CreditTransaction.external_reference).where(
+                        CreditTransaction.external_reference.like("revolut:%")
+                    )
+                )
+            ).scalars()
+        }
         orders = await enumerate_completed_orders(provider)
 
         classifications: Counter[str] = Counter()
         for order in orders:
-            label = classify_order(order, own_subscription_ids)
+            label = classify_order(order, own_subscription_ids, own_topup_order_ids)
             classifications[label] += 1
             if label == "unclassifiable":
                 logger.error(f"Unclassifiable order in reconcile: {order.get('id')}")
