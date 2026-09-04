@@ -86,6 +86,10 @@ class _Config:
     # Gates PaymentManager ownership of LiberClaw subscriptions (webhooks, snapshot push/retry,
     # reconcile/expire/sweep LCLW scope). Off: LCLW-resolved webhook events 200-skip, never 5xx.
     LIBERCLAW_BILLING_ENABLED: bool
+    # LiberClaw's backend, for the subscription-state snapshot push (src/services/payments/tier_push.py).
+    # An empty URL or secret disables push regardless of LIBERCLAW_BILLING_ENABLED (logged once).
+    LIBERCLAW_API_URL: str
+    LIBERCLAW_PUSH_SECRET: str
 
     def __init__(self):
         load_dotenv()
@@ -168,6 +172,8 @@ class _Config:
         # Subscription tiers
         self.SUBSCRIPTION_TIER_LIMITS = os.getenv("SUBSCRIPTION_TIER_LIMITS", "")
         self.LIBERCLAW_BILLING_ENABLED = os.getenv("LIBERCLAW_BILLING_ENABLED", "False").lower() == "true"
+        self.LIBERCLAW_API_URL = os.getenv("LIBERCLAW_API_URL", "")
+        self.LIBERCLAW_PUSH_SECRET = os.getenv("LIBERCLAW_PUSH_SECRET", "")
 
 
 config = _Config()
