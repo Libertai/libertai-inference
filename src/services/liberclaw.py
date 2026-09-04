@@ -371,6 +371,20 @@ class LiberclawService:
         return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference, commit=False)
 
     @staticmethod
+    async def update_tier_by_account_id(db, account_id: uuid.UUID, tier: str) -> None:
+        """Sync ``lc_users.tier`` for a webhook-driven effective-tier change, keyed by
+        ``liberclaw_account_id``. Flush-only: the caller (PaymentManager) owns the webhook
+        transaction. An unknown account is logged and skipped rather than raised — tier
+        enforcement degrades, but only the invoice email lookup is allowed to fail the webhook.
+        """
+        lc_user = await LiberclawService.resolve_by_account_id(db, account_id)
+        if lc_user is None:
+            logger.error(f"update_tier_by_account_id: unknown liberclaw account {account_id}")
+            return
+        lc_user.tier = tier
+        await db.flush()
+
+    @staticmethod
     async def _create_grant(
         db, lc_user_id: uuid.UUID, amount: float, external_reference: str, commit: bool = True
     ) -> float:
