@@ -716,6 +716,7 @@ class PaymentManager:
         fraction of the old cycle times its monthly price lands on the prepaid balance.
         Idempotent via the per-subscription transaction hash.
         """
+        assert old_sub.user_id is not None  # libertai rows always carry user_id
         start, end = old_sub.current_period_start, old_sub.current_period_end
         if not start or not end:
             return  # never-activated sub: nothing was paid for
@@ -797,6 +798,7 @@ class PaymentManager:
         # Per-user mutex for the whole webhook. Row-level ordering cannot serve here:
         # _resolve_subscription runs first (it is what yields the user id), so any FOR UPDATE
         # it took would sit outside the ordering.
+        assert sub.user_id is not None  # libertai rows always carry user_id
         await self._lock_user(sub.user_id)
         locked_sub = await self._resolve_subscription(event, lock=True)
         if not locked_sub:
@@ -1210,6 +1212,7 @@ class PaymentManager:
             .with_for_update()
         )
         for sub in stale.scalars().all():
+            assert sub.user_id is not None  # libertai rows always carry user_id
             if await self._active_subscription(sub.user_id, lock=False):
                 continue
             # A webhook can activate a new pending sub between the check above and this

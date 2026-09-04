@@ -89,7 +89,7 @@ async def test_get_global_subscriptions_revenue_excludes_liberclaw_tier_and_warn
 
 
 async def test_all_subscription_timelines_default_product_excludes_liberclaw():
-    """LCLW rows have user_id=NULL (CheckConstraint enforces exactly one owner column set), so a
+    """LCLW rows have user_id=NULL (CheckConstraint enforces at least one owner column set), so a
     correctly product-filtered LTAI timeline set never contains a None user_id."""
     await _seed_ltai_and_lclw_active_subs()
 
