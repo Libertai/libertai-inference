@@ -17,6 +17,7 @@ from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
 from src.services.entitlement import get_allowance_state
 from src.services.users import get_or_create_user_by_email, get_or_create_user_by_wallet
+from src.subscription_tiers import get_tier
 
 
 async def _seed_user_with_credits(address: str, amount: float):
@@ -26,6 +27,9 @@ async def _seed_user_with_credits(address: str, amount: float):
         user_id = user.id
     await CreditService.add_credits_for_user(user_id, amount, CreditTransactionProvider.voucher)
     return user_id
+
+
+FREE_5H = get_tier("free").window_5h_credits
 
 
 async def _balance(user_id) -> float:
@@ -42,31 +46,35 @@ async def test_per_user_chat_window_then_overflow_to_prepaid():
     user_id = await _seed_user_with_credits(address, 10.0)
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=address)
 
-    # First call stays within the free window (5h cap 0.5, weekly cap 2.0): covered by tier.
-    ok = await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=0.4, model_name="test-model")
+    # First call stays within the free 5h window: covered by tier.
+    ok = await ApiKeyService.register_inference_call(
+        key=chat_key.full_key, credits_used=FREE_5H * 0.8, model_name="test-model"
+    )
     assert ok is True
     assert await _balance(user_id) == pytest.approx(10.0)  # within free window — not charged
 
     # Second call pushes cumulative usage past the free window -> overflow draws from prepaid.
-    ok = await ApiKeyService.register_inference_call(key=chat_key.full_key, credits_used=2.0, model_name="test-model")
+    ok = await ApiKeyService.register_inference_call(
+        key=chat_key.full_key, credits_used=FREE_5H * 4, model_name="test-model"
+    )
     assert ok is True
     assert await _balance(user_id) < 10.0  # overflow charged to prepaid
 
 
 async def test_call_within_tighter_window_then_split_charge():
-    """Pin the split-charge math across two calls. Free tier: 5h=0.5, weekly=2.0.
-    Call 1 (0.5) exactly fills the 5h window -> fully tier-covered, no charge.
-    Call 2 (1.0) finds 5h remaining 0.0 -> entirely overflow -> balance 10.0 - 1.0 = 9.0."""
+    """Pin the split-charge math across two calls.
+    Call 1 exactly fills the free 5h window -> fully tier-covered, no charge.
+    Call 2 finds 5h remaining 0.0 -> entirely overflow -> charged in full against prepaid."""
     address = "0xA9100000000000000000000000000000000000021"
     user_id = await _seed_user_with_credits(address, 10.0)
 
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="split", user_address=address)
 
-    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.5, model_name="test-model")
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=FREE_5H, model_name="test-model")
     assert await _balance(user_id) == pytest.approx(10.0)  # exactly fills the 5h window, nothing overflows
 
     await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=1.0, model_name="test-model")
-    assert await _balance(user_id) == pytest.approx(9.0)  # 5h window full -> whole 1.0 overflows to prepaid
+    assert await _balance(user_id) == pytest.approx(9.0)  # 5h window full -> the whole call overflows to prepaid
 
 
 async def test_shared_free_chat_key_never_deducts(monkeypatch):
@@ -98,9 +106,8 @@ async def test_shared_free_chat_key_never_deducts(monkeypatch):
 
 async def test_api_key_usage_beyond_free_window_charges_only_overflow():
     """A single call straddling the free window is charged ONLY for its overflow, not in full.
-    The free tier's tighter window is 5h=0.5 (weekly=2.0), so a 3.0-credit call against an empty
-    window is covered 0.5 by the tier and overflows 2.5 to prepaid -> balance 10.0 - 2.5 = 7.5.
-    Falsifiable: the pre-fix behavior charged the full 3.0 (balance 7.0)."""
+    A 3.0-credit call against an empty window is covered up to the tighter (5h) allowance and
+    only the rest reaches prepaid. Falsifiable: the pre-fix behavior charged the full 3.0."""
     address = "0xA9100000000000000000000000000000000000011"
     user_id = await _seed_user_with_credits(address, 10.0)
 
@@ -109,7 +116,7 @@ async def test_api_key_usage_beyond_free_window_charges_only_overflow():
     ok = await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=3.0, model_name="test-model")
 
     assert ok is True
-    assert await _balance(user_id) == pytest.approx(7.5)
+    assert await _balance(user_id) == pytest.approx(10.0 - (3.0 - FREE_5H))
 
 
 async def test_concurrent_first_calls_both_register():
@@ -143,22 +150,22 @@ async def test_concurrent_first_calls_both_register():
 
 async def test_prepaid_overflow_does_not_drain_window_allowance():
     """The prepaid-paid portion of a call must not count against the windows.
-    Free tier: 5h=0.5, weekly=2.0. Call 1 (0.5) exactly fills the 5h window (tier-covered).
-    Call 2 (1.0) finds the 5h window full -> fully prepaid-paid -> weekly usage must stay
-    at 0.5, not 1.5. Falsifiable: pre-fix, window sums used credits_used and weekly read 1.5."""
+    Call 1 exactly fills the free 5h window (tier-covered). Call 2 finds it full -> fully
+    prepaid-paid -> weekly usage must stay at call 1's amount. Falsifiable: pre-fix, the
+    window summed credits_used and the weekly total included call 2."""
     address = "0xA9100000000000000000000000000000000000031"
     user_id = await _seed_user_with_credits(address, 10.0)
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="window-split", user_address=address)
 
-    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=0.5, model_name="m")
+    await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=FREE_5H, model_name="m")
     await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=1.0, model_name="m")
     assert await _balance(user_id) == pytest.approx(9.0)  # only the second call hit prepaid
 
     async with AsyncSessionLocal() as db:
         state = await get_allowance_state(db, user_id)
-    assert state.window_5h_used == pytest.approx(0.5)
-    # The prepaid-paid 1.0 must not appear in the weekly window.
-    assert state.weekly_used == pytest.approx(0.5)
+    assert state.window_5h_used == pytest.approx(FREE_5H)
+    # The prepaid-paid second call must not appear in the weekly window.
+    assert state.weekly_used == pytest.approx(FREE_5H)
 
 
 async def test_chat_key_whitelisted_at_gateway_with_zero_balance():

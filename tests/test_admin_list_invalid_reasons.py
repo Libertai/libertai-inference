@@ -13,7 +13,7 @@ from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.services.api_key import ApiKeyService
 from src.services.api_key_pool import POOL_SENTINEL_NAME
-from tests.test_admin_list_enforcement import _cleanup, _cleanup_liberclaw, _setup, _setup_liberclaw
+from tests.test_admin_list_enforcement import FREE_5H, _cleanup, _cleanup_liberclaw, _setup, _setup_liberclaw
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,8 +78,8 @@ async def test_deleted_key_in_neither_list():
 
 
 async def test_no_credits_reason():
-    # Free 5h window exhausted (limit 0.5), no prepaid.
-    user_id, key = await _setup(usage=0.5, window="active")
+    # Free 5h window exhausted, no prepaid.
+    user_id, key = await _setup(usage=FREE_5H, window="active")
     try:
         res = await _admin()
         assert res.invalid[key].reason == InvalidKeyReason.no_credits
@@ -89,7 +89,7 @@ async def test_no_credits_reason():
 
 async def test_extra_credit_cap_reason():
     # Window exhausted; prepaid exists but monthly cap consumed by overflow.
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
     try:
         res = await _admin()
         assert res.invalid[key].reason == InvalidKeyReason.extra_credit_cap

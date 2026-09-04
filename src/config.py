@@ -79,6 +79,11 @@ class _Config:
     # own plan ids): {"go": {"USD": {"plan_id": ..., "variation_id": ...}, ...}, ...}
     REVOLUT_PLAN_IDS: str
 
+    # Per-tier rolling-window credit allowances, configured per environment.
+    # JSON: {"free": {"window_5h": ..., "weekly": ...}, ...}. Required for every tier;
+    # an incomplete or missing value stops the app from starting.
+    SUBSCRIPTION_TIER_LIMITS: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
@@ -156,6 +161,9 @@ class _Config:
         self.REVOLUT_API_URL = os.getenv("REVOLUT_API_URL", "https://merchant.revolut.com")
         self.REVOLUT_API_VERSION = os.getenv("REVOLUT_API_VERSION", "2026-04-20")
         self.REVOLUT_PLAN_IDS = os.getenv("REVOLUT_PLAN_IDS", "")
+
+        # Subscription tiers
+        self.SUBSCRIPTION_TIER_LIMITS = os.getenv("SUBSCRIPTION_TIER_LIMITS", "")
 
 
 config = _Config()

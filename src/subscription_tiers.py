@@ -4,6 +4,7 @@ A tier defines two things:
   1. Recurring **entitlement windows** (Phase 4) — a trailing-5h and trailing-7d
      credit allowance that every user gets (even with no paid subscription, via
      the ``free`` tier). Exhausting a window falls through to prepaid balance.
+     The allowance numbers live in ``SUBSCRIPTION_TIER_LIMITS`` (env), not here.
   2. **Provider plan IDs** — the per-provider identifiers needed to open a
      subscription checkout. Keyed by provider id so the same tier can be sold
      through Revolut today and another fiat provider tomorrow without touching
@@ -48,21 +49,62 @@ class TierConfig:
         return self.price_cents > 0
 
 
+_TIER_NAMES = ("free", "go", "plus", "max")
+
+
+def _limits_error(detail: str) -> RuntimeError:
+    return RuntimeError(f"SUBSCRIPTION_TIER_LIMITS {detail}")
+
+
+def _load_tier_limits() -> dict[str, tuple[float, float]]:
+    """Parse ``SUBSCRIPTION_TIER_LIMITS`` into {tier: (window_5h, weekly)}.
+
+    Raises at import so a deployment missing (or mistyping) the variable fails to
+    start rather than silently serving wrong allowances.
+    """
+    raw = config.SUBSCRIPTION_TIER_LIMITS
+    if not raw:
+        raise _limits_error('is not set; expected {"<tier>": {"window_5h": <n>, "weekly": <n>}, ...}')
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise _limits_error(f"is not valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise _limits_error("must be a JSON object keyed by tier name")
+
+    limits: dict[str, tuple[float, float]] = {}
+    for name in _TIER_NAMES:
+        entry = parsed.get(name)
+        if not isinstance(entry, dict):
+            raise _limits_error(f"is missing tier {name!r}")
+        values: list[float] = []
+        for key in ("window_5h", "weekly"):
+            value = entry.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+                raise _limits_error(f"[{name!r}][{key!r}] must be a non-negative number")
+            values.append(float(value))
+        limits[name] = (values[0], values[1])
+    return limits
+
+
+_LIMITS = _load_tier_limits()
+
+
 SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
     "free": TierConfig(
         name="free",
         price_cents=0,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=0.5,
-        weekly_credits=2.0,
+        window_5h_credits=_LIMITS["free"][0],
+        weekly_credits=_LIMITS["free"][1],
         provider_plan_ids={},
     ),
     "go": TierConfig(
         name="go",
         price_cents=800,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=2.5,
-        weekly_credits=10.0,
+        window_5h_credits=_LIMITS["go"][0],
+        weekly_credits=_LIMITS["go"][1],
         provider_plan_ids={
             # One Revolut plan per tier; currency is a plan VARIATION (EUR variation is VAT-inclusive: 20% VAT within the price).
             "revolut": {
@@ -81,8 +123,8 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         name="plus",
         price_cents=2000,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=7.0,
-        weekly_credits=30.0,
+        window_5h_credits=_LIMITS["plus"][0],
+        weekly_credits=_LIMITS["plus"][1],
         provider_plan_ids={
             "revolut": {
                 "USD": {
@@ -100,8 +142,8 @@ SUBSCRIPTION_TIERS: dict[str, TierConfig] = {
         name="max",
         price_cents=10000,
         currency=DEFAULT_CURRENCY,
-        window_5h_credits=50.0,
-        weekly_credits=300.0,
+        window_5h_credits=_LIMITS["max"][0],
+        weekly_credits=_LIMITS["max"][1],
         provider_plan_ids={
             "revolut": {
                 "USD": {

@@ -1,7 +1,12 @@
 """Tier table is Free/Go/Plus/Max in USD, ordered, with Go/Plus/Max paid."""
 
+import json
+import os
+
 import pytest
 
+import src.subscription_tiers as tiers
+from src.config import config
 from src.subscription_tiers import (
     DEFAULT_CURRENCY,
     PAID_TIERS,
@@ -19,12 +24,55 @@ def test_tiers_are_free_go_plus_max_usd():
     assert all(t.currency == "USD" for t in SUBSCRIPTION_TIERS.values())
 
 
-def test_tier_prices_and_windows():
+def test_tier_prices():
     free, go, plus, max_ = get_tier("free"), get_tier("go"), get_tier("plus"), get_tier("max")
-    assert (free.price_cents, free.window_5h_credits, free.weekly_credits) == (0, 0.5, 2.0)
-    assert (go.price_cents, go.window_5h_credits, go.weekly_credits) == (800, 2.5, 10.0)
-    assert (plus.price_cents, plus.window_5h_credits, plus.weekly_credits) == (2000, 7.0, 30.0)
-    assert (max_.price_cents, max_.window_5h_credits, max_.weekly_credits) == (10000, 50.0, 300.0)
+    assert (free.price_cents, go.price_cents, plus.price_cents, max_.price_cents) == (0, 800, 2000, 10000)
+
+
+def test_windows_come_from_the_env():
+    """Allowances are read from SUBSCRIPTION_TIER_LIMITS, not from the table in code."""
+    configured = json.loads(os.environ["SUBSCRIPTION_TIER_LIMITS"])
+    for name, entry in configured.items():
+        tier = get_tier(name)
+        assert (tier.window_5h_credits, tier.weekly_credits) == (float(entry["window_5h"]), float(entry["weekly"]))
+
+
+def test_load_reads_the_current_env(monkeypatch):
+    monkeypatch.setattr(
+        config, "SUBSCRIPTION_TIER_LIMITS", json.dumps(_replaced("free", {"window_5h": 1.5, "weekly": 3}))
+    )
+    assert tiers._load_tier_limits()["free"] == (1.5, 3.0)
+
+
+_COMPLETE = {
+    "free": {"window_5h": 1, "weekly": 4},
+    "go": {"window_5h": 4, "weekly": 16},
+    "plus": {"window_5h": 10, "weekly": 40},
+    "max": {"window_5h": 60, "weekly": 400},
+}
+
+
+def _replaced(tier: str, entry: dict) -> dict:
+    return {**_COMPLETE, tier: entry}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "{not json",
+        "[]",
+        json.dumps({"free": _COMPLETE["free"]}),  # tiers missing
+        json.dumps(_replaced("go", {"window_5h": 4})),  # key missing
+        json.dumps(_replaced("go", {"window_5h": -1, "weekly": 16})),  # negative
+        json.dumps(_replaced("go", {"window_5h": "4", "weekly": 16})),  # not a number
+    ],
+)
+def test_incomplete_limits_refuse_to_load(monkeypatch, raw):
+    """A missing or malformed value stops the app; it never falls back to a default."""
+    monkeypatch.setattr(config, "SUBSCRIPTION_TIER_LIMITS", raw)
+    with pytest.raises(RuntimeError, match="SUBSCRIPTION_TIER_LIMITS"):
+        tiers._load_tier_limits()
 
 
 def test_get_provider_plan_per_currency():
@@ -40,8 +88,6 @@ def test_get_provider_plan_per_currency():
 
 def test_get_provider_plan_placeholder_ids_raise(monkeypatch):
     """The TODO guard stays: a tier whose ids are placeholders must never reach Revolut."""
-    import src.subscription_tiers as tiers
-
     fake = dict(SUBSCRIPTION_TIERS)
     go = fake["go"]
     fake["go"] = type(go)(
@@ -58,17 +104,12 @@ def test_get_provider_plan_placeholder_ids_raise(monkeypatch):
 
 
 def _set_plan_override(monkeypatch, raw: str):
-    import src.subscription_tiers as tiers
-    from src.config import config
-
     monkeypatch.setattr(config, "REVOLUT_PLAN_IDS", raw)
     tiers._revolut_plan_overrides.cache_clear()
 
 
 def test_env_override_replaces_revolut_plan_ids(monkeypatch):
     """REVOLUT_PLAN_IDS (e.g. sandbox ids on beta) wins over the in-code production ids."""
-    import src.subscription_tiers as tiers
-
     _set_plan_override(
         monkeypatch,
         '{"go": {"USD": {"plan_id": "sbx_plan", "variation_id": "sbx_var"}}}',
@@ -83,8 +124,6 @@ def test_env_override_replaces_revolut_plan_ids(monkeypatch):
 
 
 def test_env_override_bad_json_falls_back(monkeypatch):
-    import src.subscription_tiers as tiers
-
     _set_plan_override(monkeypatch, "{not json")
     try:
         plan = get_provider_plan("go", "revolut", "USD")

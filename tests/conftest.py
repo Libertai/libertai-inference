@@ -48,6 +48,15 @@ TEST_DATABASE_URL = _resolve_test_db_url()
 # Make the app bind its engine/session to the test DB when src is imported below.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
+# Tier allowances come from the env (SUBSCRIPTION_TIER_LIMITS); these fixed test values keep
+# the suite independent of whatever a developer or deployment has configured. Set before src.
+os.environ["SUBSCRIPTION_TIER_LIMITS"] = (
+    '{"free": {"window_5h": 1, "weekly": 4},'
+    ' "go": {"window_5h": 4, "weekly": 16},'
+    ' "plus": {"window_5h": 10, "weekly": 40},'
+    ' "max": {"window_5h": 60, "weekly": 400}}'
+)
+
 
 def _ensure_test_database_exists() -> None:
     url = make_url(TEST_DATABASE_URL)
