@@ -4,7 +4,6 @@ from typing import NamedTuple
 
 from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func as sql_func
 
 from src.config import config
@@ -14,32 +13,26 @@ from src.interfaces.api_keys import (
     CliApiKey,
     FullApiKey,
     InvalidKeyInfo,
-    InvalidKeyReason,
     invalid_key_info,
 )
 from src.liberclaw_tiers import get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
-from src.models.user import User
 from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
-    CHARGEABLE_KEY_TYPES,
-    PREPAID_MIN,
-    WINDOW_5H,
-    WINDOW_WEEKLY,
-    active_tiers_by_users,
-    compute_source,
-    current_month_bounds,
-    effective_prepaid,
     get_allowance_state,
-    month_overflow_by_users,
     open_windows,
     remaining_allowance,
-    window_usage_by_users,
 )
-from src.subscription_tiers import DEFAULT_TIER, get_tier
+from src.services.key_gate import (
+    GATEABLE_KEYS,
+    KeyStatus,
+    fetch_key_aggregates,
+    static_key_status,
+    usage_key_status,
+)
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -502,266 +495,72 @@ class ApiKeyService:
 
     @staticmethod
     async def get_admin_all_api_keys() -> AdminApiKeys:
-        """All non-deleted API keys, split into a usable whitelist and an
-        invalid map (key -> reason + message) for the gateway to surface.
+        """All gateable API keys, split into a usable whitelist and an invalid map
+        (key -> reason + message) for the gateway to surface.
 
-        Never in the invalid map: deleted keys, ownership-broken keys, x402
-        keys, the shared chat service key, keys expired >30 days (map must
-        not grow unboundedly; disabled keys are kept — rare manual action,
-        no deactivation timestamp to prune on).
+        Two passes so the usage aggregates are fetched once, in bulk, for the keys that
+        actually reach the limit checks.
         """
 
         try:
             async with AsyncSessionLocal() as db:
-                api_keys = (
-                    (
-                        await db.execute(
-                            select(ApiKeyDB)
-                            # Outer join: liberclaw, x402 and pool keys have no user_id.
-                            .outerjoin(User, ApiKeyDB.user_id == User.id)
-                            .where(ApiKeyDB.deleted_at.is_(None))
-                            .where(or_(ApiKeyDB.user_id.is_(None), User.suspended_at.is_(None)))
-                            .options(selectinload(ApiKeyDB.liberclaw_user))
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-
-                # Tuple gating three downstream paths: (1) balance pre-fetch, (2) monthly-limit
-                # pre-fetch, (3) the per-key credit gate. Chat is included so per-user chat keys are
-                # credit-gated like api/cli. (The monthly-limit path is a no-op for chat today because
-                # chat keys are created with monthly_limit=None.)
-                chargeable_api_types = CHARGEABLE_KEY_TYPES
+                api_keys = (await db.execute(GATEABLE_KEYS)).scalars().all()
 
                 valid: list[str] = []
                 invalid: dict[str, InvalidKeyInfo] = {}
                 tiers: dict[str, str] = {}
                 now = datetime.now()
+                # The invalid map is re-distributed every refresh: drop keys expired long
+                # enough that nobody is still asking about them. (Disabled keys are kept —
+                # rare manual action, no deactivation timestamp to prune on.)
                 expired_keep_cutoff = now - timedelta(days=30)
 
-                # First pass: everything decidable without usage aggregates. Survivors
-                # (candidates) are the only keys whose users feed the batch pre-fetches.
                 candidates: list[ApiKeyDB] = []
                 for key in api_keys:
-                    if config.LIBERTAI_CHAT_API_KEY and key.key == config.LIBERTAI_CHAT_API_KEY:
-                        # Shared anonymous chat service key: always allowed, never gated.
+                    decision = static_key_status(key, now, expired_keep_cutoff=expired_keep_cutoff)
+                    if decision.status is KeyStatus.needs_usage:
+                        candidates.append(key)
+                    elif decision.status is KeyStatus.usable:
                         valid.append(key.key)
-                        continue
-                    if key.type == ApiKeyType.x402:
-                        # x402 requests carry their own payment auth; the key is internal
-                        # and must never surface user-facing reasons.
-                        if key.expires_at is not None and key.expires_at < now:
-                            continue
-                        if key.is_active:
-                            valid.append(key.key)
-                        continue
-                    if key.type == ApiKeyType.pool:
-                        # Unclaimed pool keys are internal (no owner, never sent by users):
-                        # usable ones ride the whitelist so they're warm when claimed,
-                        # dead ones get no user-facing reason.
-                        if key.is_active and not (key.expires_at is not None and key.expires_at < now):
-                            valid.append(key.key)
-                        continue
-                    # Ownership-broken keys are unusable but not user-explainable -> generic 401.
-                    if key.type == ApiKeyType.liberclaw and (
-                        key.liberclaw_user_id is None or key.liberclaw_user is None
-                    ):
-                        continue
-                    if key.type in chargeable_api_types and not key.user_id:
-                        continue
-                    if not key.is_active:
-                        invalid[key.key] = invalid_key_info(InvalidKeyReason.disabled)
-                        continue
-                    if key.expires_at is not None and key.expires_at < now:
-                        if key.expires_at >= expired_keep_cutoff:
-                            invalid[key.key] = invalid_key_info(InvalidKeyReason.expired)
-                        continue
-                    candidates.append(key)
+                    elif decision.reason is not None:
+                        invalid[key.key] = invalid_key_info(decision.reason)
 
-                # Pre-fetch balances for all users to avoid N+1 queries
-                user_ids = {k.user_id for k in candidates if k.user_id and k.type in chargeable_api_types}
-                balances: dict[uuid.UUID, float] = {}
-                if user_ids:
-                    from src.interfaces.credits import CreditTransactionStatus
-                    from src.models.credit_transaction import CreditTransaction
-
-                    balance_rows = (
-                        await db.execute(
-                            select(
-                                CreditTransaction.user_id,
-                                sql_func.coalesce(sql_func.sum(CreditTransaction.amount_left), 0.0),
-                            )
-                            .where(
-                                CreditTransaction.user_id.in_(user_ids),
-                                CreditTransaction.is_active == True,
-                                CreditTransaction.status == CreditTransactionStatus.completed,
-                            )
-                            .group_by(CreditTransaction.user_id)
-                        )
-                    ).all()
-                    balances = {row[0]: float(row[1]) for row in balance_rows}
-
-                # Pre-fetch dual fixed-window entitlement inputs (usage within each user's
-                # active 5h + weekly window, active tier) so the per-key loop is pure computation.
-                window_5h_usage = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
-                weekly_usage = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
-                active_tiers = await active_tiers_by_users(db, user_ids)
-
-                caps: dict[uuid.UUID, float] = {}
-                cap_overflow: dict[uuid.UUID, float] = {}
-                if user_ids:
-                    cap_rows = (
-                        await db.execute(
-                            select(User.id, User.monthly_extra_credit_cap).where(
-                                User.id.in_(user_ids),
-                                User.monthly_extra_credit_cap.is_not(None),
-                            )
-                        )
-                    ).all()
-                    caps = {row[0]: float(row[1]) for row in cap_rows}
-                    cap_overflow = await month_overflow_by_users(db, set(caps), now)
-
-                # Pre-fetch current month usage for API keys with monthly limits
-                api_keys_with_limits = [
-                    k for k in candidates if k.type in chargeable_api_types and k.monthly_limit is not None
-                ]
-                monthly_usage: dict[uuid.UUID, float] = {}
-                if api_keys_with_limits:
-                    first_day, next_month = current_month_bounds(now)
-                    limit_key_ids = [k.id for k in api_keys_with_limits]
-
-                    usage_rows = (
-                        await db.execute(
-                            select(
-                                InferenceCall.api_key_id,
-                                sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0),
-                            )
-                            .where(
-                                InferenceCall.api_key_id.in_(limit_key_ids),
-                                InferenceCall.used_at >= first_day,
-                                InferenceCall.used_at < next_month,
-                            )
-                            .group_by(InferenceCall.api_key_id)
-                        )
-                    ).all()
-                    monthly_usage = {row[0]: float(row[1]) for row in usage_rows}
-
-                # Pre-fetch liberclaw rolling-window usage, grouped per distinct window, to avoid
-                # an N+1 SUM over inference_calls for every liberclaw key.
-                liberclaw_keys = [
-                    k
-                    for k in candidates
-                    if k.type == ApiKeyType.liberclaw and k.liberclaw_user_id and k.liberclaw_user
-                ]
-                liberclaw_usage: dict[uuid.UUID, float] = {}
-                liberclaw_extra: dict[uuid.UUID, float] = {}
-                if liberclaw_keys:
-                    key_ids_by_window: dict[int, list[uuid.UUID]] = {}
-                    for k in liberclaw_keys:
-                        lc_user = k.liberclaw_user
-                        if lc_user is None:
-                            continue
-                        tier_config = get_tier_config(lc_user.tier)
-                        key_ids_by_window.setdefault(tier_config["rolling_window_days"], []).append(k.id)
-                    for window_days, key_ids in key_ids_by_window.items():
-                        cutoff = now - timedelta(days=window_days)
-                        rows = (
-                            await db.execute(
-                                select(
-                                    InferenceCall.api_key_id,
-                                    # Net of grant-paid overflow: extra-credit spend must not
-                                    # drain the rolling allowance.
-                                    sql_func.coalesce(
-                                        sql_func.sum(
-                                            InferenceCall.credits_used
-                                            - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
-                                        ),
-                                        0.0,
-                                    ),
-                                )
-                                .where(
-                                    InferenceCall.api_key_id.in_(key_ids),
-                                    InferenceCall.used_at >= cutoff,
-                                )
-                                .group_by(InferenceCall.api_key_id)
-                            )
-                        ).all()
-                        for row in rows:
-                            liberclaw_usage[row[0]] = float(row[1])
-
-                    # Pre-fetch unconsumed granted extra credits per liberclaw user
-                    # (upgrade-remainder grants) — they extend the tier cap.
-                    from src.models.liberclaw_credit_grant import LiberclawCreditGrant
-
-                    extra_rows = (
-                        await db.execute(
-                            select(
-                                LiberclawCreditGrant.liberclaw_user_id,
-                                sql_func.coalesce(sql_func.sum(LiberclawCreditGrant.amount_left), 0.0),
-                            )
-                            .where(
-                                LiberclawCreditGrant.liberclaw_user_id.in_(
-                                    {k.liberclaw_user_id for k in liberclaw_keys if k.liberclaw_user_id}
-                                ),
-                                LiberclawCreditGrant.amount_left > 0,
-                            )
-                            .group_by(LiberclawCreditGrant.liberclaw_user_id)
-                        )
-                    ).all()
-                    liberclaw_extra = {row[0]: float(row[1]) for row in extra_rows}
-
-                # Second pass: limit checks over pre-fetched aggregates.
+                aggregates = await fetch_key_aggregates(db, candidates, now)
                 for key in candidates:
-                    if key.type == ApiKeyType.liberclaw:
-                        # First pass already dropped liberclaw keys with no liberclaw_user.
-                        lc_user = key.liberclaw_user
-                        if lc_user is None:
-                            continue
-                        tiers[key.key] = lc_user.tier
-                        tier_config = get_tier_config(lc_user.tier)
-                        effective_limit = tier_config["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0)
-                        if liberclaw_usage.get(key.id, 0.0) >= effective_limit:
-                            invalid[key.key] = invalid_key_info(InvalidKeyReason.liberclaw_limit)
-                            continue
-                    elif key.type in chargeable_api_types:
-                        # First pass already dropped chargeable keys with no owner.
-                        user_id = key.user_id
-                        if user_id is None:
-                            continue
-                        # Per-key monthly limit is an extra cap (if the user set one).
-                        if key.monthly_limit is not None and monthly_usage.get(key.id, 0.0) >= key.monthly_limit:
-                            invalid[key.key] = invalid_key_info(InvalidKeyReason.key_monthly_limit)
-                            continue
-                        # Dual-window entitlement: free tier (or larger paid windows) by
-                        # default, prepaid balance as the overflow path.
-                        tier = get_tier(active_tiers.get(user_id, DEFAULT_TIER))
-                        tiers[key.key] = tier.name
-                        prepaid = balances.get(user_id, 0.0)
-                        source = compute_source(
-                            tier,
-                            window_5h_usage.get(user_id, 0.0),
-                            weekly_usage.get(user_id, 0.0),
-                            effective_prepaid(prepaid, caps.get(user_id), cap_overflow.get(user_id, 0.0)),
-                        )
-                        if source == "blocked":
-                            # Cap-blocked vs genuinely broke: raw prepaid distinguishes them.
-                            reason = (
-                                InvalidKeyReason.extra_credit_cap
-                                if prepaid >= PREPAID_MIN
-                                else InvalidKeyReason.no_credits
-                            )
-                            invalid[key.key] = invalid_key_info(reason)
-                            continue
-
-                    # valid liberclaw/api/cli/chat/pool keys pass through
-                    valid.append(key.key)
+                    key_aggregates = aggregates[key.id]
+                    if key_aggregates.tier_name is not None:
+                        tiers[key.key] = key_aggregates.tier_name
+                    decision = usage_key_status(key, key_aggregates)
+                    if decision.reason is not None:
+                        invalid[key.key] = invalid_key_info(decision.reason)
+                    else:
+                        valid.append(key.key)
 
                 return AdminApiKeys(valid=valid, invalid=invalid, tiers=tiers)
 
         except Exception as e:
             logger.error(f"Error getting all API keys: {e!s}", exc_info=True)
             raise
+
+    @staticmethod
+    async def get_invalid_key_info(key: str) -> InvalidKeyInfo | None:
+        """Why ``key`` is unusable right now, or None if it is usable — or unusable with no
+        reason to show (an internal key, or one the whitelist hides outright).
+
+        The whitelist's gate, run for a single key so a usage report can answer with the
+        state that call left it in.
+        """
+        async with AsyncSessionLocal() as db:
+            api_key = (await db.execute(GATEABLE_KEYS.where(ApiKeyDB.key == key))).scalars().first()
+            if api_key is None:
+                return None
+
+            now = datetime.now()
+            decision = static_key_status(api_key, now)
+            if decision.status is KeyStatus.needs_usage:
+                aggregates = await fetch_key_aggregates(db, [api_key], now)
+                decision = usage_key_status(api_key, aggregates[api_key.id])
+            return invalid_key_info(decision.reason) if decision.reason is not None else None
 
     @staticmethod
     async def register_inference_call(
