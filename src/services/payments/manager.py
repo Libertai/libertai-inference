@@ -70,6 +70,14 @@ class SupersedeFailed(Exception):
     """
 
 
+class ProviderCancelFailed(Exception):
+    """An immediate cancel could not be confirmed at the provider.
+
+    Raised after the transaction has been rolled back, so nothing local is terminal while the
+    subscription stays payable at the provider.
+    """
+
+
 def _topup_external_ref(provider_id: str, order_id: str) -> str:
     return f"{provider_id}:{order_id}"
 
@@ -554,6 +562,35 @@ class PaymentManager:
             "message": "Subscription will be cancelled at end of billing period",
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
         }
+
+    async def force_cancel(self, owner: Owner) -> PlanSubscription:
+        """Immediate terminal cancel, bypassing the deferred wind-down.
+
+        ``provider_cancelled`` is pre-marked and flushed BEFORE the provider call (echo arm 1):
+        a cancellation-confirmed webhook racing this call then reads the row as already terminal
+        instead of re-processing it. A provider cancel that cannot be confirmed rolls the whole
+        transaction back and raises — nothing here goes terminal locally unless the provider
+        agreed too.
+        """
+        await self._lock_owner(owner)
+        sub = await self._active_subscription(owner)
+        if sub is None:
+            raise ValueError("No active subscription")
+        sub.provider_cancelled = True
+        await self.db.flush()
+        if not await self._cancel_on_provider(sub):
+            # Read before the rollback: it expires every attribute, and a re-read would need a
+            # transaction the caller has already been told to abandon. No re-assignment of the
+            # pre-mark either — the rollback discards the flushed value with everything else.
+            sub_id = sub.id
+            await self.db.rollback()
+            raise ProviderCancelFailed(f"Subscription {sub_id} could not be cancelled at the provider")
+        sub.status = "cancelled"
+        await self._log_event(sub, "cancelled", metadata={"source": "admin_force_cancel"})
+        if owner.product == PRODUCT_LIBERCLAW:
+            await self._lclw_sync_tier_free_unless_live(owner, exclude_sub_id=sub.id)
+        await self.db.flush()
+        return sub
 
     async def resume(self, owner: Owner) -> dict:
         """Undo a scheduled cancellation or paid downgrade before it takes effect."""
@@ -1202,6 +1239,10 @@ class PaymentManager:
                         provider_subscription_id=channel.get("subscription_id"),
                         cycle_id=channel.get("subscription_cycle_id"),
                     )
+        # Both overdue paths below (order_failed and subscription_overdue) leave lc_users.tier
+        # on its paid value for a liberclaw row: dunning keeps entitlement alive while the
+        # provider retries the charge. Only the row actually ending drops the tier to free —
+        # the lapsed catch-all in check_expirations is the backstop when it never ends cleanly.
         elif event.type == PaymentEventType.order_failed:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # A card declined on the hosted checkout, not a failed subscription payment:
@@ -1240,7 +1281,10 @@ class PaymentManager:
                 await self._record_checkout_retired(sub, cancelled=True)
             elif owner.product == PRODUCT_LIBERCLAW:
                 if sub.provider_cancelled:
-                    pass  # arm 1: already terminal locally (pre-marked immediate cancel / migration)
+                    # arm 1: already terminal locally (pre-marked immediate cancel / migration).
+                    # No state write, but the event is recorded with its provider event id so a
+                    # redelivery dedups against it in _is_duplicate_event.
+                    await self._log_event(sub, "provider_cancel_confirmed", event.provider_event_id, event.metadata)
                 elif (
                     sub.status in ACTIVE_STATUSES
                     and sub.current_period_end
