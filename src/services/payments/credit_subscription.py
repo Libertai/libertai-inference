@@ -247,6 +247,7 @@ class CreditSubscriptionService:
             await CreditSubscriptionService._log(db, sub, "expired")
             return 1
 
+        assert sub.user_id is not None  # libertai rows always carry user_id
         target = sub.pending_tier or sub.tier
         price = CreditSubscriptionService.monthly_price(target)
 

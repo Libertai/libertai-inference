@@ -17,6 +17,7 @@ from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
+from src.services import liberclaw as liberclaw_module
 from src.services.liberclaw import LiberclawService
 
 pytestmark = pytest.mark.asyncio
@@ -169,6 +170,52 @@ async def test_update_tier_resolves_by_account_id_and_refreshes_email():
         await _cleanup(lc_id)
 
 
+async def test_email_refresh_skipped_on_collision_with_another_row(monkeypatch):
+    """Two rows, refresh would collide on unique_liberclaw_user(user_id, user_type):
+    must not raise, must not change either row, and must log an error naming both.
+
+    liberclaw's logger has propagate=False (see src/utils/logger.py), out of caplog's
+    root-logger capture -- asserts on the logger call directly instead, like
+    test_reconcile_invoices.py does.
+    """
+    logged: list[str] = []
+    monkeypatch.setattr(liberclaw_module.logger, "error", lambda msg: logged.append(msg))
+    account_id = uuid.uuid4()
+    shared_email = f"shared-{uuid.uuid4().hex}@x.test"
+    own_email = f"own-{uuid.uuid4().hex}@x.test"
+
+    # The row already holding the email the refresh would move onto.
+    await LiberclawService.get_or_create_api_key(user_id=shared_email, user_type="email")
+    async with AsyncSessionLocal() as db:
+        other_id = (
+            await db.execute(
+                select(LiberclawUser.id).where(
+                    LiberclawUser.user_id == shared_email, LiberclawUser.user_type == "email"
+                )
+            )
+        ).scalar_one()
+
+    # The row under resolution, whose email would be refreshed to the colliding one.
+    await LiberclawService.get_or_create_api_key(user_id=own_email, user_type="email", liberclaw_account_id=account_id)
+    lc_id = await _lc_id_by_account(account_id)
+    try:
+        result = await LiberclawService.get_or_create_api_key(
+            user_id=shared_email, user_type="email", liberclaw_account_id=account_id
+        )
+        assert result.is_new is False
+
+        async with AsyncSessionLocal() as db:
+            row = await db.get(LiberclawUser, lc_id)
+            other = await db.get(LiberclawUser, other_id)
+        assert row.user_id == own_email  # refresh skipped, unchanged
+        assert other.user_id == shared_email  # untouched
+
+        assert any(str(lc_id) in msg and str(other_id) in msg for msg in logged)
+    finally:
+        await _cleanup(lc_id)
+        await _cleanup(other_id)
+
+
 async def test_update_tier_falls_back_to_user_id_when_account_unknown():
     user_id = uuid.uuid4().hex
     await LiberclawService.get_or_create_api_key(user_id=user_id, user_type="email")
@@ -205,6 +252,7 @@ async def test_grant_extra_credits_by_account_id():
         ref = f"test:{uuid.uuid4().hex}"
         async with AsyncSessionLocal() as db:
             amount = await LiberclawService.grant_extra_credits_by_account_id(db, account_id, 12.5, ref)
+            await db.commit()  # caller owns the transaction
         assert amount == 12.5
 
         async with AsyncSessionLocal() as db:
@@ -219,7 +267,35 @@ async def test_grant_extra_credits_by_account_id():
         # idempotent retry, different amount, returns the original
         async with AsyncSessionLocal() as db:
             second = await LiberclawService.grant_extra_credits_by_account_id(db, account_id, 99.0, ref)
+            await db.commit()
         assert second == 12.5
+    finally:
+        await _cleanup(lc_id)
+
+
+async def test_grant_extra_credits_by_account_id_is_flush_only():
+    """The by-account variant must never commit the caller's session (the caller runs it
+    mid-webhook-transaction): a rollback after the call must leave no grant row behind."""
+    account_id = uuid.uuid4()
+    async with AsyncSessionLocal() as db:
+        lc = LiberclawUser(user_id=uuid.uuid4().hex, user_type="email", liberclaw_account_id=account_id)
+        db.add(lc)
+        await db.commit()
+        lc_id = lc.id
+    try:
+        ref = f"test:{uuid.uuid4().hex}"
+        async with AsyncSessionLocal() as db:
+            amount = await LiberclawService.grant_extra_credits_by_account_id(db, account_id, 12.5, ref)
+            assert amount == 12.5
+            await db.rollback()
+
+        async with AsyncSessionLocal() as db:
+            grants = (
+                (await db.execute(select(LiberclawCreditGrant).where(LiberclawCreditGrant.liberclaw_user_id == lc_id)))
+                .scalars()
+                .all()
+            )
+        assert grants == []
     finally:
         await _cleanup(lc_id)
 

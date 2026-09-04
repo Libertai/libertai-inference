@@ -34,6 +34,39 @@ class LiberclawService:
         )
 
     @staticmethod
+    async def _refresh_email_if_safe(db, lc_user: LiberclawUser, user_id: str, user_type: str) -> None:
+        """Refresh ``lc_user.user_id`` (email) in place to match a LiberClaw-side change.
+
+        Guarded against unique_liberclaw_user (user_id, user_type): if another row
+        already holds the incoming email for this user_type, the assignment is
+        skipped (logged, resolution result unchanged) instead of raising
+        IntegrityError on flush — which would 500 this account's api-key route on
+        every subsequent call.
+        """
+        if user_type != "email" or lc_user.user_id == user_id:
+            return
+        conflict_id = (
+            (
+                await db.execute(
+                    select(LiberclawUser.id).where(
+                        LiberclawUser.user_id == user_id,
+                        LiberclawUser.user_type == user_type,
+                        LiberclawUser.id != lc_user.id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if conflict_id is not None:
+            logger.error(
+                f"Skipping email refresh on liberclaw user {lc_user.id} (account "
+                f"{lc_user.liberclaw_account_id}): email {user_id!r} is already held by row {conflict_id}"
+            )
+            return
+        lc_user.user_id = user_id
+
+    @staticmethod
     async def get_or_create_api_key(
         user_id: str, user_type: str, liberclaw_account_id: uuid.UUID | None = None
     ) -> LiberclawApiKeyResponse:
@@ -74,8 +107,7 @@ class LiberclawService:
                     lc_user.liberclaw_account_id = liberclaw_account_id
                 # user_id is only email-shaped for user_type="email" — discord/telegram
                 # ids don't get refreshed off of a LiberClaw email change.
-                if user_type == "email" and lc_user.user_id != user_id:
-                    lc_user.user_id = user_id
+                await LiberclawService._refresh_email_if_safe(db, lc_user, user_id, user_type)
 
             existing_key = (
                 (
@@ -183,8 +215,7 @@ class LiberclawService:
 
             if lc_user.liberclaw_account_id is None and liberclaw_account_id is not None:
                 lc_user.liberclaw_account_id = liberclaw_account_id
-            if user_type == "email" and lc_user.user_id != user_id:
-                lc_user.user_id = user_id
+            await LiberclawService._refresh_email_if_safe(db, lc_user, user_id, user_type)
 
             lc_user.tier = tier
             await db.commit()
@@ -316,6 +347,9 @@ class LiberclawService:
         hold the account id rather than (user_id, user_type). Idempotent on
         ``external_reference`` like ``grant_extra_credits``. Raises ValueError on an
         unknown account.
+
+        Flush-only: the caller owns the transaction (this runs mid-webhook,
+        inside the caller's own session/commit).
         """
         existing = (
             (
@@ -334,13 +368,16 @@ class LiberclawService:
             logger.error(f"grant_extra_credits_by_account_id: unknown liberclaw account {account_id}")
             raise ValueError(f"Liberclaw account not found: {account_id}")
 
-        return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference)
+        return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference, commit=False)
 
     @staticmethod
-    async def _create_grant(db, lc_user_id: uuid.UUID, amount: float, external_reference: str) -> float:
-        """Insert + commit a credit grant row. Callers must have already checked
-        ``external_reference`` for an existing grant (idempotency is their concern,
-        not this helper's)."""
+    async def _create_grant(
+        db, lc_user_id: uuid.UUID, amount: float, external_reference: str, commit: bool = True
+    ) -> float:
+        """Insert a credit grant row, flushing it in either case. Callers must have
+        already checked ``external_reference`` for an existing grant (idempotency
+        is their concern, not this helper's). ``commit=False`` leaves the
+        transaction open for the caller to commit/rollback."""
         db.add(
             LiberclawCreditGrant(
                 liberclaw_user_id=lc_user_id,
@@ -348,7 +385,10 @@ class LiberclawService:
                 external_reference=external_reference,
             )
         )
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         logger.info(f"Granted {amount} extra credits to liberclaw user {lc_user_id} ({external_reference})")
         return amount
 

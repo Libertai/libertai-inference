@@ -76,7 +76,8 @@ class PlanSubscription(Base):
             postgresql_where=text("status = 'pending_upgrade'"),
         ),
         Index("ix_plan_subscriptions_provider_subscription_id", "provider_subscription_id"),
-        # Owner is exactly one of user_id (libertai) / liberclaw_account_id (liberclaw).
+        # Owner is at least one of user_id (libertai) / liberclaw_account_id (liberclaw);
+        # phase 2 fills both.
         CheckConstraint("num_nonnulls(user_id, liberclaw_account_id) >= 1", name="ck_plan_subscriptions_owner"),
         Index("ix_plan_subscriptions_lclw_account_status", "liberclaw_account_id", "status"),
         # At most one live subscription per liberclaw account, mirroring uq_one_active_plan_subscription.

@@ -1456,7 +1456,9 @@ class StatsService:
     # an upgrade pair (the replacement row has its own ``activated``), avoiding double-counting.
     # ``expired_insufficient_credits`` is a credits-provider renewal that couldn't be covered —
     # also terminal. ``expired_abandoned_checkout`` (never-activated checkout) stays excluded: it
-    # has no activation to end.
+    # has no activation to end. ``expired_superseded``, ``expired_never_paid`` and
+    # ``expired_abandoned_upgrade`` are LiberClaw-migrated vocabulary: this codebase never emits
+    # them itself, only replays them from migrated LC event history.
     _TERMINAL_EVENTS = (
         "cancelled",
         "expired",
