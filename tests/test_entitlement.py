@@ -27,6 +27,7 @@ from src.services.entitlement import (
 from src.subscription_tiers import get_tier
 
 NOW = datetime(2026, 6, 3, 12, 0, 0)
+FREE = get_tier("free")
 
 
 async def _user(db) -> User:
@@ -89,13 +90,13 @@ async def test_free_user_with_no_window_allowed(db):
 async def test_window_snaps_to_zero_on_expiry_not_gradually(db):
     user = await _user(db)
     key = await _api_key(db, user.id)
-    # Open a 5h window now and exhaust the free 0.5 allowance.
+    # Open a 5h window now and exhaust the free allowance.
     await _window(db, user.id, WINDOW_5H, started_at=NOW, expires_at=NOW + timedelta(hours=5))
-    await _use(db, key.id, 0.5, NOW + timedelta(minutes=1))
+    await _use(db, key.id, FREE.window_5h_credits, NOW + timedelta(minutes=1))
 
     # Still inside the window: full usage counts, user is blocked (no prepaid).
     mid = await get_allowance_state(db, user.id, now=NOW + timedelta(hours=4, minutes=59))
-    assert mid.window_5h_used == 0.5
+    assert mid.window_5h_used == FREE.window_5h_credits
     assert mid.source == "blocked"
 
     # One minute later the window has expired -> usage is 0 at once (not gradual), allowed again.
@@ -108,13 +109,14 @@ async def test_window_snaps_to_zero_on_expiry_not_gradually(db):
 async def test_weekly_window_independent_of_5h(db):
     user = await _user(db)
     key = await _api_key(db, user.id)
-    # Active weekly window started 2 days ago with usage exceeding the 2.0 weekly cap.
+    # Active weekly window started 2 days ago with usage exceeding the weekly cap.
+    over_weekly = FREE.weekly_credits * 1.25
     await _window(db, user.id, WINDOW_WEEKLY, started_at=NOW - timedelta(days=2), expires_at=NOW + timedelta(days=5))
-    await _use(db, key.id, 2.5, NOW - timedelta(days=1))
+    await _use(db, key.id, over_weekly, NOW - timedelta(days=1))
     # No 5h window -> 5h usage is 0.
 
     state = await get_allowance_state(db, user.id, now=NOW)
-    assert state.weekly_used == pytest.approx(2.5)
+    assert state.weekly_used == pytest.approx(over_weekly)
     assert state.window_5h_used == 0.0
     assert state.source == "blocked"  # weekly exhausted, no prepaid
 
@@ -125,11 +127,11 @@ async def test_paid_tier_gets_larger_window(db):
     key = await _api_key(db, user.id)
     await _subscribe(db, user.id, "plus")
     await _window(db, user.id, WINDOW_5H, started_at=NOW, expires_at=NOW + timedelta(hours=5))
-    await _use(db, key.id, 0.5, NOW + timedelta(minutes=1))  # would exhaust free, fine for plus
+    await _use(db, key.id, FREE.window_5h_credits, NOW + timedelta(minutes=1))  # exhausts free, fine for plus
 
     state = await get_allowance_state(db, user.id, now=NOW + timedelta(hours=1))
     assert state.tier == "plus"
-    assert state.window_5h_limit == 7.0
+    assert state.window_5h_limit == get_tier("plus").window_5h_credits
     assert state.source == "tier"
 
 
@@ -138,7 +140,7 @@ async def test_prepaid_overflow_when_window_exhausted(db):
     user = await _user(db)
     key = await _api_key(db, user.id)
     await _window(db, user.id, WINDOW_5H, started_at=NOW, expires_at=NOW + timedelta(hours=5))
-    await _use(db, key.id, 0.5, NOW + timedelta(minutes=1))
+    await _use(db, key.id, FREE.window_5h_credits, NOW + timedelta(minutes=1))
     await _credit(db, user.id, 5.0)
 
     state = await get_allowance_state(db, user.id, now=NOW + timedelta(hours=1))
@@ -224,7 +226,7 @@ async def test_saturated_weekly_window_blocks_through_query_path(db):
     user = await _user(db)
     key = await _api_key(db, user.id)
     await _window(db, user.id, WINDOW_WEEKLY, started_at=NOW - timedelta(days=1), expires_at=NOW + timedelta(days=6))
-    await _use(db, key.id, math.nextafter(2.0, 0.0), NOW - timedelta(hours=1))
+    await _use(db, key.id, math.nextafter(FREE.weekly_credits, 0.0), NOW - timedelta(hours=1))
 
     state = await get_allowance_state(db, user.id, now=NOW)
     assert state.source == "blocked"

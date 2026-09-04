@@ -20,6 +20,7 @@ from src.services.aleph import aleph_service
 from src.services.api_key import ApiKeyService
 from src.services.credit import CreditService
 from src.services.users import get_or_create_user_by_wallet
+from src.subscription_tiers import get_tier
 
 
 # Exactly what libertai-models' report_usage_event_task sends for a TTS call
@@ -77,9 +78,9 @@ def kokoro_model(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_audio_usage_endpoint_bills_characters(async_client, kokoro_model):
-    """Audio usage bills characters like any chargeable call: the free-tier window covers
-    the first 0.5 credits (5h cap), the overflow draws from prepaid. 5M chars * $0.70/1M
-    = $3.50 -> 0.5 tier-covered, 3.0 charged -> balance 10.0 - 3.0 = 7.0."""
+    """Audio usage bills characters like any chargeable call: the free-tier 5h window covers
+    the first credits, the overflow draws from prepaid. 5M chars * $0.70/1M = $3.50, of which
+    the window absorbs its allowance and the rest is charged against the 10.0 prepaid."""
     address = "0xA0D10000000000000000000000000000000000001"
     async with AsyncSessionLocal() as db:
         user = await get_or_create_user_by_wallet(db, address)
@@ -97,4 +98,4 @@ async def test_audio_usage_endpoint_bills_characters(async_client, kokoro_model)
     async with AsyncSessionLocal() as db:
         user = await db.get(User, user_id)
         balance = await user.get_credit_balance()
-    assert balance == pytest.approx(7.0)  # $3.50 cost - 0.5 free-window = 3.0 from prepaid
+    assert balance == pytest.approx(10.0 - (3.50 - get_tier("free").window_5h_credits))

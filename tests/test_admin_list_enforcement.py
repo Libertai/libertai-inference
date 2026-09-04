@@ -22,8 +22,11 @@ from src.models.plan_subscription import PlanSubscription
 from src.models.user import User
 from src.services.api_key import ApiKeyService
 from src.services.entitlement import WINDOW_5H
+from src.subscription_tiers import get_tier
 
 pytestmark = pytest.mark.asyncio
+
+FREE_5H = get_tier("free").window_5h_credits
 
 
 async def _valid_keys() -> list[str]:
@@ -107,7 +110,7 @@ async def test_free_key_included_within_window():
 
 
 async def test_free_key_excluded_when_window_exhausted_no_prepaid():
-    user_id, key = await _setup(usage=0.5, window="active")  # free 5h limit is 0.5
+    user_id, key = await _setup(usage=FREE_5H, window="active")  # exactly the free 5h allowance
     try:
         assert key not in await _valid_keys()
     finally:
@@ -115,7 +118,7 @@ async def test_free_key_excluded_when_window_exhausted_no_prepaid():
 
 
 async def test_key_returns_after_window_resets():
-    user_id, key = await _setup(usage=0.5, window="expired")  # window ended -> usage reset to 0
+    user_id, key = await _setup(usage=FREE_5H, window="expired")  # window ended -> usage reset to 0
     try:
         assert key in await _valid_keys()
     finally:
@@ -123,7 +126,7 @@ async def test_key_returns_after_window_resets():
 
 
 async def test_paid_tier_gets_larger_window():
-    user_id, key = await _setup(usage=0.5, window="active", tier="plus")  # exhausts free, fine for plus
+    user_id, key = await _setup(usage=FREE_5H, window="active", tier="plus")  # exhausts free, fine for plus
     try:
         assert key in await _valid_keys()
     finally:
@@ -131,7 +134,7 @@ async def test_paid_tier_gets_larger_window():
 
 
 async def test_prepaid_overflow_keeps_key_included():
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=5.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=5.0)
     try:
         assert key in await _valid_keys()
     finally:
@@ -139,17 +142,18 @@ async def test_prepaid_overflow_keeps_key_included():
 
 
 async def test_prepaid_not_charged_while_within_window_then_charged_on_overflow():
-    # Free tier, 5h window = 0.5 credits, prepaid 5.0.
+    # Free tier 5h window, prepaid 5.0.
+    call = FREE_5H * 0.8
     user_id, key = await _setup(prepaid=5.0)
     try:
-        # First small call stays within the free window -> no prepaid deduction.
-        await ApiKeyService.register_inference_call(key, credits_used=0.4, model_name="m")
+        # First call stays within the free window -> no prepaid deduction.
+        await ApiKeyService.register_inference_call(key, credits_used=call, model_name="m")
         assert await _balance(user_id) == pytest.approx(5.0)
 
-        # Second 0.4 call straddles the 0.5 window (0.1 left) -> only the 0.3 overflow is
-        # charged, not the whole call. (Pre-fix this deducted the full 0.4 -> 4.6.)
-        await ApiKeyService.register_inference_call(key, credits_used=0.4, model_name="m")
-        assert await _balance(user_id) == pytest.approx(4.7)
+        # Second call straddles the window (0.2 of the allowance left) -> only the overflow
+        # is charged, not the whole call.
+        await ApiKeyService.register_inference_call(key, credits_used=call, model_name="m")
+        assert await _balance(user_id) == pytest.approx(5.0 - (2 * call - FREE_5H))
     finally:
         await _cleanup(user_id)
 
@@ -237,7 +241,7 @@ async def test_liberclaw_usage_outside_window_ignored():
 
 async def test_cap_reached_excludes_key_when_window_exhausted():
     # Free 5h window exhausted; prepaid exists but this month's overflow >= cap.
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
     try:
         assert key not in await _valid_keys()
     finally:
@@ -245,7 +249,7 @@ async def test_cap_reached_excludes_key_when_window_exhausted():
 
 
 async def test_cap_not_reached_keeps_key():
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=10.0, overflow=3.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=50.0, cap=10.0, overflow=3.0)
     try:
         assert key in await _valid_keys()
     finally:
@@ -254,7 +258,7 @@ async def test_cap_not_reached_keeps_key():
 
 async def test_cap_reached_but_window_open_keeps_key():
     # Windows have room -> "tier" source; the cap only governs the prepaid path.
-    user_id, key = await _setup(usage=0.1, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
+    user_id, key = await _setup(usage=FREE_5H / 5, window="active", prepaid=50.0, cap=2.0, overflow=3.0)
     try:
         assert key in await _valid_keys()
     finally:
@@ -262,7 +266,7 @@ async def test_cap_reached_but_window_open_keeps_key():
 
 
 async def test_no_cap_unlimited_overflow_keeps_key():
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=50.0, cap=None, overflow=999.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=50.0, cap=None, overflow=999.0)
     try:
         assert key in await _valid_keys()
     finally:
@@ -271,7 +275,7 @@ async def test_no_cap_unlimited_overflow_keeps_key():
 
 async def test_balance_still_binds_below_cap():
     # Cap has room but prepaid < PREPAID_MIN -> still blocked.
-    user_id, key = await _setup(usage=0.5, window="active", prepaid=0.01, cap=100.0, overflow=1.0)
+    user_id, key = await _setup(usage=FREE_5H, window="active", prepaid=0.01, cap=100.0, overflow=1.0)
     try:
         assert key not in await _valid_keys()
     finally:
