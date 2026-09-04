@@ -1023,6 +1023,11 @@ class PaymentManager:
             logger.info(f"Ignoring payment event with no matching subscription: {event}")
             return
 
+        if sub.product == PRODUCT_LIBERCLAW and not config.LIBERCLAW_BILLING_ENABLED:
+            # 200-skip, never 5xx: LCLW webhook ownership is cut over by this flag alone.
+            logger.info(f"Ignoring liberclaw-owned payment event for sub {sub.id}: billing cutover flag is off")
+            return
+
         # Ahead of the refusal checks below: a redelivery for a row that was legitimately
         # superseded since is ordinary duplicate traffic, not an incident.
         if await self._is_duplicate_event(event):
