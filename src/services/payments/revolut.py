@@ -344,6 +344,8 @@ class RevolutProvider(PaymentProvider):
         # The live endpoint wraps the list: {"orders": [...]}.
         orders: list[dict] = resp.json()["orders"]
         if len(orders) >= limit:
+            # Hard-fails once completed orders reach 500; pagination needs a newer Revolut
+            # API version before the merchant's total approaches that cap.
             raise RuntimeError(
                 f"Revolut order listing returned {len(orders)} orders at limit={limit} — "
                 "this API version has no working pagination, so the result may be truncated. "

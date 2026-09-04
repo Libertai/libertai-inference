@@ -60,9 +60,15 @@ def test_classify_own_subscription():
     assert classify_order(order, own_subscription_ids={"psub_own"}, own_topup_order_ids=set()) == "own"
 
 
-def test_classify_liberclaw_positive():
-    order = {"channel_data": {"subscription_id": "lc_sub_1"}, "description": "LiberClaw Pro #3"}
-    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "liberclaw"
+def test_classify_liberclaw_description_unknown_subscription_warns_and_unclassifiable(monkeypatch):
+    """Post-migration, every LCLW subscription is in own_subscription_ids -- a "LiberClaw"
+    description with a subscription id that isn't means an unmigrated row, not a benign
+    foreign order."""
+    logged: list[str] = []
+    monkeypatch.setattr(reconcile_invoices.logger, "warning", lambda msg: logged.append(msg))
+    order = {"id": "ord_1", "channel_data": {"subscription_id": "lc_sub_1"}, "description": "LiberClaw Pro #3"}
+    assert classify_order(order, own_subscription_ids=set(), own_topup_order_ids=set()) == "unclassifiable"
+    assert any("unmigrated LiberClaw order" in msg and "ord_1" in msg for msg in logged)
 
 
 def test_classify_unclassifiable_without_description_corroboration():
@@ -124,6 +130,20 @@ async def test_lclw_cycle_uniqueness_rejected_at_insert():
             await _seed(ref_b, provider_subscription_id=sub_id, cycle_id=cycle_id)
     finally:
         await _cleanup(ref_a, ref_b)
+
+
+async def test_lclw_cycle_uniqueness_clean_for_post_cutover_invoice():
+    """A single post-cutover-shaped LCLW invoice (provider_subscription_id + cycle_id
+    populated by the manager from webhook channel_data) satisfies the invariant alone."""
+    sub_id = f"psub_{uuid.uuid4().hex}"
+    ref = f"revolut:{uuid.uuid4().hex}"
+    try:
+        await _seed(ref, provider_subscription_id=sub_id, cycle_id="cyc_1")
+        async with AsyncSessionLocal() as db:
+            violations = await check_lclw_cycle_uniqueness(db)
+        assert not any(sub_id in v for v in violations)
+    finally:
+        await _cleanup(ref)
 
 
 async def test_lclw_cycle_uniqueness_clean_for_distinct_cycles():
