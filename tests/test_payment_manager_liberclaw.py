@@ -124,8 +124,9 @@ async def test_lclw_activation_without_bridge_row_raises(db):
 
 
 @pytest.mark.asyncio
-async def test_lclw_echo_arm1_already_terminal_is_a_noop(db):
-    """provider_cancelled already set: this echo is redundant, so nothing is written or logged."""
+async def test_lclw_echo_arm1_already_terminal_writes_no_state_but_records_the_event(db):
+    """provider_cancelled already set: the echo changes no state, but is recorded with its
+    provider event id so a redelivery dedups instead of being re-evaluated."""
     account_id = uuid.uuid4()
     sub = _lclw_sub(
         account_id,
@@ -137,19 +138,22 @@ async def test_lclw_echo_arm1_already_terminal_is_a_noop(db):
     await db.flush()
 
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.handle_event(
-        PaymentEvent(
-            provider="fake",
-            type=PaymentEventType.subscription_cancelled,
-            provider_event_id="SUBSCRIPTION_CANCELLED:1",
-            provider_subscription_id="psub_lclw",
-        )
+    event = PaymentEvent(
+        provider="fake",
+        type=PaymentEventType.subscription_cancelled,
+        provider_event_id="SUBSCRIPTION_CANCELLED:1",
+        provider_subscription_id="psub_lclw",
     )
+    await mgr.handle_event(event)
 
     refreshed = await db.get(PlanSubscription, sub.id)
     assert refreshed.status == "active"
     assert refreshed.cancel_at_period_end is False
-    assert await _event_types(db, sub.id) == []
+    assert await _event_types(db, sub.id) == ["provider_cancel_confirmed"]
+
+    # The redelivery dedups on the recorded provider event id: still exactly one event.
+    await mgr.handle_event(event)
+    assert await _event_types(db, sub.id) == ["provider_cancel_confirmed"]
 
 
 @pytest.mark.asyncio

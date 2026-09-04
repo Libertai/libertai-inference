@@ -353,20 +353,23 @@ def delta_copy(
     # script, not sourced from LC, so it is written unconditionally.
     winner_accounts = {row._mapping["user_id"] for row in lc_subs if row._mapping["id"] in wind_down_ids}
     re_elected: list[str] = []
+    demoted_ids: set[Any] = set()
     for row in lc_subs:
         m = row._mapping
         inf_row = existing.get(m["id"])
         if inf_row is None or m["id"] in wind_down_ids or m["user_id"] not in winner_accounts:
             continue
         if inf_row.status == "active" and m["status"] != "active":
-            # updated_at pinned explicitly: the column's onupdate would stamp wall-clock time,
-            # poisoning the guarded-update comparison and the next delta's watermark math.
-            inf_conn.execute(
-                sa.update(PS)
-                .where(PS.c.id == m["id"])
-                .values(status=m["status"], updated_at=to_naive_utc(m["updated_at"]))
-            )
+            # The FULL translated state, not just the status: this write lands the LC updated_at
+            # verbatim, which then equals the guarded update's own comparison value below and
+            # blocks it — so any other LC-side change on this row (tier, period, flags) has to
+            # ride along here or it would not sync at all this run. updated_at is pinned
+            # explicitly for the same reason the guard needs it: the column's onupdate would
+            # stamp wall-clock time, poisoning the next delta's watermark math.
+            demotion_values = {k: v for k, v in subscription_values(row, wind_down_ids).items() if k in UPDATE_FIELDS}
+            inf_conn.execute(sa.update(PS).where(PS.c.id == m["id"]).values(**demotion_values))
             re_elected.append(str(m["id"]))
+            demoted_ids.add(m["id"])
     if re_elected:
         print(f"INFO wind-down re-election — previous winner(s) demoted to their LC status: {re_elected}")
 
@@ -379,7 +382,9 @@ def delta_copy(
         m = row._mapping
         sub_id = m["id"]
         inf_row = existing.get(sub_id)
-        if inf_row is None:
+        if inf_row is None or sub_id in demoted_ids:
+            # A demoted row already holds this run's full LC state; its guarded update could
+            # only be a no-op (equal timestamps) or a re-write of what was just written.
             continue
         values = subscription_values(row, wind_down_ids)
         lc_updated = values["updated_at"]
@@ -691,7 +696,11 @@ def verify_source(lc_subs: Sequence[sa.Row], lc_users_by_id: dict[Any, sa.Row]) 
     """Checks over LC data alone — no inference read, so these run even under ``--dry-run``."""
     ok = True
     upgrading = [str(row._mapping["id"]) for row in lc_subs if row._mapping["status"] in UPGRADING_STATUSES]
-    ok &= _report("zero upgrading rows (LC source)", upgrading)
+    _report("zero upgrading rows (LC source)", upgrading)
+    if upgrading:
+        # Abort before any write, like preflight_event_collisions: an LC 'upgrading' row has no
+        # inference equivalent, so a run that copied one would have to be unpicked by hand.
+        raise SystemExit(f"Aborting: LC source holds upgrading row(s): {upgrading[:20]}")
 
     subscribed_ids = {row._mapping["user_id"] for row in lc_subs}
     ok &= _report(

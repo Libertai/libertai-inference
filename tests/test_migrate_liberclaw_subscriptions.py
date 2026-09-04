@@ -897,17 +897,20 @@ async def test_verify_passes_for_clean_migration(lc, capsys):
     assert "FAIL" not in out
 
 
-async def test_verify_fails_on_lc_upgrading_status(lc, capsys):
+async def test_aborts_before_any_write_on_lc_upgrading_status(lc, inf_engine, capsys):
     """C4 regression: LC's parked status is literally 'upgrading' (not inference's own
-    'pending_upgrade') — a straight copy of one must fail the zero-upgrading-rows check."""
+    'pending_upgrade'). The check aborts the run rather than reporting a failure after the
+    copy, so no such row is ever written."""
     user_id = lc.insert_user(email="ok@example.com", tier="free")
-    lc.insert_sub(user_id=user_id, status="upgrading")
+    sub_id = lc.insert_sub(user_id=user_id, status="upgrading")
 
-    exit_code = await main([f"--lc-dsn={lc.url}"])
+    with pytest.raises(SystemExit) as excinfo:
+        await main([f"--lc-dsn={lc.url}"])
 
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "FAIL zero upgrading rows" in out
+    assert str(sub_id) in str(excinfo.value)
+    assert "FAIL zero upgrading rows" in capsys.readouterr().out
+    with inf_engine.begin() as conn:
+        assert conn.execute(sa.select(sa.func.count()).select_from(PS).where(PS.c.id == sub_id)).scalar_one() == 0
 
 
 async def test_verify_source_checks_run_under_dry_run(lc, capsys):
@@ -1163,12 +1166,16 @@ async def test_delta_re_elects_wind_down_winner_without_collision(lc, inf_engine
     winner's write collides on uq_one_active_plan_subscription_lclw unless the loser is
     demoted first. The loser's own LC updated_at need not have moved at all, so the delta's
     updated_at guard cannot carry the demotion — it is election-derived state.
+
+    The demotion therefore carries the loser's WHOLE LC state, not just its status: it writes
+    the LC updated_at, which then blocks that row's guarded update in the same run.
     """
     old = datetime(2024, 1, 1, tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     user_id = lc.insert_user(email="ok@example.com", tier="pro")
     earlier_id = lc.insert_sub(
         user_id=user_id,
+        tier="starter",
         status="cancelled",
         cancel_at_period_end=True,
         current_period_end=now + timedelta(days=5),
@@ -1183,7 +1190,9 @@ async def test_delta_re_elects_wind_down_winner_without_collision(lc, inf_engine
     first_report = await run(parse_args([f"--lc-dsn={lc.url}"]))
     assert first_report["wind_down_translated"] == [str(earlier_id)]
 
-    # A later wind-down row appears; the earlier row itself is untouched in LC.
+    # A later wind-down row appears, and the loser's own tier moved in LC meanwhile.
+    loser_updated = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    lc.update_sub(earlier_id, tier="pro", updated_at=loser_updated)
     later_id = lc.insert_sub(
         user_id=user_id,
         status="cancelled",
@@ -1201,15 +1210,17 @@ async def test_delta_re_elects_wind_down_winner_without_collision(lc, inf_engine
     assert report["verify_ok"] is True
     with inf_engine.begin() as conn:
         rows = conn.execute(
-            sa.select(PS.c.id, PS.c.status, PS.c.updated_at).where(PS.c.id.in_([earlier_id, later_id]))
+            sa.select(PS.c.id, PS.c.status, PS.c.tier, PS.c.updated_at).where(PS.c.id.in_([earlier_id, later_id]))
         ).all()
-    statuses = {row.id: row.status for row in rows}
-    assert statuses[earlier_id] == "cancelled"
-    assert statuses[later_id] == "active"
+    by_id = {row.id: row for row in rows}
+    assert by_id[earlier_id].status == "cancelled"
+    assert by_id[later_id].status == "active"
+    # The demotion carries the whole LC state, so the loser's tier change syncs in this same
+    # run — the guarded update it would otherwise need is blocked by the demotion's own write.
+    assert by_id[earlier_id].tier == "pro"
     # The demotion must not let the column onupdate stamp wall-clock time: a bumped
     # updated_at defeats the guarded-update comparison and the next delta's watermark math.
-    demoted_updated_at = {row.id: row.updated_at for row in rows}[earlier_id]
-    assert demoted_updated_at == old.astimezone(timezone.utc).replace(tzinfo=None)
+    assert by_id[earlier_id].updated_at == loser_updated.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 async def test_no_translation_once_period_has_already_ended(lc, inf_engine):
