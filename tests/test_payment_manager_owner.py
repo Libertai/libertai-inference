@@ -20,6 +20,7 @@ from tests.test_payment_manager import FakeProvider
 @pytest.mark.asyncio
 async def test_lclw_activation_no_email_sent(db, monkeypatch):
     """LTAI-only lifecycle emails must not fire for a liberclaw activation."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
     account_id = uuid.uuid4()
     sub = PlanSubscription(
         user_id=None,

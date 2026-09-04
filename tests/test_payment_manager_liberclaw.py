@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from src.config import config
 from src.models.invoice import Invoice
 from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import PlanSubscription
@@ -14,6 +15,13 @@ from src.services.payments.base import PaymentEvent, PaymentEventType
 from src.services.payments.manager import PaymentManager
 from src.subscription_tiers import PRODUCT_LIBERCLAW
 from tests.test_payment_manager import FakeProvider, _event_types
+
+
+@pytest.fixture(autouse=True)
+def _lclw_billing_cut_over(monkeypatch):
+    """Every test here exercises handle_event's LCLW dispatch, which is 200-skipped while
+    LIBERCLAW_BILLING_ENABLED is off — cutover-flag gating itself is covered elsewhere."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
 
 
 async def _lc_user(db, account_id: uuid.UUID, tier: str = "starter") -> LiberclawUser:

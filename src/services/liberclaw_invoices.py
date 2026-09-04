@@ -21,6 +21,7 @@ from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.services.invoice import SERIES_LCLW, issue_invoice
 from src.services.payments.base import PaymentProvider
 from src.services.payments.manager import TOPUP_EXT_REF_PREFIX, order_invoice_fields
+from src.subscription_tiers import PRODUCT_LIBERTAI
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -50,13 +51,14 @@ async def _is_foreign_order(db: AsyncSession, provider_id: str, order: dict, ord
     # that also carry NULL (never-paid checkouts) — that would reject every such order.
     # limit(1): a retried charge can log more than one row for the same subscription/order id,
     # and scalar_one_or_none() raises MultipleResultsFound (-> 500) on more than one match.
+    # Only a product='libertai' hit is foreign: an LCLW hit belongs to this same channel.
     if sub_id is not None:
-        owned_sub = (
+        owned_sub_product = (
             await db.execute(
-                select(PlanSubscription.id).where(PlanSubscription.provider_subscription_id == sub_id).limit(1)
+                select(PlanSubscription.product).where(PlanSubscription.provider_subscription_id == sub_id).limit(1)
             )
         ).scalar_one_or_none()
-        if owned_sub is not None:
+        if owned_sub_product == PRODUCT_LIBERTAI:
             return True
 
     # Plain string match: credit_transactions carries no metadata column to key on instead.
@@ -69,14 +71,18 @@ async def _is_foreign_order(db: AsyncSession, provider_id: str, order: dict, ord
     if owned_topup is not None:
         return True
 
-    owned_event = (
+    # Same product narrowing as the resolved-sub arm above: events like checkout_declined /
+    # activation_refused / refunded carry an order_id with no invoice ever issued against it,
+    # so an LCLW hit here must not 409 LC's own order during the overlap window.
+    owned_event_product = (
         await db.execute(
-            select(PlanSubscriptionEvent.id)
+            select(PlanSubscription.product)
+            .join(PlanSubscriptionEvent, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
             .where(PlanSubscriptionEvent.metadata_json["order_id"].as_string() == order_id)
             .limit(1)
         )
     ).scalar_one_or_none()
-    return owned_event is not None
+    return owned_event_product == PRODUCT_LIBERTAI
 
 
 def _audited(status: str, liberclaw_account_id: uuid.UUID, order_id: str | None, **fields) -> IssueResult:

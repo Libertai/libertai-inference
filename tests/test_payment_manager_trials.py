@@ -92,9 +92,10 @@ async def test_shared_dispatch_never_credits_trial_remainder(db):
 
 
 @pytest.mark.asyncio
-async def test_lclw_remainder_grants_lc_credits(db):
+async def test_lclw_remainder_grants_lc_credits(db, monkeypatch):
     """A paid starter->pro LCLW upgrade grants the unused fraction of starter's credit cap
     as a liberclaw_credit_grants row, keyed 'upgrade_remainder:<old_sub_id>'."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
     account_id = uuid.uuid4()
     owner = Owner.for_liberclaw(account_id, email=f"{account_id.hex}@example.com")
     await _lc_user(db, account_id, tier="free")
@@ -147,6 +148,7 @@ async def test_lclw_remainder_grant_failure_does_not_roll_back_activation(db, mo
     bare Python raise) must not poison the activation's transaction: the savepoint isolates it,
     the activation stands, and the retry sweep gets a pending event instead of a rolled-back
     webhook."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
     account_id = uuid.uuid4()
     owner = Owner.for_liberclaw(account_id, email=f"{account_id.hex}@example.com")
     await _lc_user(db, account_id, tier="free")

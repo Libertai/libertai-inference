@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class LiberclawApiKeyRequest(BaseModel):
@@ -96,3 +96,52 @@ class SubscriptionCycle(BaseModel):
 
 class SubscriptionCyclesResponse(BaseModel):
     cycles: list[SubscriptionCycle]
+
+
+class LiberclawAccountRequest(BaseModel):
+    liberclaw_account_id: uuid.UUID
+
+
+class LiberclawTierRequest(LiberclawAccountRequest):
+    tier: str
+
+
+class LiberclawUpgradeRequest(LiberclawAccountRequest):
+    tier: str
+    redirect_url: str
+
+
+class LiberclawCheckoutRequest(LiberclawAccountRequest):
+    email: EmailStr
+    tier: str
+    redirect_url: str
+
+
+class LiberclawCheckoutResponse(BaseModel):
+    url: str | None
+    subscription_id: str | None
+
+
+class LiberclawTrialRequest(LiberclawAccountRequest):
+    email: EmailStr
+    # Mirrors grant_trial's own bound (1-90 days) — the manager never checks this one itself.
+    days: int = Field(ge=1, le=90)
+
+
+class LiberclawTrialEligibilityResponse(BaseModel):
+    eligible: bool
+    reason: str | None
+
+
+class LiberclawAdminGrantTrialRequest(LiberclawAccountRequest):
+    tier: str
+    days: int
+    granted_by: str | None = None
+
+
+class LiberclawAdminExtendRequest(LiberclawAccountRequest):
+    days: int
+
+
+class LiberclawExtendResponse(BaseModel):
+    new_period_end: str
