@@ -176,5 +176,15 @@ class ApiKeyAdminListResponse(BaseModel):
     tiers: dict[str, str] = {}
 
 
+class InferenceCallResponse(BaseModel):
+    """Answer to a usage report: whether the reported key is still usable after that call.
+
+    Metering is post-hoc, so a key that just ran out stays on the model servers' whitelists
+    until the next push; ``invalid`` lets the reporting server drop it right away.
+    """
+
+    invalid: InvalidKeyInfo | None = None
+
+
 class ChatApiKeyResponse(BaseModel):
     key: str

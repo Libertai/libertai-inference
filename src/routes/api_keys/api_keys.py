@@ -17,6 +17,7 @@ from src.interfaces.api_keys import (
     FullApiKey,
     ImageInferenceCallData,
     InferenceCallData,
+    InferenceCallResponse,
 )
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
@@ -155,8 +156,12 @@ async def delete_api_key(key_id: uuid.UUID, user: User = Depends(get_current_use
 
 
 @router.post("/admin/usage")  # type: ignore
-async def register_inference_call(usage_log: InferenceCallData) -> None:
+async def register_inference_call(usage_log: InferenceCallData) -> InferenceCallResponse:
     """Usage report by bearer API key — meter one inference call against the key that made it.
+
+    The response says whether the key is still usable now that this call is metered, so the
+    reporting model server can evict a key that just ran out instead of serving it until the
+    next whitelist push.
 
     NOT an admin endpoint despite the ``/admin`` path prefix (legacy naming, kept only to
     avoid breaking the gateway that calls it). It intentionally takes NO admin token: the
@@ -335,7 +340,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> None:
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
 
-        return
+        return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
     except HTTPException:
         raise
     except Exception as e:
