@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import config
 from src.interfaces.invoices import (
     BillingDetailsResponse,
     BillingDetailsUpdate,
@@ -47,11 +48,11 @@ from src.services.invoice import SERIES_LCLW
 from src.services.invoice_pdf import get_or_render_pdf
 from src.services.liberclaw import LiberclawService
 from src.services.liberclaw_invoices import account_is_known, issue_for_liberclaw
-from src.services.payments.base import UnsupportedCapability
-from src.services.payments.manager import PaymentManager, SupersedeFailed
+from src.services.payments.base import CheckoutResult, UnsupportedCapability
+from src.services.payments.manager import PaymentManager, ProviderCancelFailed, SupersedeFailed
 from src.services.payments.owner import Owner
 from src.services.payments.registry import payment_registry
-from src.services.payments.tier_push import _utc_iso, build_snapshot
+from src.services.payments.tier_push import build_snapshot, utc_iso
 from src.utils.logger import setup_logger
 
 # Checkout/upgrade currency for LiberClaw is always EUR — the LCLW tier registry sells no
@@ -309,6 +310,29 @@ async def delete_billing_details(liberclaw_account_id: uuid.UUID) -> None:
 # --------------------------------------------------------------------- subscription endpoints
 
 
+def require_billing_enabled() -> None:
+    """Guard for every subscription-mutating route: while the flag is off, LiberClaw still owns
+    billing and the webhook 200-skips liberclaw events, so a checkout taken here would charge a
+    customer for a subscription nothing would ever activate. Read paths stay open."""
+    if not config.LIBERCLAW_BILLING_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="LiberClaw billing is not enabled on this backend"
+        )
+
+
+_SUBSCRIPTION_DEPS = [Depends(verify_liberclaw_token), Depends(require_billing_enabled)]
+
+_BRIDGE_CONFLICT_DETAIL = (
+    "This email is already linked to a different LiberClaw account. Sign in with the account "
+    "that owns it, or contact support to have the two merged."
+)
+
+_UNBRIDGED_ACCOUNT_DETAIL = (
+    "Unknown LiberClaw account: no identity bridge row exists for it yet. Have the user sign in "
+    "(or complete a checkout) so the account is bridged, then retry."
+)
+
+
 async def _upsert_bridge(db: AsyncSession, account_id: uuid.UUID, email: str) -> None:
     """Record/refresh the identity-bridge row for ``account_id`` (never allocates an API key)
     so a webhook — which carries only the account id — can resolve its email later.
@@ -319,6 +343,11 @@ async def _upsert_bridge(db: AsyncSession, account_id: uuid.UUID, email: str) ->
     it, and a blind email assignment collides the same way when another account already
     holds the target email (routed through ``_refresh_email_if_safe`` instead, which logs
     and skips rather than raising).
+
+    Raises 409 when the account has no row of its own AND the email's row belongs to another
+    account: nothing here can bridge that account, so every later activation webhook — which
+    carries only the account id — would fail to resolve an email and raise. It must fail before
+    the provider call, not after the customer has paid.
     """
     lc_user = await LiberclawService.resolve_by_account_id(db, account_id)
     if lc_user is None:
@@ -331,6 +360,12 @@ async def _upsert_bridge(db: AsyncSession, account_id: uuid.UUID, email: str) ->
             .scalars()
             .first()
         )
+        if lc_user is not None and lc_user.liberclaw_account_id not in (None, account_id):
+            logger.error(
+                f"LiberClaw identity conflict: account {account_id} has no bridge row, and bridge "
+                f"row {lc_user.id} holding its email is bound to account {lc_user.liberclaw_account_id}"
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_BRIDGE_CONFLICT_DETAIL)
     if lc_user is None:
         db.add(LiberclawUser(user_id=email, user_type="email", liberclaw_account_id=account_id))
     else:
@@ -340,6 +375,27 @@ async def _upsert_bridge(db: AsyncSession, account_id: uuid.UUID, email: str) ->
     await db.flush()
 
 
+def _require_provider_subscription_id(result: CheckoutResult, account_id: uuid.UUID) -> None:
+    """A subscription checkout with no provider id cannot be located again — neither by the
+    caller's requery nor by any webhook. The Revolut-side subscription already exists by the
+    time this is reached, so the link is orphaned and named in the log for manual cleanup."""
+    if result.provider_subscription_id is None:
+        logger.error(
+            f"Payment provider returned no subscription id for liberclaw account {account_id}; "
+            f"orphaned checkout link: {result.checkout_url}"
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
+
+
+async def _require_bridged_account(db: AsyncSession, account_id: uuid.UUID) -> None:
+    """Admin tier writes are refused for an unbridged account: without a bridge row the
+    ``lc_users.tier`` write is a logged no-op, leaving a subscription snapshot advertising a
+    tier that enforces nothing."""
+    if await LiberclawService.resolve_by_account_id(db, account_id) is None:
+        logger.error(f"Admin subscription write refused: liberclaw account {account_id} has no identity bridge row")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_UNBRIDGED_ACCOUNT_DETAIL)
+
+
 async def _owner_with_bridge_email(db: AsyncSession, account_id: uuid.UUID) -> Owner:
     """Owner for a body carrying no email of its own, pulled from the identity bridge if known."""
     lc_user = await LiberclawService.resolve_by_account_id(db, account_id)
@@ -347,7 +403,7 @@ async def _owner_with_bridge_email(db: AsyncSession, account_id: uuid.UUID) -> O
     return Owner.for_liberclaw(account_id, email=email)
 
 
-@router.post("/checkout", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/checkout", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_checkout(body: LiberclawCheckoutRequest) -> LiberclawCheckoutResponse:
     async with AsyncSessionLocal() as db:
         await _upsert_bridge(db, body.liberclaw_account_id, body.email)
@@ -362,6 +418,7 @@ async def liberclaw_checkout(body: LiberclawCheckoutRequest) -> LiberclawCheckou
         except httpx.HTTPError as e:
             logger.error(f"Payment provider API error: {e}")
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
+        _require_provider_subscription_id(result, body.liberclaw_account_id)
         sub_id = (
             await db.execute(
                 select(PlanSubscription.id).where(
@@ -373,7 +430,7 @@ async def liberclaw_checkout(body: LiberclawCheckoutRequest) -> LiberclawCheckou
     return LiberclawCheckoutResponse(url=result.checkout_url, subscription_id=str(sub_id))
 
 
-@router.post("/subscription/upgrade", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/upgrade", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_upgrade(body: LiberclawUpgradeRequest) -> LiberclawCheckoutResponse:
     async with AsyncSessionLocal() as db:
         owner = await _owner_with_bridge_email(db, body.liberclaw_account_id)
@@ -387,6 +444,7 @@ async def liberclaw_upgrade(body: LiberclawUpgradeRequest) -> LiberclawCheckoutR
         except httpx.HTTPError as e:
             logger.error(f"Payment provider API error: {e}")
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
+        _require_provider_subscription_id(result, body.liberclaw_account_id)
         sub_id = (
             await db.execute(
                 select(PlanSubscription.id).where(
@@ -398,7 +456,7 @@ async def liberclaw_upgrade(body: LiberclawUpgradeRequest) -> LiberclawCheckoutR
     return LiberclawCheckoutResponse(url=result.checkout_url, subscription_id=str(sub_id))
 
 
-@router.post("/subscription/cancel", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/cancel", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_cancel(body: LiberclawAccountRequest) -> dict:
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
@@ -411,7 +469,7 @@ async def liberclaw_cancel(body: LiberclawAccountRequest) -> dict:
     return result
 
 
-@router.post("/subscription/resume", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/resume", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_resume(body: LiberclawAccountRequest) -> dict:
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
@@ -424,7 +482,7 @@ async def liberclaw_resume(body: LiberclawAccountRequest) -> dict:
     return result
 
 
-@router.post("/subscription/downgrade", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/downgrade", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_downgrade(body: LiberclawTierRequest) -> dict:
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
@@ -437,7 +495,7 @@ async def liberclaw_downgrade(body: LiberclawTierRequest) -> dict:
     return result
 
 
-@router.post("/subscription/trial", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/trial", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_start_trial(body: LiberclawTrialRequest) -> dict:
     async with AsyncSessionLocal() as db:
         await _upsert_bridge(db, body.liberclaw_account_id, body.email)
@@ -475,10 +533,11 @@ async def liberclaw_subscription_state(liberclaw_account_id: uuid.UUID) -> dict:
         return build_snapshot(sub)
 
 
-@router.post("/subscription/admin/grant-trial", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/admin/grant-trial", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_admin_grant_trial(body: LiberclawAdminGrantTrialRequest) -> dict:
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
+        await _require_bridged_account(db, body.liberclaw_account_id)
         manager = PaymentManager(payment_registry.get("revolut"), db)
         try:
             sub = await manager.grant_trial(owner, body.tier, body.days, body.granted_by)
@@ -488,10 +547,11 @@ async def liberclaw_admin_grant_trial(body: LiberclawAdminGrantTrialRequest) -> 
         return build_snapshot(sub)
 
 
-@router.post("/subscription/admin/override-tier", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/admin/override-tier", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_admin_override_tier(body: LiberclawTierRequest) -> dict:
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
+        await _require_bridged_account(db, body.liberclaw_account_id)
         manager = PaymentManager(payment_registry.get("revolut"), db)
         try:
             await manager.override_tier(owner, body.tier)
@@ -506,36 +566,25 @@ async def liberclaw_admin_override_tier(body: LiberclawTierRequest) -> dict:
         return build_snapshot(sub)
 
 
-@router.post("/subscription/admin/force-cancel", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/admin/force-cancel", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_admin_force_cancel(body: LiberclawAccountRequest) -> dict:
-    """Immediate terminal cancel, bypassing the deferred wind-down.
-
-    ``provider_cancelled`` is pre-marked and flushed BEFORE the provider call (echo arm-1):
-    a cancellation-confirmed webhook racing this request then reads the row as already
-    terminal instead of re-processing it. A failed provider cancel rolls the pre-mark back
-    and 502s uncommitted — nothing here is terminal locally unless the provider agreed too.
-    """
+    """Immediate terminal cancel, bypassing the deferred wind-down."""
     owner = Owner.for_liberclaw(body.liberclaw_account_id)
     async with AsyncSessionLocal() as db:
         manager = PaymentManager(payment_registry.get("revolut"), db)
-        sub = await manager._active_subscription(owner, lock=True)
-        if sub is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription")
-        sub.provider_cancelled = True
-        await db.flush()
-        if not await manager._cancel_on_provider(sub):
-            # No re-assignment here: db.rollback() below discards the flushed pre-mark too.
-            await db.rollback()
+        try:
+            sub = await manager.force_cancel(owner)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except ProviderCancelFailed as e:
+            logger.error(f"Force-cancel failed at the provider: {e}")
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
-        sub.status = "cancelled"
-        await manager._log_event(sub, "cancelled", metadata={"source": "admin_force_cancel"})
-        await manager._lclw_sync_tier_free_unless_live(owner, exclude_sub_id=sub.id)
         await db.commit()
         await db.refresh(sub)  # updated_at is server-computed (onupdate): reload before reading it
         return build_snapshot(sub)
 
 
-@router.post("/subscription/admin/extend", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+@router.post("/subscription/admin/extend", dependencies=_SUBSCRIPTION_DEPS)  # type: ignore
 async def liberclaw_admin_extend(body: LiberclawAdminExtendRequest) -> LiberclawExtendResponse:
     if body.days < 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="days must be positive")
@@ -549,4 +598,4 @@ async def liberclaw_admin_extend(body: LiberclawAdminExtendRequest) -> Liberclaw
         sub.current_period_end = base + timedelta(days=body.days)
         await manager._log_event(sub, "admin_extended", metadata={"days": body.days})
         await db.commit()
-        return LiberclawExtendResponse(new_period_end=_utc_iso(sub.current_period_end))
+        return LiberclawExtendResponse(new_period_end=utc_iso(sub.current_period_end))

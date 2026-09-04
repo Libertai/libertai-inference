@@ -15,7 +15,7 @@ from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.routes.liberclaw import liberclaw as liberclaw_routes
-from src.services.payments.base import PaymentEvent, PaymentEventType
+from src.services.payments.base import CheckoutResult, PaymentEvent, PaymentEventType
 from src.services.payments.manager import PaymentManager
 from src.subscription_tiers import PRODUCT_LIBERCLAW
 from tests.test_liberclaw_invoice_endpoints import HEADERS, _cleanup, _install_fake_provider, _order, _post
@@ -27,6 +27,13 @@ def _liberclaw_secret(monkeypatch):
     """HEADERS is imported from test_liberclaw_invoice_endpoints, which keys on this same
     secret — its autouse fixture only applies within that module, so it's repeated here."""
     monkeypatch.setattr(config, "LIBERCLAW_SECRET", HEADERS["x-liberclaw-token"])
+
+
+@pytest.fixture(autouse=True)
+def _billing_enabled(monkeypatch):
+    """Every mutating subscription route is refused while the cutover flag is off; the tests
+    that assert that refusal flip it back themselves."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
 
 
 # --------------------------------------------------------------------- fixtures / helpers
@@ -197,6 +204,121 @@ async def test_checkout_email_rename_collision_is_skipped_not_raised(async_clien
     finally:
         await _cleanup_account(account_id)
         await _cleanup_account(other_account_id)
+
+
+async def test_checkout_email_bound_to_another_account_is_409_before_any_provider_call(async_client, monkeypatch):
+    """Unresolvable identity: the account has no bridge row of its own and the email's row
+    belongs to someone else. Nothing can bridge it, so every activation webhook would raise —
+    the checkout must be refused before the customer is charged."""
+    fake = _install_fake_provider(monkeypatch)
+    errors: list[str] = []
+    monkeypatch.setattr(liberclaw_routes.logger, "error", lambda msg, **kw: errors.append(msg))
+
+    account_id = uuid.uuid4()
+    other_account_id = uuid.uuid4()
+    email = f"shared-{uuid.uuid4().hex}@example.com"
+    async with AsyncSessionLocal() as db:
+        db.add(LiberclawUser(user_id=email, user_type="email", liberclaw_account_id=other_account_id))
+        await db.commit()
+    try:
+        resp = await async_client.post(
+            "/liberclaw/checkout",
+            headers=HEADERS,
+            json={
+                "liberclaw_account_id": str(account_id),
+                "email": email,
+                "tier": "starter",
+                "redirect_url": "http://lc.example/callback",
+            },
+        )
+        assert resp.status_code == 409
+
+        assert fake.sub_seq == 0  # no Revolut subscription created
+        assert fake.sub_products == []
+        assert any(str(account_id) in m and str(other_account_id) in m for m in errors)
+
+        async with AsyncSessionLocal() as db:
+            subs = (
+                (await db.execute(select(PlanSubscription).where(PlanSubscription.liberclaw_account_id == account_id)))
+                .scalars()
+                .all()
+            )
+        assert subs == []
+    finally:
+        await _cleanup_account(account_id)
+        await _cleanup_account(other_account_id)
+
+
+async def test_trial_email_bound_to_another_account_is_409(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    other_account_id = uuid.uuid4()
+    email = f"shared-{uuid.uuid4().hex}@example.com"
+    async with AsyncSessionLocal() as db:
+        db.add(LiberclawUser(user_id=email, user_type="email", liberclaw_account_id=other_account_id))
+        await db.commit()
+    try:
+        resp = await async_client.post(
+            "/liberclaw/subscription/trial",
+            headers=HEADERS,
+            json={"liberclaw_account_id": str(account_id), "email": email, "days": 14},
+        )
+        assert resp.status_code == 409
+        assert fake.sub_seq == 0
+
+        async with AsyncSessionLocal() as db:
+            subs = (
+                (await db.execute(select(PlanSubscription).where(PlanSubscription.liberclaw_account_id == account_id)))
+                .scalars()
+                .all()
+            )
+        assert subs == []
+    finally:
+        await _cleanup_account(account_id)
+        await _cleanup_account(other_account_id)
+
+
+async def test_checkout_without_provider_subscription_id_is_502(async_client, monkeypatch):
+    """A provider answer with no subscription id leaves a Revolut subscription nothing can
+    locate again: 502 with the orphaned link logged, and no local row committed."""
+    fake = _install_fake_provider(monkeypatch)
+    errors: list[str] = []
+    monkeypatch.setattr(liberclaw_routes.logger, "error", lambda msg, **kw: errors.append(msg))
+
+    async def _no_subscription_id(**kwargs):
+        return CheckoutResult(
+            checkout_url="http://pay/orphan",
+            provider_subscription_id=None,
+            provider_customer_id="cust_orphan",
+            order_id="setup_orphan",
+        )
+
+    monkeypatch.setattr(fake, "create_subscription", _no_subscription_id)
+
+    account_id = uuid.uuid4()
+    try:
+        resp = await async_client.post(
+            "/liberclaw/checkout",
+            headers=HEADERS,
+            json={
+                "liberclaw_account_id": str(account_id),
+                "email": "orphan@example.com",
+                "tier": "starter",
+                "redirect_url": "http://lc.example/callback",
+            },
+        )
+        assert resp.status_code == 502
+        assert any("http://pay/orphan" in m for m in errors)
+
+        async with AsyncSessionLocal() as db:
+            subs = (
+                (await db.execute(select(PlanSubscription).where(PlanSubscription.liberclaw_account_id == account_id)))
+                .scalars()
+                .all()
+            )
+        assert subs == []
+    finally:
+        await _cleanup_account(account_id)
 
 
 # --------------------------------------------------------------------- upgrade / EUR pinning
@@ -427,6 +549,7 @@ async def test_subscription_state_includes_never_paid_pending_row(async_client, 
 async def test_admin_grant_trial_happy_path(async_client, monkeypatch):
     _install_fake_provider(monkeypatch)
     account_id = uuid.uuid4()
+    await _seed_lc_user(account_id)
     try:
         resp = await async_client.post(
             "/liberclaw/subscription/admin/grant-trial",
@@ -445,6 +568,7 @@ async def test_admin_grant_trial_happy_path(async_client, monkeypatch):
 async def test_admin_override_tier_happy_path(async_client, monkeypatch):
     _install_fake_provider(monkeypatch)
     account_id = uuid.uuid4()
+    await _seed_lc_user(account_id)
     try:
         resp = await async_client.post(
             "/liberclaw/subscription/admin/override-tier",
@@ -456,6 +580,58 @@ async def test_admin_override_tier_happy_path(async_client, monkeypatch):
         assert body["tier"] == "team"
         assert body["is_trial"] is False
         assert body["status"] == "active"
+
+        async with AsyncSessionLocal() as db:
+            lc_user = (
+                await db.execute(select(LiberclawUser).where(LiberclawUser.liberclaw_account_id == account_id))
+            ).scalar_one()
+        assert lc_user.tier == "team"  # the snapshot's tier is the one actually enforced
+    finally:
+        await _cleanup_account(account_id)
+
+
+async def test_admin_grant_trial_unbridged_account_is_404(async_client, monkeypatch):
+    """No bridge row: the lc_users.tier write would be a logged no-op, so the snapshot would
+    advertise a tier that enforces nothing. Refused instead, and no row is created."""
+    _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    try:
+        resp = await async_client.post(
+            "/liberclaw/subscription/admin/grant-trial",
+            headers=HEADERS,
+            json={"liberclaw_account_id": str(account_id), "tier": "pro", "days": 30, "granted_by": "ops@example.com"},
+        )
+        assert resp.status_code == 404
+
+        async with AsyncSessionLocal() as db:
+            subs = (
+                (await db.execute(select(PlanSubscription).where(PlanSubscription.liberclaw_account_id == account_id)))
+                .scalars()
+                .all()
+            )
+        assert subs == []
+    finally:
+        await _cleanup_account(account_id)
+
+
+async def test_admin_override_tier_unbridged_account_is_404(async_client, monkeypatch):
+    _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    try:
+        resp = await async_client.post(
+            "/liberclaw/subscription/admin/override-tier",
+            headers=HEADERS,
+            json={"liberclaw_account_id": str(account_id), "tier": "team"},
+        )
+        assert resp.status_code == 404
+
+        async with AsyncSessionLocal() as db:
+            subs = (
+                (await db.execute(select(PlanSubscription).where(PlanSubscription.liberclaw_account_id == account_id)))
+                .scalars()
+                .all()
+            )
+        assert subs == []
     finally:
         await _cleanup_account(account_id)
 
@@ -563,6 +739,74 @@ async def test_admin_extend_happy_path(async_client, monkeypatch):
         sub = await _get_sub(sub_id)
         expected_end = base_end + timedelta(days=5)
         assert abs((sub.current_period_end - expected_end).total_seconds()) < 1
+    finally:
+        await _cleanup_account(account_id)
+
+
+# --------------------------------------------------------------------- flag-off: mutations refused, reads live
+
+
+async def test_flag_off_refuses_every_mutating_subscription_route(async_client, monkeypatch):
+    """Pre-flip, LiberClaw still owns billing and the webhook 200-skips liberclaw events: a
+    checkout taken here would charge for a subscription nothing would activate."""
+    fake = _install_fake_provider(monkeypatch)
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", False)
+    account_id = uuid.uuid4()
+    email = f"flagoff-{uuid.uuid4().hex}@example.com"
+    requests = [
+        ("/liberclaw/checkout", {"email": email, "tier": "starter", "redirect_url": "http://lc.example/cb"}),
+        ("/liberclaw/subscription/upgrade", {"tier": "pro", "redirect_url": "http://lc.example/cb"}),
+        ("/liberclaw/subscription/cancel", {}),
+        ("/liberclaw/subscription/resume", {}),
+        ("/liberclaw/subscription/downgrade", {"tier": "starter"}),
+        ("/liberclaw/subscription/trial", {"email": email, "days": 14}),
+        ("/liberclaw/subscription/admin/grant-trial", {"tier": "pro", "days": 30, "granted_by": "ops@example.com"}),
+        ("/liberclaw/subscription/admin/override-tier", {"tier": "team"}),
+        ("/liberclaw/subscription/admin/force-cancel", {}),
+        ("/liberclaw/subscription/admin/extend", {"days": 5}),
+    ]
+    try:
+        for path, body in requests:
+            resp = await async_client.post(
+                path, headers=HEADERS, json={"liberclaw_account_id": str(account_id), **body}
+            )
+            assert resp.status_code == 409, path
+            assert resp.json()["detail"] == "LiberClaw billing is not enabled on this backend"
+
+        assert fake.sub_seq == 0  # nothing reached the provider
+        assert fake.cancelled == []
+
+        state = await async_client.get(
+            "/liberclaw/subscription-state", headers=HEADERS, params={"liberclaw_account_id": str(account_id)}
+        )
+        assert state.status_code == 404  # read path still live: no row for this account
+
+        eligibility = await async_client.get(
+            "/liberclaw/subscription/trial-eligibility",
+            headers=HEADERS,
+            params={"liberclaw_account_id": str(account_id)},
+        )
+        assert eligibility.status_code == 200
+
+        invoices = await async_client.get(
+            "/liberclaw/invoices", headers=HEADERS, params={"liberclaw_account_id": str(account_id)}
+        )
+        assert invoices.status_code == 200
+    finally:
+        await _cleanup_account(account_id)
+
+
+async def test_flag_off_read_of_existing_subscription_state_is_200(async_client, monkeypatch):
+    _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    await _seed_sub(account_id, tier="starter")
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", False)
+    try:
+        resp = await async_client.get(
+            "/liberclaw/subscription-state", headers=HEADERS, params={"liberclaw_account_id": str(account_id)}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tier"] == "starter"
     finally:
         await _cleanup_account(account_id)
 

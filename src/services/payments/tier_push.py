@@ -64,7 +64,7 @@ _pending_tasks: set[asyncio.Task] = set()
 _warned_unconfigured = False
 
 
-def _push_ready() -> bool:
+def push_ready() -> bool:
     """False (no-op everywhere) unless the flag is on AND the receiver is configured.
     An unconfigured URL/secret with the flag on warns once rather than per-flush."""
     global _warned_unconfigured
@@ -78,7 +78,7 @@ def _push_ready() -> bool:
     return True
 
 
-def _utc_iso(dt: datetime) -> str:
+def utc_iso(dt: datetime) -> str:
     """Naive columns hold UTC; emit an offset so a client's ``Date`` parse can't skew by its
     own local zone (mirrors ``src.interfaces.common.UtcDatetime``'s convention)."""
     return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).isoformat()
@@ -94,12 +94,12 @@ def build_snapshot(sub: PlanSubscription) -> dict[str, Any]:
         "status": sub.status,
         "is_trial": sub.is_trial,
         "currency": sub.currency,
-        "current_period_start": _utc_iso(sub.current_period_start) if sub.current_period_start else None,
-        "current_period_end": _utc_iso(sub.current_period_end) if sub.current_period_end else None,
+        "current_period_start": utc_iso(sub.current_period_start) if sub.current_period_start else None,
+        "current_period_end": utc_iso(sub.current_period_end) if sub.current_period_end else None,
         "cancel_at_period_end": sub.cancel_at_period_end,
         "pending_tier": sub.pending_tier,
-        "created_at": _utc_iso(sub.created_at),
-        "snapshot_at": _utc_iso(sub.updated_at),
+        "created_at": utc_iso(sub.created_at),
+        "snapshot_at": utc_iso(sub.updated_at),
     }
 
 
@@ -123,7 +123,7 @@ def collect_snapshot_pushes(session: SyncSession) -> None:
     would re-enter this same handler): the flush already in progress is still open for more
     SQL, just not for another unit-of-work pass.
     """
-    if not _push_ready():
+    if not push_ready():
         return
     changed_ids: set[uuid.UUID] = set()
     for obj in session.new:
@@ -207,7 +207,7 @@ async def push_snapshot(sub_id: uuid.UUID) -> bool:
     """
     from src.models.base import AsyncSessionLocal  # deferred: base.py imports this module
 
-    if not _push_ready():
+    if not push_ready():
         return False
     try:
         async with AsyncSessionLocal() as db:
@@ -282,7 +282,7 @@ async def drain_pending_tier_pushes(db) -> int:
     One row per subscription (``group_by``, oldest marker first via ``min(created_at)``) —
     a row with several markers (racing changes, see ``push_snapshot``) is still one push.
     """
-    if not _push_ready():
+    if not push_ready():
         return 0
     sub_ids = (
         (

@@ -36,7 +36,7 @@ from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
 from src.services.payments.owner import Owner
 from src.services.payments.registry import payment_registry
-from src.services.payments.tier_push import drain_pending_tier_pushes
+from src.services.payments.tier_push import drain_pending_tier_pushes, push_ready
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
 from src.topup_packs import TOPUP_PACKS, get_pack
 from src.utils.cron import scheduler
@@ -86,16 +86,18 @@ async def expire_subscriptions() -> int:
             logger.error("reconcile_pending failed", exc_info=True)
 
     # Retry drain for tier_push_pending markers a background push never cleared (crash
-    # mid-push, or a push that failed) — flag-gated (and a no-op) inside the call itself.
-    async with AsyncSessionLocal() as db:
-        try:
-            drained = await drain_pending_tier_pushes(db)
-            await db.commit()
-            if drained:
-                logger.info(f"Drained {drained} pending LiberClaw snapshot push(es)")
-        except Exception:
-            await db.rollback()
-            logger.error("drain_pending_tier_pushes failed", exc_info=True)
+    # mid-push, or a push that failed). Readiness is checked here as well as inside the call:
+    # a not-ready run must open no session and take no advisory lock for a guaranteed no-op.
+    if push_ready():
+        async with AsyncSessionLocal() as db:
+            try:
+                drained = await drain_pending_tier_pushes(db)
+                await db.commit()
+                if drained:
+                    logger.info(f"Drained {drained} pending LiberClaw snapshot push(es)")
+            except Exception:
+                await db.rollback()
+                logger.error("drain_pending_tier_pushes failed", exc_info=True)
     return count
 
 
