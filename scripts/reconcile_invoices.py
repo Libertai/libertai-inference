@@ -56,9 +56,11 @@ def classify_order(order: dict, own_subscription_ids: set[str], own_topup_order_
 
     "own": inference's own order (a topup — matched via credit_transactions, because the
     list payload omits ``merchant_order_ext_ref`` — or a subscription id matching a local
-    plan_subscriptions row). "liberclaw": a foreign subscription id corroborated by a
-    "LiberClaw" description prefix. "unclassifiable": neither signal lines up — the caller
-    logs these for manual triage.
+    plan_subscriptions row, which post-migration covers every LiberClaw subscription too).
+    "unclassifiable": no own-signal lines up — the caller logs these for manual triage.
+    A "LiberClaw" description with a subscription id absent from own_subscription_ids is
+    an unmigrated row rather than a benign foreign order, so it also gets a dedicated
+    WARNING here (on top of counting unclassifiable).
     """
     ext_ref = order.get("merchant_order_ext_ref") or ""
     if ext_ref.startswith(TOPUP_EXT_REF_PREFIX) or order.get("id") in own_topup_order_ids:
@@ -69,7 +71,7 @@ def classify_order(order: dict, own_subscription_ids: set[str], own_topup_order_
         return "own"
     description = order.get("description") or ""
     if sub_id is not None and description.startswith("LiberClaw"):
-        return "liberclaw"
+        logger.warning(f"unmigrated LiberClaw order: {order.get('id')}")
     return "unclassifiable"
 
 
