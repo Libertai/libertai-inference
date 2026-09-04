@@ -5,6 +5,7 @@ from sqlalchemy import select
 from src.models.lifecycle_email_send import LifecycleEmailSend
 from src.services.payments.base import PaymentEvent, PaymentEventType
 from src.services.payments.manager import PaymentManager
+from src.services.payments.owner import Owner
 from tests.test_payment_manager import FakeProvider, _make_user
 
 
@@ -21,7 +22,7 @@ async def _send_types(db, user_id) -> list[str]:
 
 
 async def _activate(mgr, user, tier: str):
-    await mgr.start_checkout(user, tier=tier, redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier=tier, redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -82,7 +83,7 @@ async def test_renewal_failure_emails_once_per_incident(db):
 async def test_declined_checkout_card_sends_no_email(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -99,7 +100,7 @@ async def test_overdue_on_unpaid_checkout_sends_no_email(db):
     """A provider overdue notice on a never-paid checkout row is not a failed charge."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -130,5 +131,5 @@ async def test_cancel_sends_confirmation(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
     await _activate(mgr, user, "go")
-    await mgr.cancel(user)
+    await mgr.cancel(Owner.for_user(user))
     assert "cancellation_confirmed" in await _send_types(db, user.id)

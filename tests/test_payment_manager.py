@@ -23,6 +23,8 @@ from src.services.payments.base import (
     SubscriptionInfo,
 )
 from src.services.payments.manager import PaymentManager, SupersedeFailed, _topup_external_ref
+from src.services.payments.owner import Owner
+from src.subscription_tiers import PRODUCT_LIBERTAI
 
 
 class FakeProvider(PaymentProvider):
@@ -35,6 +37,8 @@ class FakeProvider(PaymentProvider):
         self.cancel_failures: set[str] = set()  # provider subscription ids whose cancel raises
         self.plan_changes: list[tuple[str, str]] = []
         self.sub_currencies: list[str] = []
+        self.sub_products: list[str] = []  # product passed to create_subscription, in call order
+        self.plan_change_products: list[str] = []  # product passed to change_subscription_plan
         self.topups: list[tuple[float, str]] = []
         self.sub_state = "pending"  # provider-side state reported by get_subscription
         self.orders: dict[str, dict] = {}  # order_id -> payload returned by get_order
@@ -65,9 +69,12 @@ class FakeProvider(PaymentProvider):
         self.topups.append((amount, currency))
         return CheckoutResult(checkout_url="http://pay/topup", order_id=f"ord_{self.order_seq}")
 
-    async def create_subscription(self, *, user_email, tier, currency, redirect_url, provider_customer_id=None):
+    async def create_subscription(
+        self, *, user_email, tier, currency, redirect_url, provider_customer_id=None, product=PRODUCT_LIBERTAI
+    ):
         self.sub_seq += 1
         self.sub_currencies.append(currency)
+        self.sub_products.append(product)
         return CheckoutResult(
             checkout_url="http://pay/sub",
             provider_subscription_id=f"psub_{self.sub_seq}",
@@ -80,8 +87,11 @@ class FakeProvider(PaymentProvider):
             raise RuntimeError(f"provider refused to cancel {provider_subscription_id}")
         self.cancelled.append(provider_subscription_id)
 
-    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+    async def change_subscription_plan(
+        self, provider_subscription_id: str, *, tier: str, currency: str, product=PRODUCT_LIBERTAI
+    ) -> None:
         self.plan_changes.append((provider_subscription_id, tier, currency))
+        self.plan_change_products.append(product)
 
     async def get_subscription(self, provider_subscription_id: str) -> SubscriptionInfo:
         # Dynamic 30-day cycle: 10 days in, 20 days left (keeps remainder math stable over time).
@@ -327,10 +337,10 @@ async def test_subscribe_activates_tier(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
 
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "pending"
-    assert await mgr.current_tier(user.id) == "free"  # not active yet
+    assert await mgr.current_tier(Owner.for_user(user)) == "free"  # not active yet
 
     await mgr.handle_event(
         PaymentEvent(
@@ -341,17 +351,17 @@ async def test_subscribe_activates_tier(db):
             order_id="setup_1",
         )
     )
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
     assert sub.current_period_end is not None
-    assert await mgr.current_tier(user.id) == "plus"
+    assert await mgr.current_tier(Owner.for_user(user)) == "plus"
 
 
 @pytest.mark.asyncio
 async def test_subscription_event_dedup(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
 
     event = PaymentEvent(
         provider="fake",
@@ -394,7 +404,7 @@ async def test_declined_card_at_checkout_keeps_sub_pending(db):
     """
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
         PaymentEvent(
@@ -406,7 +416,7 @@ async def test_declined_card_at_checkout_keeps_sub_pending(db):
             metadata={"order_id": "setup_1"},
         )
     )
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "pending"
     assert await _event_types(db, sub.id) == ["created", "checkout_declined"]
 
@@ -421,9 +431,9 @@ async def test_declined_card_at_checkout_keeps_sub_pending(db):
             metadata={"order_id": "setup_1"},
         )
     )
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
-    assert await mgr.current_tier(user.id) == "plus"
+    assert await mgr.current_tier(Owner.for_user(user)) == "plus"
 
 
 @pytest.mark.asyncio
@@ -431,7 +441,7 @@ async def test_late_failure_for_completed_order_does_not_revoke_sub(db):
     """Webhooks are not ordered: a declined attempt can land after the order completed."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
         PaymentEvent(
@@ -455,9 +465,9 @@ async def test_late_failure_for_completed_order_does_not_revoke_sub(db):
         )
     )
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
-    assert await mgr.current_tier(user.id) == "plus"
+    assert await mgr.current_tier(Owner.for_user(user)) == "plus"
     assert "payment_failed" not in await _event_types(db, sub.id)
 
 
@@ -466,7 +476,7 @@ async def test_renewal_failure_marks_overdue(db):
     """A failed renewal (a NEW order on an active sub) still goes overdue and loses the tier."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -489,10 +499,10 @@ async def test_renewal_failure_marks_overdue(db):
         )
     )
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "overdue"
     assert "payment_failed" in await _event_types(db, sub.id)
-    assert await mgr.current_tier(user.id) == "free"
+    assert await mgr.current_tier(Owner.for_user(user)) == "free"
 
 
 @pytest.mark.asyncio
@@ -501,7 +511,7 @@ async def test_successful_retry_restores_an_overdue_subscription(db):
     hand the tier back on its own, with no operator action."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -522,7 +532,7 @@ async def test_successful_retry_restores_an_overdue_subscription(db):
             metadata={"order_id": "renew_1"},
         )
     )
-    assert await mgr.current_tier(user.id) == "free"
+    assert await mgr.current_tier(Owner.for_user(user)) == "free"
 
     # The retry settles the SAME order the decline was reported against.
     await mgr.handle_event(
@@ -536,10 +546,10 @@ async def test_successful_retry_restores_an_overdue_subscription(db):
         )
     )
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
     assert sub.tier == "plus"
-    assert await mgr.current_tier(user.id) == "plus"
+    assert await mgr.current_tier(Owner.for_user(user)) == "plus"
     assert "renewed" in await _event_types(db, sub.id)
 
 
@@ -549,7 +559,7 @@ async def test_provider_cancel_of_an_overdue_sub_frees_the_slot(db):
     one-live-subscription slot, or the user can never subscribe again."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -582,9 +592,9 @@ async def test_provider_cancel_of_an_overdue_sub_frees_the_slot(db):
         )
     )
 
-    assert await mgr._active_subscription(user.id, lock=False) is None
+    assert await mgr._active_subscription(Owner.for_user(user), lock=False) is None
     # The real proof the slot is free: a fresh checkout opens without tripping the index.
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
 
 
 @pytest.mark.asyncio
@@ -593,8 +603,8 @@ async def test_provider_cancel_of_an_unpaid_checkout_expires_it(db):
     cancelled subscription: recording it as churn counts a user who never converted."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
-    sub_id = (await mgr._active_subscription(user.id, lock=False)).id
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
+    sub_id = (await mgr._active_subscription(Owner.for_user(user), lock=False)).id
 
     await mgr.handle_event(
         PaymentEvent(
@@ -699,7 +709,7 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
     mgr = PaymentManager(provider, db)
 
     # Active go sub.
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -709,10 +719,10 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
             order_id="setup_1",
         )
     )
-    assert await mgr.current_tier(user.id) == "go"
+    assert await mgr.current_tier(Owner.for_user(user)) == "go"
 
     # Upgrade to plus -> old sub stays active, new pending_upgrade checkout created.
-    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.upgrade(Owner.for_user(user), new_tier="plus", redirect_url="http://x", currency="USD")
     live = (
         await db.execute(
             select(PlanSubscription).where(PlanSubscription.user_id == user.id, PlanSubscription.status == "active")
@@ -730,7 +740,7 @@ async def test_upgrade_cancels_old_sub_once_the_new_one_is_paid(db):
             order_id="setup_2",
         )
     )
-    assert await mgr.current_tier(user.id) == "plus"
+    assert await mgr.current_tier(Owner.for_user(user)) == "plus"
     assert "psub_1" in provider.cancelled
     refreshed_old = await db.get(PlanSubscription, live.id)
     assert refreshed_old.status == "cancelled"
@@ -924,7 +934,7 @@ async def test_redelivery_caught_after_the_lock_when_the_early_read_misses(db, m
     has to stop it before it re-runs as a renewal."""
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     event = PaymentEvent(
         provider="fake",
         type=PaymentEventType.order_completed,
@@ -935,7 +945,7 @@ async def test_redelivery_caught_after_the_lock_when_the_early_read_misses(db, m
     )
     await mgr.handle_event(event)
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     await db.refresh(sub)
     events_before = await _event_types(db, sub.id)
     period_end_before = sub.current_period_end
@@ -1189,7 +1199,7 @@ async def test_cancel_sets_period_end_flag(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -1200,9 +1210,9 @@ async def test_cancel_sets_period_end_flag(db):
         )
     )
 
-    res = await mgr.cancel(user)
+    res = await mgr.cancel(Owner.for_user(user))
     assert "end of billing period" in res["message"]
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.cancel_at_period_end is True
     assert sub.pending_tier == "free"  # cancel == downgrade to free (drives the plans UI)
     assert sub.status == "active"  # still active until period end
@@ -1241,9 +1251,9 @@ async def test_wind_down_retires_the_open_upgrade_checkout(db, action, arg):
     await db.flush()
 
     if action == "cancel":
-        await manager.cancel(user)
+        await manager.cancel(Owner.for_user(user))
     else:
-        await manager.request_downgrade(user, arg)
+        await manager.request_downgrade(Owner.for_user(user), arg)
 
     await db.refresh(checkout)
     assert checkout.status == "expired"
@@ -1282,7 +1292,7 @@ async def test_wind_down_records_the_retirement_when_the_cancel_fails(db):
     db.add_all([live, checkout])
     await db.flush()
 
-    await manager.cancel(user)
+    await manager.cancel(Owner.for_user(user))
 
     await db.refresh(checkout)
     assert checkout.status == "pending_upgrade"  # still live at the provider, so not marked dead
@@ -1316,9 +1326,9 @@ async def test_start_checkout_threads_currency_to_provider_and_locks_row(db, cur
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
 
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency=currency)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency=currency)
     assert provider.sub_currencies == [currency]
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.currency == currency
 
 
@@ -1328,7 +1338,7 @@ async def test_upgrade_threads_currency(db):
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
 
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="EUR")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="EUR")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -1339,7 +1349,7 @@ async def test_upgrade_threads_currency(db):
         )
     )
 
-    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="EUR")
+    await mgr.upgrade(Owner.for_user(user), new_tier="plus", redirect_url="http://x", currency="EUR")
     assert provider.sub_currencies == ["EUR", "EUR"]
     new_sub = (
         await db.execute(
@@ -1445,7 +1455,7 @@ async def _active_plus_sub(db, provider) -> tuple:
     """User with an active 'plus' subscription on the fake provider."""
     user = await _make_user(db)
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -1465,10 +1475,10 @@ async def test_paid_downgrade_schedules_plan_change_not_cancel(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
 
-    res = await mgr.request_downgrade(user, new_tier="go")
+    res = await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
     assert res["new_tier"] == "go"
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.pending_tier == "go"
     assert sub.cancel_at_period_end is False
     assert provider.cancelled == []
@@ -1482,12 +1492,12 @@ async def test_paid_downgrade_supersedes_earlier_cancel(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
 
-    await mgr.cancel(user)
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.cancel(Owner.for_user(user))
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.cancel_at_period_end is True
 
-    await mgr.request_downgrade(user, new_tier="go")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.cancel_at_period_end is False
     assert sub.pending_tier == "go"
 
@@ -1497,8 +1507,8 @@ async def test_downgrade_to_free_still_cancels(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
 
-    await mgr.request_downgrade(user, new_tier="free")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.request_downgrade(Owner.for_user(user), new_tier="free")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.cancel_at_period_end is True
     assert sub.pending_tier == "free"
     assert provider.cancelled == []  # deferred to the pre-renewal cron pass
@@ -1510,15 +1520,15 @@ async def test_next_cycle_payment_applies_pending_downgrade(db):
     """The first billing of the new cycle (on the lower plan) flips the local tier."""
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.request_downgrade(user, new_tier="go")
+    await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
 
     await mgr.handle_event(_paid_event(2))
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.tier == "go"
     assert sub.pending_tier is None
     assert sub.status == "active"
-    assert await mgr.current_tier(user.id) == "go"
+    assert await mgr.current_tier(Owner.for_user(user)) == "go"
 
 
 @pytest.mark.asyncio
@@ -1526,15 +1536,17 @@ async def test_paid_downgrade_provider_failure_leaves_sub_untouched(db):
     """If the provider rejects the plan change, no pending downgrade is recorded."""
 
     class FailingProvider(FakeProvider):
-        async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+        async def change_subscription_plan(
+            self, provider_subscription_id: str, *, tier: str, currency: str, product=PRODUCT_LIBERTAI
+        ) -> None:
             raise RuntimeError("provider down")
 
     provider = FailingProvider()
     user, mgr = await _active_plus_sub(db, provider)
 
     with pytest.raises(RuntimeError):
-        await mgr.request_downgrade(user, new_tier="go")
-    sub = await mgr._active_subscription(user.id, lock=False)
+        await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.pending_tier is None
     assert sub.cancel_at_period_end is False
 
@@ -1547,7 +1559,7 @@ async def test_upgrade_credits_unused_remainder_of_old_cycle(db):
     mgr = PaymentManager(provider, db)
     user = await _make_user(db)
 
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -1557,7 +1569,7 @@ async def test_upgrade_credits_unused_remainder_of_old_cycle(db):
             order_id="setup_1",
         )
     )
-    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.upgrade(Owner.for_user(user), new_tier="plus", redirect_url="http://x", currency="USD")
     await mgr.handle_event(
         PaymentEvent(
             provider="fake",
@@ -1607,11 +1619,11 @@ async def test_upgrade_remainder_skipped_without_cycle_dates(db):
 async def test_resume_clears_scheduled_cancellation(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.cancel(user)
+    await mgr.cancel(Owner.for_user(user))
 
-    res = await mgr.resume(user)
+    res = await mgr.resume(Owner.for_user(user))
     assert res["tier"] == "plus"
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.cancel_at_period_end is False
     assert sub.pending_tier is None
     assert provider.cancelled == []  # never touched the provider
@@ -1621,10 +1633,10 @@ async def test_resume_clears_scheduled_cancellation(db):
 async def test_resume_undoes_paid_downgrade_via_plan_change_back(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.request_downgrade(user, new_tier="go")
+    await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
 
-    await mgr.resume(user)
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.resume(Owner.for_user(user))
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.pending_tier is None
     # Second plan change schedules a switch BACK to the current (plus) plan.
     assert provider.plan_changes == [("psub_1", "go", "USD"), ("psub_1", "plus", "USD")]
@@ -1635,7 +1647,7 @@ async def test_resume_with_nothing_scheduled_rejected(db):
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
     with pytest.raises(ValueError, match="Nothing to resume"):
-        await mgr.resume(user)
+        await mgr.resume(Owner.for_user(user))
 
 
 @pytest.mark.asyncio
@@ -1647,17 +1659,17 @@ async def test_deferred_provider_cancel_runs_before_renewal(db):
     provider = FakeProvider()
     provider.cycle_end_days = 1 / 24  # provider agrees the cycle ends within the hour
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.cancel(user)
+    await mgr.cancel(Owner.for_user(user))
     assert provider.cancelled == []
 
     # Pull the period end into the pre-cancel window (naive, matching the columns).
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     sub.current_period_end = datetime.now() + timedelta(hours=1)
     await db.flush()
 
     await mgr.check_expirations()
     assert "psub_1" in provider.cancelled
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"  # entitlement holds until the expiry pass (24h grace)
 
 
@@ -1673,17 +1685,17 @@ async def test_deferred_cancel_refuses_a_stale_local_period_end(db):
 
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.cancel(user)
+    await mgr.cancel(Owner.for_user(user))
 
     # Stale: local says the cycle ended an hour ago, the provider says 20 days left.
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     sub.current_period_end = datetime.now() - timedelta(hours=1)
     await db.flush()
 
     await mgr.check_expirations()
 
     assert provider.cancelled == []  # nothing cancelled, so nothing refunded
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
     assert sub.current_period_end > datetime.now()  # and the stale date was healed
 
@@ -1696,10 +1708,10 @@ async def test_deferred_cancel_skips_when_the_provider_cannot_be_read(db):
 
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    await mgr.cancel(user)
+    await mgr.cancel(Owner.for_user(user))
     provider.sub_read_failures.add("psub_1")
 
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     sub.current_period_end = datetime.now() + timedelta(hours=1)
     await db.flush()
 
@@ -1717,7 +1729,7 @@ async def test_refund_order_is_not_booked_as_a_renewal(db):
 
     provider = FakeProvider()
     user, mgr = await _active_plus_sub(db, provider)
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     original_end = datetime.now() + timedelta(days=20)
     sub.current_period_end = original_end
     await db.flush()
@@ -1739,7 +1751,7 @@ async def test_refund_order_is_not_booked_as_a_renewal(db):
     types = await _event_types(db, sub.id)
     assert "renewed" not in types
     assert "refunded" in types
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.current_period_end == original_end  # the cycle was not pushed forward
 
 
@@ -1770,7 +1782,7 @@ async def test_check_expirations_revert_survives_index_collision(db, monkeypatch
 async def test_renewal_cycle_logs_renewed_not_activated(db):
     user = await _make_user(db)
     mgr = PaymentManager(FakeProvider(), db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
 
     await mgr.handle_event(
         PaymentEvent(
@@ -1793,7 +1805,7 @@ async def test_renewal_cycle_logs_renewed_not_activated(db):
             metadata={"order_id": "ren_1"},
         )
     )
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]
 
     # Out-of-order decline for the already-paid renewal order is ignored (sub stays active).
@@ -1807,7 +1819,7 @@ async def test_renewal_cycle_logs_renewed_not_activated(db):
             metadata={"order_id": "ren_1"},
         )
     )
-    sub = await mgr._active_subscription(user.id, lock=False)
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     assert sub.status == "active"
     assert await _event_types(db, sub.id) == ["created", "activated", "renewed"]
 
@@ -1830,7 +1842,7 @@ async def test_upgrade_leaves_paid_sub_active(db):
     db.add(old)
     await db.flush()
 
-    await manager.upgrade(user, "max", "http://redirect", "USD")
+    await manager.upgrade(Owner.for_user(user), "max", "http://redirect", "USD")
 
     await db.refresh(old)
     assert old.status == "active"
@@ -1844,7 +1856,7 @@ async def test_upgrade_requires_a_live_paid_subscription(db):
     user = await _make_user(db)
     manager = PaymentManager(FakeProvider(), db)
     with pytest.raises(ValueError, match="No active subscription"):
-        await manager.upgrade(user, "max", "http://redirect", "USD")
+        await manager.upgrade(Owner.for_user(user), "max", "http://redirect", "USD")
 
 
 @pytest.mark.asyncio
@@ -1864,7 +1876,7 @@ async def test_upgrade_validates_against_the_live_row_tier(db):
     )
     await db.flush()
     with pytest.raises(ValueError, match="Cannot upgrade"):
-        await manager.upgrade(user, "go", "http://redirect", "USD")
+        await manager.upgrade(Owner.for_user(user), "go", "http://redirect", "USD")
 
 
 @pytest.mark.asyncio
@@ -1885,13 +1897,13 @@ async def test_second_upgrade_retires_the_first_checkout(db):
     )
     await db.flush()
 
-    await manager.upgrade(user, "plus", "http://redirect", "USD")
+    await manager.upgrade(Owner.for_user(user), "plus", "http://redirect", "USD")
     first = (
         await db.execute(select(PlanSubscription).where(PlanSubscription.status == "pending_upgrade"))
     ).scalar_one()
     first_id = first.provider_subscription_id
 
-    await manager.upgrade(user, "max", "http://redirect", "USD")
+    await manager.upgrade(Owner.for_user(user), "max", "http://redirect", "USD")
 
     await db.refresh(first)
     assert first.status == "expired"
@@ -1924,7 +1936,7 @@ async def test_subscribe_retires_an_orphaned_upgrade_checkout(db):
     db.add(stale)
     await db.flush()
 
-    await manager.start_checkout(user, "plus", "http://redirect", "USD")
+    await manager.start_checkout(Owner.for_user(user), "plus", "http://redirect", "USD")
 
     await db.refresh(stale)
     assert stale.status == "expired"
@@ -2072,12 +2084,12 @@ async def test_checkout_does_not_cancel_a_subscription_live_at_the_provider(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
 
     provider.sub_state = "active"  # paid; the webhook never arrived to say so
     with pytest.raises(ValueError, match="still being confirmed"):
-        await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+        await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
 
     assert provider.cancelled == []
     await db.refresh(sub)
@@ -2089,12 +2101,12 @@ async def test_checkout_still_retires_a_checkout_the_provider_agrees_was_never_p
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     psid = sub.provider_subscription_id
 
     provider.sub_state = "pending"
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
 
     assert provider.cancelled == [psid]
     await db.refresh(sub)
@@ -2106,12 +2118,12 @@ async def test_an_unreadable_provider_is_not_permission_to_cancel(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     provider.sub_read_failures.add(sub.provider_subscription_id)
 
     with pytest.raises(ValueError, match="still being confirmed"):
-        await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
+        await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
 
     assert provider.cancelled == []
 
@@ -2121,17 +2133,17 @@ async def test_upgrade_does_not_cancel_a_paid_upgrade_checkout(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     sub.status = "active"
     sub.current_period_start = datetime.now() - timedelta(days=1)
     sub.current_period_end = datetime.now() + timedelta(days=20)
     await db.flush()
-    await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.upgrade(Owner.for_user(user), new_tier="plus", redirect_url="http://x", currency="USD")
 
     provider.sub_state = "active"
     with pytest.raises(ValueError, match="still being confirmed"):
-        await mgr.upgrade(user, new_tier="plus", redirect_url="http://x", currency="USD")
+        await mgr.upgrade(Owner.for_user(user), new_tier="plus", redirect_url="http://x", currency="USD")
     assert provider.cancelled == []
 
 
@@ -2140,8 +2152,8 @@ async def test_reconcile_pending_adopts_a_payment_whose_webhook_was_lost(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     provider.sub_state = "active"
 
     assert await mgr.reconcile_pending() == 1
@@ -2165,8 +2177,8 @@ async def test_reconcile_pending_leaves_an_unpaid_checkout_alone(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
 
     assert await mgr.reconcile_pending() == 0
     await db.refresh(sub)
@@ -2180,8 +2192,8 @@ async def test_a_late_redelivery_dedups_against_the_reconciled_activation(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="go", redirect_url="http://x", currency="USD")
-    sub = await mgr._active_subscription(user.id, lock=False)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
     provider.sub_state = "active"
     assert await mgr.reconcile_pending() == 1
 
@@ -2281,7 +2293,7 @@ async def test_provider_cancel_echo_of_a_wind_down_leaves_the_cycle_running(db):
 
     await db.refresh(sub)
     assert sub.status == "active"
-    assert await mgr.current_tier(user.id) == "go"
+    assert await mgr.current_tier(Owner.for_user(user)) == "go"
     assert "cancelled" not in await _event_types(db, sub.id)
 
 
@@ -2355,4 +2367,4 @@ async def test_provider_cancel_early_in_a_wind_down_cycle_is_still_churn(db):
     assert sub.status == "cancelled"
     assert "cancelled" in await _event_types(db, sub.id)
     with pytest.raises(ValueError, match="No active subscription"):
-        await mgr.resume(user)
+        await mgr.resume(Owner.for_user(user))

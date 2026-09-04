@@ -25,7 +25,7 @@ from src.services.payments.base import (
     ProviderDescriptor,
     SubscriptionInfo,
 )
-from src.subscription_tiers import get_provider_plan
+from src.subscription_tiers import PRODUCT_LIBERTAI, get_provider_plan
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -193,10 +193,11 @@ class RevolutProvider(PaymentProvider):
         currency: str,
         redirect_url: str,
         provider_customer_id: str | None = None,
+        product: str = PRODUCT_LIBERTAI,
     ) -> CheckoutResult:
         customer_id = provider_customer_id or await self._create_customer(user_email)
 
-        plan = get_provider_plan(tier, PROVIDER_ID, currency)
+        plan = get_provider_plan(tier, PROVIDER_ID, currency, product=product)
         try:
             sub_data = await self._post_subscription(plan["variation_id"], customer_id, redirect_url)
         except httpx.HTTPStatusError:
@@ -227,9 +228,11 @@ class RevolutProvider(PaymentProvider):
         resp = await self.client.post(f"/api/subscriptions/{provider_subscription_id}/cancel")
         resp.raise_for_status()
 
-    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+    async def change_subscription_plan(
+        self, provider_subscription_id: str, *, tier: str, currency: str, product: str = PRODUCT_LIBERTAI
+    ) -> None:
         """Schedule a plan change at cycle end — the next cycle bills the new variation (204)."""
-        plan = get_provider_plan(tier, PROVIDER_ID, currency)
+        plan = get_provider_plan(tier, PROVIDER_ID, currency, product=product)
         resp = await self.client.post(
             f"/api/subscriptions/{provider_subscription_id}/change-plan",
             json={"plan_variation_id": plan["variation_id"], "scheduled": "at_cycle_end"},

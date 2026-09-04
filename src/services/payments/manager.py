@@ -16,10 +16,12 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import ACTIVE_STATUSES, ENDED_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
@@ -37,13 +39,15 @@ from src.services.payments.base import (
     PaymentProvider,
     UnsupportedCapability,
 )
+from src.services.payments.owner import Owner
 from src.subscription_tiers import (
     DEFAULT_CURRENCY,
-    DEFAULT_TIER,
-    PAID_TIERS,
+    DEFAULT_TIERS,
+    PRODUCT_LIBERTAI,
     get_tier,
     is_downgrade,
     is_upgrade,
+    paid_tiers,
 )
 from src.utils.logger import setup_logger
 from src.utils.pg_locks import USER_SUBSCRIPTION_LOCK_CLASS
@@ -144,12 +148,12 @@ def _in_wind_down_cancel_window(sub: PlanSubscription) -> bool:
     )
 
 
-def _user_lock_key(user_id: uuid.UUID) -> int:
-    """Signed 32-bit objid derived from a user id, for ``USER_SUBSCRIPTION_LOCK_CLASS``.
+def _lock_key(owning_id: uuid.UUID) -> int:
+    """Signed 32-bit objid derived from an owner's lock id, for ``USER_SUBSCRIPTION_LOCK_CLASS``.
 
-    Two user ids sharing an objid merely serialize against each other.
+    Two owning ids sharing an objid merely serialize against each other.
     """
-    return int.from_bytes(user_id.bytes[:4], "big", signed=True)
+    return int.from_bytes(owning_id.bytes[:4], "big", signed=True)
 
 
 class PaymentManager:
@@ -166,31 +170,38 @@ class PaymentManager:
         return self._order_cache[order_id]
 
     # ------------------------------------------------------------------ helpers
-    async def _active_subscription(self, user_id: uuid.UUID, lock: bool = True) -> PlanSubscription | None:
+    async def _active_subscription(self, owner: Owner, lock: bool = True) -> PlanSubscription | None:
         stmt = select(PlanSubscription).where(
-            PlanSubscription.user_id == user_id,
+            owner.sub_filter(),
             PlanSubscription.status.in_(ACTIVE_STATUSES),
         )
         if lock:
             stmt = stmt.with_for_update()
         return (await self.db.execute(stmt)).scalar_one_or_none()
 
-    async def _lock_user(self, user_id: uuid.UUID) -> None:
-        """Take the per-user mutex over subscription mutations, for the rest of the transaction.
+    async def _lock_owner(self, owner: Owner) -> None:
+        """Take the per-owner mutex over subscription mutations, for the rest of the transaction.
 
-        Every path that touches more than one of a user's rows takes it FIRST, before any row
+        Every path that touches more than one of an owner's rows takes it FIRST, before any row
         lock: the webhook and the checkout paths acquire the live row and the checkout row in
         opposite orders, so row-level locking alone deadlocks them.
         """
         await self.db.execute(
-            select(func.pg_advisory_xact_lock(USER_SUBSCRIPTION_LOCK_CLASS, _user_lock_key(user_id)))
+            select(func.pg_advisory_xact_lock(USER_SUBSCRIPTION_LOCK_CLASS, _lock_key(owner.lock_id)))
         )
 
-    async def current_tier(self, user_id: uuid.UUID) -> str:
-        sub = await self._active_subscription(user_id, lock=False)
+    def _product_scope(self) -> ColumnElement[bool]:
+        """Periodic jobs stay LTAI-only until the cutover flag flips: liberclaw rows are
+        invisible to them until then."""
+        if config.LIBERCLAW_BILLING_ENABLED:
+            return true()
+        return PlanSubscription.product == PRODUCT_LIBERTAI
+
+    async def current_tier(self, owner: Owner) -> str:
+        sub = await self._active_subscription(owner, lock=False)
         if sub and sub.status == "active":
             return sub.tier
-        return DEFAULT_TIER
+        return DEFAULT_TIERS[owner.product]
 
     async def _log_event(
         self,
@@ -339,15 +350,15 @@ class PaymentManager:
             sub.status = "expired"
         await self._log_event(sub, "expired_abandoned_checkout")
 
-    async def _retire_unpaid_checkouts(self, user_id: uuid.UUID, statuses: tuple[str, ...]) -> int:
-        """Expire the user's never-paid checkout rows in ``statuses``, returning how many it kept.
+    async def _retire_unpaid_checkouts(self, owner: Owner, statuses: tuple[str, ...]) -> int:
+        """Expire the owner's never-paid checkout rows in ``statuses``, returning how many it kept.
 
         A kept row is one that turned out to be paid. Callers that go on to open a new checkout
         must refuse on a non-zero count: the row still occupies its partial unique index, and
         reconcile_pending will activate it within the hour.
 
         Its own query, never ``_active_subscription``: that helper's ``scalar_one_or_none``
-        matches at most one row, and a mid-upgrade user legitimately has two. Missing period
+        matches at most one row, and a mid-upgrade owner legitimately has two. Missing period
         dates select the candidates; only ``paid_subscription_ids`` decides which of them were
         never paid.
         """
@@ -356,7 +367,7 @@ class PaymentManager:
                 await self.db.execute(
                     select(PlanSubscription)
                     .where(
-                        PlanSubscription.user_id == user_id,
+                        owner.sub_filter(),
                         PlanSubscription.status.in_(statuses),
                         PlanSubscription.current_period_start.is_(None),
                     )
@@ -387,20 +398,20 @@ class PaymentManager:
         return kept
 
     async def _open_checkout(
-        self, user: User, tier: str, redirect_url: str, currency: str, status: str
+        self, owner: Owner, tier: str, redirect_url: str, currency: str, status: str
     ) -> CheckoutResult:
-        if tier not in PAID_TIERS:
+        if tier not in paid_tiers(owner.product):
             raise ValueError(f"Invalid paid tier: {tier}")
         if not self.provider.supports(PaymentCapability.subscription):
             raise UnsupportedCapability(f"{self.provider.id} does not support subscriptions")
-        if not user.email:
+        if not owner.email:
             raise ValueError("User must have an email to subscribe")
 
         prev_customer_id = (
             await self.db.execute(
                 select(PlanSubscription.provider_customer_id)
                 .where(
-                    PlanSubscription.user_id == user.id,
+                    owner.sub_filter(),
                     PlanSubscription.provider_customer_id.isnot(None),
                 )
                 .order_by(PlanSubscription.created_at.desc())
@@ -409,14 +420,15 @@ class PaymentManager:
         ).scalar_one_or_none()
 
         result = await self.provider.create_subscription(
-            user_email=user.email,
+            user_email=owner.email,
             tier=tier,
             currency=currency,
             redirect_url=redirect_url,
             provider_customer_id=prev_customer_id,
+            product=owner.product,
         )
         sub = PlanSubscription(
-            user_id=user.id,
+            user_id=owner.user_id,
             tier=tier,
             status=status,
             provider=self.provider.id,
@@ -425,6 +437,8 @@ class PaymentManager:
             # Locked at checkout time: renewals bill through the provider's
             # currency-specific plan, so the currency never changes mid-life.
             currency=currency,
+            product=owner.product,
+            liberclaw_account_id=owner.liberclaw_account_id,
         )
         self.db.add(sub)
         try:
@@ -436,25 +450,25 @@ class PaymentManager:
         await self._log_event(sub, "created", metadata={"tier": tier})
         return result
 
-    async def start_checkout(self, user: User, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
-        await self._lock_user(user.id)
-        existing = await self._active_subscription(user.id)
+    async def start_checkout(self, owner: Owner, tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+        await self._lock_owner(owner)
+        existing = await self._active_subscription(owner)
         if existing:
             if existing.status == "pending" and existing.current_period_start is None:
-                if await self._retire_unpaid_checkouts(user.id, ("pending",)):
+                if await self._retire_unpaid_checkouts(owner, ("pending",)):
                     raise ValueError(PAYMENT_BEING_CONFIRMED)
             else:
                 raise ValueError("User already has an active subscription")
         # An upgrade checkout is invisible to _active_subscription, so retire it explicitly:
-        # otherwise a user whose subscription lapsed mid-upgrade holds two payable checkouts.
-        if await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",)):
+        # otherwise an owner whose subscription lapsed mid-upgrade holds two payable checkouts.
+        if await self._retire_unpaid_checkouts(owner, ("pending_upgrade",)):
             raise ValueError(PAYMENT_BEING_CONFIRMED)
-        return await self._open_checkout(user, tier, redirect_url, currency, "pending")
+        return await self._open_checkout(owner, tier, redirect_url, currency, "pending")
 
-    async def upgrade(self, user: User, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
-        if new_tier not in PAID_TIERS:
+    async def upgrade(self, owner: Owner, new_tier: str, redirect_url: str, currency: str) -> CheckoutResult:
+        if new_tier not in paid_tiers(owner.product):
             raise ValueError(f"Invalid tier: {new_tier}")
-        await self._lock_user(user.id)
+        await self._lock_owner(owner)
         # Validated against the live row's tier, not current_tier(): that returns "free" for
         # anything not exactly "active", which would admit an upgrade from no subscription at
         # all, and let an overdue higher-tier holder open a lower-tier "upgrade".
@@ -462,7 +476,7 @@ class PaymentManager:
             await self.db.execute(
                 select(PlanSubscription)
                 .where(
-                    PlanSubscription.user_id == user.id,
+                    owner.sub_filter(),
                     PlanSubscription.status.in_(("active", "overdue")),
                 )
                 .with_for_update()
@@ -470,47 +484,50 @@ class PaymentManager:
         ).scalar_one_or_none()
         if not live:
             raise ValueError("No active subscription")
-        if not is_upgrade(live.tier, new_tier):
+        if not is_upgrade(live.tier, new_tier, owner.product):
             raise ValueError(f"Cannot upgrade from {live.tier} to {new_tier}")
 
-        if await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",)):
+        if await self._retire_unpaid_checkouts(owner, ("pending_upgrade",)):
             raise ValueError(PAYMENT_BEING_CONFIRMED)
-        return await self._open_checkout(user, new_tier, redirect_url, currency, "pending_upgrade")
+        return await self._open_checkout(owner, new_tier, redirect_url, currency, "pending_upgrade")
 
-    async def cancel(self, user: User) -> dict:
+    async def cancel(self, owner: Owner) -> dict:
         """Schedule cancellation at period end. Cancellation is TERMINAL on Revolut, so the
         provider-side cancel is DEFERRED to just before renewal (see check_expirations) —
-        until then the user can resume() for free. Cancel == downgrade to free."""
-        await self._lock_user(user.id)
-        sub = await self._active_subscription(user.id)
+        until then the owner can resume() for free. Cancel == downgrade to free."""
+        await self._lock_owner(owner)
+        sub = await self._active_subscription(owner)
         if not sub:
             raise ValueError("No active subscription")
         sub.cancel_at_period_end = True
-        sub.pending_tier = DEFAULT_TIER
+        sub.pending_tier = DEFAULT_TIERS[owner.product]
         await self._log_event(sub, "cancel_requested")
         # A scheduled wind-down must not leave a payable upgrade link: paying it would build a
         # fresh row that carries none of the wind-down state, silently converting the request
         # into a renewing, more expensive subscription.
-        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
-        await send_lifecycle_email(
-            self.db,
-            user,
-            "cancellation_confirmed",
-            "cancellation_confirmed",
-            {"until": sub.current_period_end},
-            transactional=True,
-            once=False,
-            resend_after=timedelta(hours=1),
-        )
+        await self._retire_unpaid_checkouts(owner, ("pending_upgrade",))
+        if owner.product == PRODUCT_LIBERTAI:
+            assert owner.user_id is not None  # libertai rows always carry user_id
+            user = (await self.db.execute(select(User).where(User.id == owner.user_id))).scalar_one()
+            await send_lifecycle_email(
+                self.db,
+                user,
+                "cancellation_confirmed",
+                "cancellation_confirmed",
+                {"until": sub.current_period_end},
+                transactional=True,
+                once=False,
+                resend_after=timedelta(hours=1),
+            )
         await self.db.flush()
         return {
             "message": "Subscription will be cancelled at end of billing period",
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
         }
 
-    async def resume(self, user: User) -> dict:
+    async def resume(self, owner: Owner) -> dict:
         """Undo a scheduled cancellation or paid downgrade before it takes effect."""
-        sub = await self._active_subscription(user.id)
+        sub = await self._active_subscription(owner)
         if not sub:
             raise ValueError("No active subscription")
         if not sub.cancel_at_period_end and not sub.pending_tier:
@@ -523,12 +540,15 @@ class PaymentManager:
         # (overwrites the provider's pending change).
         if (
             sub.pending_tier
-            and sub.pending_tier != DEFAULT_TIER
+            and sub.pending_tier != DEFAULT_TIERS[owner.product]
             and sub.provider != "manual"
             and sub.provider_subscription_id
         ):
             await self.provider.change_subscription_plan(
-                sub.provider_subscription_id, tier=sub.tier, currency=sub.currency or DEFAULT_CURRENCY
+                sub.provider_subscription_id,
+                tier=sub.tier,
+                currency=sub.currency or DEFAULT_CURRENCY,
+                product=owner.product,
             )
         sub.pending_tier = None
         sub.cancel_at_period_end = False
@@ -536,17 +556,17 @@ class PaymentManager:
         await self.db.flush()
         return {"message": "Your subscription will continue", "tier": sub.tier}
 
-    async def request_downgrade(self, user: User, new_tier: str) -> dict:
-        if new_tier not in PAID_TIERS and new_tier != DEFAULT_TIER:
+    async def request_downgrade(self, owner: Owner, new_tier: str) -> dict:
+        if new_tier not in paid_tiers(owner.product) and new_tier != DEFAULT_TIERS[owner.product]:
             raise ValueError(f"Invalid tier: {new_tier}")
-        await self._lock_user(user.id)
-        current = await self.current_tier(user.id)
-        if not is_downgrade(current, new_tier):
+        await self._lock_owner(owner)
+        current = await self.current_tier(owner)
+        if not is_downgrade(current, new_tier, owner.product):
             raise ValueError(f"Cannot downgrade from {current} to {new_tier}")
-        sub = await self._active_subscription(user.id)
+        sub = await self._active_subscription(owner)
         if not sub:
             raise ValueError("No active subscription")
-        if new_tier == DEFAULT_TIER:
+        if new_tier == DEFAULT_TIERS[owner.product]:
             # Downgrade to free == cancel: the sub lapses at period end. Provider-side
             # cancel is deferred (terminal on Revolut) so this stays resumable.
             sub.pending_tier = new_tier
@@ -557,7 +577,10 @@ class PaymentManager:
             # so a failure can't leave us billing the old tier while promising the new one.
             if sub.provider != "manual" and sub.provider_subscription_id:
                 await self.provider.change_subscription_plan(
-                    sub.provider_subscription_id, tier=new_tier, currency=sub.currency or DEFAULT_CURRENCY
+                    sub.provider_subscription_id,
+                    tier=new_tier,
+                    currency=sub.currency or DEFAULT_CURRENCY,
+                    product=owner.product,
                 )
             sub.pending_tier = new_tier
             # The sub keeps renewing (on the new plan) — supersede any earlier cancel request.
@@ -566,7 +589,7 @@ class PaymentManager:
         # A scheduled wind-down must not leave a payable upgrade link: paying it would build a
         # fresh row that carries none of the wind-down state, silently converting the request
         # into a renewing, more expensive subscription.
-        await self._retire_unpaid_checkouts(user.id, ("pending_upgrade",))
+        await self._retire_unpaid_checkouts(owner, ("pending_upgrade",))
         await self.db.flush()
         return {
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
@@ -606,8 +629,8 @@ class PaymentManager:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
             return False
 
-    async def _supersede_other_subs(self, user_id: uuid.UUID, exclude_sub_id: uuid.UUID) -> tuple[bool, str | None]:
-        """Retire the user's other live rows in favour of a just-paid subscription.
+    async def _supersede_other_subs(self, owner: Owner, exclude_sub_id: uuid.UUID) -> tuple[bool, str | None]:
+        """Retire the owner's other live rows in favour of a just-paid subscription.
 
         Returns ``(ok, from_tier)``. ``ok`` is False when a row that must not be left behind —
         one that was paid for, or one still occupying the live-subscription index — could not be
@@ -616,7 +639,7 @@ class PaymentManager:
         log a single ``upgraded`` event linking the pair.
 
         ``pending_upgrade`` is deliberately absent from the status set: ORDER_COMPLETED also
-        fires for renewals of the live subscription, and including it would cancel the user's
+        fires for renewals of the live subscription, and including it would cancel the owner's
         open checkout at the provider mid-payment. ``upgrading`` is included to catch rows
         parked by the previous release.
         """
@@ -624,7 +647,7 @@ class PaymentManager:
             (
                 await self.db.execute(
                     select(PlanSubscription).where(
-                        PlanSubscription.user_id == user_id,
+                        owner.sub_filter(),
                         PlanSubscription.status.in_((*ACTIVE_STATUSES, "upgrading")),
                         PlanSubscription.id != exclude_sub_id,
                     )
@@ -729,7 +752,7 @@ class PaymentManager:
         remaining = (end - now).total_seconds()
         if period <= 0 or remaining <= 0:
             return
-        monthly_price = get_tier(old_sub.tier).price_cents / 100
+        monthly_price = get_tier(old_sub.tier, old_sub.product).price_cents / 100
         amount = round(monthly_price * min(remaining / period, 1.0), 2)
         if amount <= 0:
             return
@@ -795,19 +818,20 @@ class PaymentManager:
             await self._log_refused_activation(sub, event)
             return
 
-        # Per-user mutex for the whole webhook. Row-level ordering cannot serve here:
-        # _resolve_subscription runs first (it is what yields the user id), so any FOR UPDATE
+        # Per-owner mutex for the whole webhook. Row-level ordering cannot serve here:
+        # _resolve_subscription runs first (it is what yields the owner id), so any FOR UPDATE
         # it took would sit outside the ordering.
-        assert sub.user_id is not None  # libertai rows always carry user_id
-        await self._lock_user(sub.user_id)
+        owner = Owner.from_subscription(sub)
+        await self._lock_owner(owner)
         locked_sub = await self._resolve_subscription(event, lock=True)
         if not locked_sub:
             logger.info(
                 f"Sub {sub.id} no longer resolves from event {event.provider_event_id} under the "
-                f"user lock; dropping the event"
+                f"owner lock; dropping the event"
             )
             return
         sub = locked_sub
+        owner = Owner.from_subscription(sub)
 
         # Redeliveries arriving together both clear the unlocked check above and then serialize
         # here. Without this second read the later one runs as a renewal — advancing the billing
@@ -823,7 +847,12 @@ class PaymentManager:
             await self._log_refused_activation(sub, event)
             return
 
-        user = (await self.db.execute(select(User).where(User.id == sub.user_id))).scalar_one()
+        # A full User row (email, opt-out flag) is only needed for LTAI lifecycle emails and
+        # invoicing; liberclaw resolves its own identity (bridge lookup) where it needs it.
+        user: User | None = None
+        if owner.product == PRODUCT_LIBERTAI:
+            assert owner.user_id is not None  # libertai rows always carry user_id
+            user = (await self.db.execute(select(User).where(User.id == owner.user_id))).scalar_one()
 
         if event.type == PaymentEventType.order_completed:
             already_activated = (
@@ -836,10 +865,10 @@ class PaymentManager:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            superseded, upgraded_from = await self._supersede_other_subs(user.id, exclude_sub_id=sub.id)
+            superseded, upgraded_from = await self._supersede_other_subs(owner, exclude_sub_id=sub.id)
             if not superseded:
                 detail = (
-                    f"Cannot activate sub {sub.id} (user {user.id}, order {event.order_id}): the live "
+                    f"Cannot activate sub {sub.id} (owner {owner.lock_id}, order {event.order_id}): the live "
                     f"subscription it replaces could not be cancelled at the provider, so both would "
                     f"be live at once"
                 )
@@ -847,7 +876,7 @@ class PaymentManager:
                 raise SupersedeFailed(detail)
             await self.db.flush()
 
-            if sub.pending_tier and sub.pending_tier != DEFAULT_TIER:
+            if sub.pending_tier and sub.pending_tier != DEFAULT_TIERS[owner.product]:
                 # A scheduled paid->paid downgrade took effect: this payment is the first
                 # cycle billed on the lower plan variation.
                 await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
@@ -870,7 +899,8 @@ class PaymentManager:
             if upgraded_from is not None and upgraded_from != sub.tier:
                 await self._log_event(sub, "upgraded", metadata={"from": upgraded_from, "to": sub.tier})
             # First charge only; the send log dedups per tier across resubscriptions.
-            if already_activated is None:
+            if already_activated is None and owner.product == PRODUCT_LIBERTAI:
+                assert user is not None
                 await send_lifecycle_email(
                     self.db, user, f"paid_welcome_{sub.tier}", "paid_welcome", {"tier": sub.tier}
                 )
@@ -881,28 +911,35 @@ class PaymentManager:
                 # than activate the subscription with no invoice to show for it.
                 order = await self._get_order(event.order_id)
                 gross, currency, tax, paid_at = order_invoice_fields(order, event.order_id)
-                if user.email is None:
-                    raise RuntimeError(f"User {user.id} has no email; cannot issue invoice for order {event.order_id}")
-                await issue_invoice(
-                    self.db,
-                    user_id=sub.user_id,
-                    user_email=user.email,
-                    external_reference=_topup_external_ref(event.provider, event.order_id),
-                    gross_minor=gross,
-                    currency=currency,
-                    tax_minor=tax,
-                    payment_date=paid_at,
-                    line_label=f"{get_tier(sub.tier).name.capitalize()} subscription",
-                    # A provider read failure leaves has_period False without stale-but-plausible
-                    # dates on sub — the invoice then omits the period rather than showing one
-                    # that doesn't match what actually got billed.
-                    period_start=sub.current_period_start if has_period else None,
-                    period_end=sub.current_period_end if has_period else None,
-                )
+                if owner.product == PRODUCT_LIBERTAI:
+                    assert user is not None
+                    if user.email is None:
+                        raise RuntimeError(
+                            f"User {owner.user_id} has no email; cannot issue invoice for order {event.order_id}"
+                        )
+                    await issue_invoice(
+                        self.db,
+                        user_id=sub.user_id,
+                        user_email=user.email,
+                        external_reference=_topup_external_ref(event.provider, event.order_id),
+                        gross_minor=gross,
+                        currency=currency,
+                        tax_minor=tax,
+                        payment_date=paid_at,
+                        line_label=f"{get_tier(sub.tier, owner.product).name.capitalize()} subscription",
+                        # A provider read failure leaves has_period False without stale-but-plausible
+                        # dates on sub — the invoice then omits the period rather than showing one
+                        # that doesn't match what actually got billed.
+                        period_start=sub.current_period_start if has_period else None,
+                        period_end=sub.current_period_end if has_period else None,
+                    )
+                else:
+                    # Liberclaw invoicing is not wired on this path; reaching it is a defect.
+                    raise RuntimeError("liberclaw invoicing wired in a later change")
         elif event.type == PaymentEventType.order_failed:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # A card declined on the hosted checkout, not a failed subscription payment:
-                # the sub was never active (nothing to be overdue about) and the user usually
+                # the sub was never active (nothing to be overdue about) and the owner usually
                 # retries on the same order, which then completes. ``overdue`` sits inside the
                 # live-subscription index, so writing it here on an upgrade checkout would
                 # collide with the subscription it is meant to replace.
@@ -914,7 +951,9 @@ class PaymentManager:
             else:
                 sub.status = "overdue"
                 await self._log_event(sub, "payment_failed", event.provider_event_id, event.metadata)
-                await self._send_payment_failed_email(user, sub)
+                if owner.product == PRODUCT_LIBERTAI:
+                    assert user is not None
+                    await self._send_payment_failed_email(user, sub)
         elif event.type == PaymentEventType.subscription_overdue:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # Not a card decline — a provider-side overdue notice on a row that was never
@@ -924,7 +963,9 @@ class PaymentManager:
             else:
                 sub.status = "overdue"
                 await self._log_event(sub, "overdue", event.provider_event_id, event.metadata)
-                await self._send_payment_failed_email(user, sub)
+                if owner.product == PRODUCT_LIBERTAI:
+                    assert user is not None
+                    await self._send_payment_failed_email(user, sub)
         elif event.type == PaymentEventType.subscription_cancelled:
             if sub.status in UNPAID_CHECKOUT_STATUSES:
                 # A checkout nobody ever paid, dropped by the provider — an abandoned
@@ -976,7 +1017,7 @@ class PaymentManager:
 
     async def _resolve_subscription(self, event: PaymentEvent, lock: bool = True) -> PlanSubscription | None:
         """Find the subscription an event belongs to. ``lock=False`` for the lookup that runs
-        before the per-user mutex is held, so no row lock is taken outside that ordering."""
+        before the per-owner mutex is held, so no row lock is taken outside that ordering."""
         if event.provider_subscription_id:
             stmt = select(PlanSubscription).where(
                 PlanSubscription.provider_subscription_id == event.provider_subscription_id
@@ -1030,23 +1071,29 @@ class PaymentManager:
     ABANDONED_UPGRADE_CHECKOUT_AGE = timedelta(hours=24)
 
     async def sweep_abandoned_upgrade_checkouts(self) -> list[uuid.UUID]:
-        """Retire upgrade checkouts the user never paid.
+        """Retire upgrade checkouts the owner never paid.
 
         The provider leaves an abandoned subscription payable for 30 days before cancelling it
-        itself; paying one that late activates a stale row against whatever the user has live
+        itself; paying one that late activates a stale row against whatever the owner has live
         by then. Cancelling here is the same action taken sooner. The provider state is checked
         first so a checkout completed moments ago is left alone.
 
         Candidates are collected lock-free, then each is resolved in its own transaction that
-        takes the user lock first and commits on its own. Locking the whole match set up front
+        takes the owner lock first and commits on its own. Locking the whole match set up front
         would hold every matched row across the run's provider round trips, so /upgrade,
-        /cancel, /downgrade and the activation webhook of an unrelated user would queue behind
+        /cancel, /downgrade and the activation webhook of an unrelated owner would queue behind
         HTTP they have nothing to do with.
         """
         cutoff = datetime.now() - self.ABANDONED_UPGRADE_CHECKOUT_AGE
         candidates = (
             await self.db.execute(
-                select(PlanSubscription.id, PlanSubscription.user_id).where(
+                select(
+                    PlanSubscription.id,
+                    PlanSubscription.product,
+                    PlanSubscription.user_id,
+                    PlanSubscription.liberclaw_account_id,
+                ).where(
+                    self._product_scope(),
                     PlanSubscription.status == "pending_upgrade",
                     PlanSubscription.updated_at < cutoff,
                     # A paid row can never be swept: _cancel_on_provider's failures are
@@ -1057,17 +1104,18 @@ class PaymentManager:
         ).all()
         touched: list[uuid.UUID] = []
         failures = 0
-        for sub_id, user_id in candidates:
+        for sub_id, product, user_id, liberclaw_account_id in candidates:
+            owner = Owner(product=product, user_id=user_id, liberclaw_account_id=liberclaw_account_id, email=None)
             try:
-                await self._lock_user(user_id)
+                await self._lock_owner(owner)
                 sub = (
                     await self.db.execute(
                         select(PlanSubscription).where(PlanSubscription.id == sub_id).with_for_update()
                     )
                 ).scalar_one_or_none()
                 # The selection above read an unlocked snapshot: the row may have been paid,
-                # retired or replaced while this run worked through the users ahead of it.
-                # Every exit from here ends the transaction, writes or not — the user lock is
+                # retired or replaced while this run worked through the owners ahead of it.
+                # Every exit from here ends the transaction, writes or not — the owner lock is
                 # held for its lifetime and the next candidate takes its own.
                 if sub is None or sub.status != "pending_upgrade" or sub.current_period_start is not None:
                     await self.db.rollback()
@@ -1081,7 +1129,7 @@ class PaymentManager:
                 await self._record_checkout_retired(sub, cancelled=cancelled)
                 await self.db.commit()
                 if cancelled:
-                    touched.append(user_id)
+                    touched.append(owner.lock_id)
                 else:
                     failures += 1
             except Exception:
@@ -1113,6 +1161,7 @@ class PaymentManager:
             (
                 await self.db.execute(
                     select(PlanSubscription).where(
+                        self._product_scope(),
                         PlanSubscription.status.in_(("pending", "pending_upgrade", "overdue")),
                         PlanSubscription.provider == self.provider.id,
                         PlanSubscription.provider_subscription_id.is_not(None),
@@ -1134,7 +1183,8 @@ class PaymentManager:
                 if event is None:
                     continue
                 logger.warning(
-                    f"Adopting sub {sub.id} (user {sub.user_id}): paid at the provider, no webhook recorded"
+                    f"Adopting sub {sub.id} (owner {Owner.from_subscription(sub).lock_id}): paid at the "
+                    f"provider, no webhook recorded"
                 )
                 await self.handle_event(event)
                 adopted += 1
@@ -1160,6 +1210,7 @@ class PaymentManager:
         pre_cutoff = datetime.now() + PROVIDER_CANCEL_LEAD
         pending_cancel = await self.db.execute(
             select(PlanSubscription).where(
+                self._product_scope(),
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.cancel_at_period_end == True,
                 PlanSubscription.current_period_end <= pre_cutoff,
@@ -1184,6 +1235,7 @@ class PaymentManager:
         result = await self.db.execute(
             select(PlanSubscription)
             .where(
+                self._product_scope(),
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.current_period_end < cutoff,
                 (PlanSubscription.cancel_at_period_end == True) | (PlanSubscription.is_trial == True),
@@ -1193,7 +1245,8 @@ class PaymentManager:
         count = 0
         for sub in result.scalars().all():
             sub.status = "expired"
-            await self._log_event(sub, "expired", metadata={"new_tier": sub.pending_tier or DEFAULT_TIER})
+            new_tier = sub.pending_tier or DEFAULT_TIERS[sub.product]
+            await self._log_event(sub, "expired", metadata={"new_tier": new_tier})
             count += 1
 
         # An "upgrading" row is a paid subscription holding no entitlement while the provider
@@ -1206,14 +1259,14 @@ class PaymentManager:
         stale = await self.db.execute(
             select(PlanSubscription)
             .where(
+                self._product_scope(),
                 PlanSubscription.status == "upgrading",
                 PlanSubscription.updated_at < stale_cutoff,
             )
             .with_for_update()
         )
         for sub in stale.scalars().all():
-            assert sub.user_id is not None  # libertai rows always carry user_id
-            if await self._active_subscription(sub.user_id, lock=False):
+            if await self._active_subscription(Owner.from_subscription(sub), lock=False):
                 continue
             # A webhook can activate a new pending sub between the check above and this
             # write, tripping the one-active-sub partial unique index. A savepoint keeps
@@ -1226,7 +1279,7 @@ class PaymentManager:
                     await self._log_event(sub, "upgrade_abandoned_reverted")
                 count += 1
             except IntegrityError:
-                logger.info(f"Skipping upgrade revert for sub {sub_id}: user gained an active sub concurrently")
+                logger.info(f"Skipping upgrade revert for sub {sub_id}: owner gained an active sub concurrently")
 
         if count:
             await self.db.flush()

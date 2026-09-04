@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 
+from src.subscription_tiers import PRODUCT_LIBERTAI
+
 
 class PaymentProviderKind(str, Enum):
     fiat = "fiat"
@@ -132,13 +134,16 @@ class PaymentProvider(ABC):
         currency: str,
         redirect_url: str,
         provider_customer_id: str | None = None,
+        product: str = PRODUCT_LIBERTAI,
     ) -> CheckoutResult:
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
     async def cancel_subscription(self, provider_subscription_id: str) -> None:
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
 
-    async def change_subscription_plan(self, provider_subscription_id: str, *, tier: str, currency: str) -> None:
+    async def change_subscription_plan(
+        self, provider_subscription_id: str, *, tier: str, currency: str, product: str = PRODUCT_LIBERTAI
+    ) -> None:
         """Schedule a plan change (e.g. a downgrade) to take effect at the end of the
         current billing cycle. The next cycle bills the target tier's plan."""
         raise UnsupportedCapability(f"{self.id} does not support subscriptions")
