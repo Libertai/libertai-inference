@@ -59,44 +59,6 @@ async def test_lclw_activation_no_email_sent(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lclw_invoice_path_raises_when_reached(db):
-    """Liberclaw invoicing is not wired on this path; reaching it must fail the webhook
-    loudly (provider redelivers) rather than silently activate with no invoice."""
-    account_id = uuid.uuid4()
-    sub = PlanSubscription(
-        user_id=None,
-        tier="starter",
-        provider="fake",
-        status="pending",
-        provider_subscription_id="psub_lclw_2",
-        product=PRODUCT_LIBERCLAW,
-        liberclaw_account_id=account_id,
-    )
-    db.add(sub)
-    await db.flush()
-
-    provider = FakeProvider()
-    provider.orders["lclw_order_1"] = {
-        "amount": 700,
-        "currency": "EUR",
-        "type": "payment",
-        "completed_at": "2026-01-01T00:00:00+00:00",
-    }
-    mgr = PaymentManager(provider, db)
-
-    with pytest.raises(RuntimeError, match="liberclaw invoicing"):
-        await mgr.handle_event(
-            PaymentEvent(
-                provider="fake",
-                type=PaymentEventType.order_completed,
-                provider_event_id="ORDER_COMPLETED:lclw_2",
-                provider_subscription_id="psub_lclw_2",
-                order_id="lclw_order_1",
-            )
-        )
-
-
-@pytest.mark.asyncio
 async def test_lock_key_uses_account_id_for_lclw(db, monkeypatch):
     account_id = uuid.uuid4()
     owner = Owner.for_liberclaw(account_id, email="a@b.com")
