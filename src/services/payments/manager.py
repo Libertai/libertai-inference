@@ -23,6 +23,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
+from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import ACTIVE_STATUSES, ENDED_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
@@ -133,6 +134,15 @@ PROVIDER_CANCEL_LEAD = timedelta(hours=2)
 # Refusal for a checkout whose predecessor turned out to be paid: the row stays put until
 # reconcile_pending activates it, so a retry shortly after succeeds or finds it active.
 PAYMENT_BEING_CONFIRMED = "A payment on your subscription is still being confirmed — please try again in a few minutes"
+
+# Days past current_period_end before a recurring liberclaw subscription with no renewal
+# webhook in sight is expired. Only a renewal payment moves that date forward.
+RENEWAL_GRACE_DAYS = 7
+
+# Self-serve (no admin) trial tier per product — the cheapest paid tier each sells.
+SELF_SERVE_TRIAL_TIER = {PRODUCT_LIBERTAI: "go", PRODUCT_LIBERCLAW: "starter"}
+
+PROVIDER_ALREADY_CANCELLED = "Subscription already cancelled at the payment provider"
 
 
 def _in_wind_down_cancel_window(sub: PlanSubscription) -> bool:
@@ -339,17 +349,25 @@ class PaymentManager:
         return True
 
     # ------------------------------------------------------------------ subscriptions
-    async def _record_checkout_retired(self, sub: PlanSubscription, *, cancelled: bool) -> None:
+    async def _record_checkout_retired(
+        self, sub: PlanSubscription, *, cancelled: bool, dedup_event: bool = False
+    ) -> None:
         """Retire a never-paid checkout row. The single place any path may retire one.
 
-        The audit event is unconditional: ``_is_retired_checkout`` keys on it, so a row whose
-        provider cancel failed still refuses a later payment rather than activating as a fresh
-        subscription carrying none of the state that retired it. Only the status write is gated
-        on ``cancelled`` — writing ``expired`` while the link is live at the provider would mark
-        the row dead locally while it stays payable.
+        The audit event fires unconditionally by default: ``_is_retired_checkout`` keys on it,
+        so a row whose provider cancel failed still refuses a later payment rather than
+        activating as a fresh subscription carrying none of the state that retired it. Only the
+        status write is gated on ``cancelled`` — writing ``expired`` while the link is live at
+        the provider would mark the row dead locally while it stays payable.
+
+        ``dedup_event=True`` for a caller that retries the SAME row across passes (the provider
+        cancel every time, until it succeeds): the event must land once ever, not once per
+        attempt, while the cancel itself is never skipped just because it already carries one.
         """
         if cancelled:
             sub.status = "expired"
+        if dedup_event and await self._is_retired_checkout(sub):
+            return
         await self._log_event(sub, "expired_abandoned_checkout")
 
     async def _retire_unpaid_checkouts(self, owner: Owner, statuses: tuple[str, ...]) -> int:
@@ -459,6 +477,16 @@ class PaymentManager:
             if existing.status == "pending" and existing.current_period_start is None:
                 if await self._retire_unpaid_checkouts(owner, ("pending",)):
                     raise ValueError(PAYMENT_BEING_CONFIRMED)
+            elif existing.provider == "manual" or existing.cancel_at_period_end:
+                # Nothing will renew this one, so a new checkout supersedes it instead of being
+                # refused. Same tier is refused for a real wind-down still billed at the
+                # provider — resume() undoes that rather than layering a second checkout on the
+                # same plan — but allowed over a manual/trial row, which never renews regardless.
+                if tier == existing.tier and existing.provider != "manual":
+                    raise ValueError("User already has an active subscription")
+                existing.status = "upgrading"
+                await self._log_event(existing, "upgrade_started", metadata={"new_tier": tier})
+                await self.db.flush()
             else:
                 raise ValueError("User already has an active subscription")
         # An upgrade checkout is invisible to _active_subscription, so retire it explicitly:
@@ -532,6 +560,8 @@ class PaymentManager:
         sub = await self._active_subscription(owner)
         if not sub:
             raise ValueError("No active subscription")
+        if sub.provider_cancelled:
+            raise ValueError(PROVIDER_ALREADY_CANCELLED)
         if not sub.cancel_at_period_end and not sub.pending_tier:
             raise ValueError("Nothing to resume")
         now = datetime.now()
@@ -598,6 +628,141 @@ class PaymentManager:
             "new_tier": new_tier,
         }
 
+    async def grant_trial(self, owner: Owner, tier: str, days: int, granted_by: str | None) -> PlanSubscription:
+        """Admin-granted trial: a manual, no-payment row entitled for exactly ``days``."""
+        if tier not in paid_tiers(owner.product):
+            raise ValueError(f"Invalid paid tier: {tier}")
+        if days < 1 or days > 90:
+            raise ValueError("Trial duration must be 1-90 days")
+        await self._lock_owner(owner)
+        sub = await self._create_trial_row(owner, tier, days)
+        await self._log_event(sub, "trial_granted", metadata={"granted_by": granted_by, "days": days, "tier": tier})
+        if owner.product == PRODUCT_LIBERCLAW:
+            assert owner.liberclaw_account_id is not None  # liberclaw rows always carry it
+            await LiberclawService.update_tier_by_account_id(self.db, owner.liberclaw_account_id, tier)
+        await self.db.flush()
+        return sub
+
+    async def _create_trial_row(self, owner: Owner, tier: str, days: int) -> PlanSubscription:
+        """Insert the manual trial row itself. Caller logs its own event (admin grant vs.
+        self-serve carry different metadata) and syncs the LCLW tier afterward."""
+        if await self._active_subscription(owner):
+            raise ValueError("User already has an active subscription")
+        now = datetime.now()
+        sub = PlanSubscription(
+            user_id=owner.user_id,
+            tier=tier,
+            status="active",
+            provider="manual",
+            is_trial=True,
+            currency=None,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=days),
+            product=owner.product,
+            liberclaw_account_id=owner.liberclaw_account_id,
+        )
+        self.db.add(sub)
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            raise ValueError("User already has an active subscription")
+        return sub
+
+    async def check_trial_eligibility(self, owner: Owner) -> tuple[bool, str | None]:
+        """Whether ``owner`` may start a self-serve trial. Returns ``(eligible, reason)``:
+        a trial is one-per-owner ever (whether granted or self-served) and refused for anyone
+        who has ever completed a paid billing cycle."""
+        if not owner.email:
+            return False, "no_email"
+
+        prior_trial = (
+            await self.db.execute(
+                select(PlanSubscription.id).where(owner.sub_filter(), PlanSubscription.is_trial == True).limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior_trial is not None:
+            return False, "trial_used"
+
+        prior_paid = (
+            await self.db.execute(
+                select(PlanSubscription.id)
+                .where(
+                    owner.sub_filter(),
+                    PlanSubscription.is_trial == False,
+                    PlanSubscription.current_period_end.is_not(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior_paid is not None:
+            return False, "was_paid"
+
+        if await self._active_subscription(owner, lock=False):
+            return False, "active_sub"
+
+        return True, None
+
+    async def start_self_serve_trial(self, owner: Owner, days: int) -> PlanSubscription:
+        """User-initiated trial on the product's cheapest paid tier, no card. One per owner, ever."""
+        eligible, reason = await self.check_trial_eligibility(owner)
+        if not eligible:
+            raise ValueError(f"Not eligible for a trial ({reason})")
+        await self._lock_owner(owner)
+        tier = SELF_SERVE_TRIAL_TIER[owner.product]
+        sub = await self._create_trial_row(owner, tier, days)
+        await self._log_event(sub, "trial_started", metadata={"self_serve": True, "days": days, "tier": tier})
+        if owner.product == PRODUCT_LIBERCLAW:
+            assert owner.liberclaw_account_id is not None  # liberclaw rows always carry it
+            await LiberclawService.update_tier_by_account_id(self.db, owner.liberclaw_account_id, tier)
+        await self.db.flush()
+        return sub
+
+    async def override_tier(self, owner: Owner, tier: str) -> None:
+        """Admin force-sets an owner's tier with an open-ended manual row, no billing.
+
+        Supersedes any existing live subscription (paid or trial) via the same machinery an
+        upgrade activation uses, parking it first so the fresh row never collides with it on
+        the one-live-subscription index.
+        """
+        if tier not in paid_tiers(owner.product) and tier != DEFAULT_TIERS[owner.product]:
+            raise ValueError(f"Invalid tier: {tier}")
+        await self._lock_owner(owner)
+        existing = await self._active_subscription(owner)
+        if existing is not None:
+            existing.status = "upgrading"
+            await self._log_event(existing, "upgrade_started", metadata={"new_tier": tier})
+            await self.db.flush()
+
+        sub = PlanSubscription(
+            user_id=owner.user_id,
+            tier=tier,
+            status="active",
+            provider="manual",
+            is_trial=False,
+            currency=None,
+            current_period_start=datetime.now(),
+            current_period_end=None,
+            product=owner.product,
+            liberclaw_account_id=owner.liberclaw_account_id,
+        )
+        self.db.add(sub)
+        await self.db.flush()
+        await self._log_event(sub, "tier_overridden", metadata={"tier": tier})
+
+        if existing is not None:
+            # An admin override moves no money: the row it replaces is retired but never
+            # credited a remainder, whatever was left of it.
+            ok, _ = await self._supersede_other_subs(owner, exclude_sub_id=sub.id, credit_remainder=False)
+            if not ok:
+                raise SupersedeFailed(
+                    f"Cannot override tier for owner {owner.lock_id}: its existing subscription "
+                    f"could not be cancelled at the provider"
+                )
+        if owner.product == PRODUCT_LIBERCLAW:
+            assert owner.liberclaw_account_id is not None  # liberclaw rows always carry it
+            await LiberclawService.update_tier_by_account_id(self.db, owner.liberclaw_account_id, tier)
+        await self.db.flush()
+
     async def _live_at_provider(self, sub: PlanSubscription) -> bool:
         """Whether the provider reports this subscription as paid and live.
 
@@ -631,7 +796,9 @@ class PaymentManager:
             logger.warning(f"Failed to cancel sub {sub.id} on provider", exc_info=True)
             return False
 
-    async def _supersede_other_subs(self, owner: Owner, exclude_sub_id: uuid.UUID) -> tuple[bool, str | None]:
+    async def _supersede_other_subs(
+        self, owner: Owner, exclude_sub_id: uuid.UUID, *, credit_remainder: bool = True
+    ) -> tuple[bool, str | None]:
         """Retire the owner's other live rows in favour of a just-paid subscription.
 
         Returns ``(ok, from_tier)``. ``ok`` is False when a row that must not be left behind —
@@ -644,6 +811,9 @@ class PaymentManager:
         fires for renewals of the live subscription, and including it would cancel the owner's
         open checkout at the provider mid-payment. ``upgrading`` is included to catch rows
         parked by the previous release.
+
+        ``credit_remainder=False`` for a supersede that moved no money (an admin tier
+        override): the old row is still retired, but nothing is credited for it.
         """
         rows = (
             (
@@ -682,7 +852,8 @@ class PaymentManager:
                 from_tier = old_sub.tier
                 old_sub.status = "cancelled"
                 await self._log_event(old_sub, "cancelled_for_upgrade")
-                await self._credit_unused_remainder(old_sub)
+                if credit_remainder:
+                    await self._credit_upgrade_remainder(old_sub)
             else:
                 await self._record_checkout_retired(old_sub, cancelled=True)
         return True, from_tier
@@ -783,6 +954,58 @@ class PaymentManager:
         )
         await self.db.flush()
         await self._log_event(old_sub, "upgrade_remainder_credited", metadata={"amount": amount})
+
+    async def _credit_upgrade_remainder(self, old_sub: PlanSubscription) -> None:
+        """Shared upgrade-remainder entry point for every product. Trials and manual grants
+        collected no payment, so they credit nothing — checked before either product branch,
+        so neither one's crediting logic ever runs against them."""
+        if old_sub.is_trial or old_sub.provider == "manual":
+            return
+        if old_sub.product == PRODUCT_LIBERTAI:
+            await self._credit_unused_remainder(old_sub)
+        else:
+            await self._credit_lclw_upgrade_remainder(old_sub)
+
+    async def _credit_lclw_upgrade_remainder(self, old_sub: PlanSubscription) -> None:
+        """Compensate the unused time of an upgraded-away LCLW cycle as extra usage credits
+        (the unused fraction of the old tier's rolling-window cap), mirroring
+        ``_credit_unused_remainder``'s LTAI prepaid-credit refund. Best-effort: a failed grant
+        must not fail the webhook, so it is parked as ``upgrade_remainder_pending`` for the
+        periodic retry sweep instead of raising.
+        """
+        assert old_sub.liberclaw_account_id is not None  # liberclaw rows always carry it
+        if old_sub.tier not in LIBERCLAW_TIERS:
+            return  # a tier retired from the registry has no cap left to prorate
+        start, end = old_sub.current_period_start, old_sub.current_period_end
+        if not start or not end:
+            return  # never-activated sub: nothing was paid for
+        start = start.replace(tzinfo=None) if start.tzinfo else start
+        end = end.replace(tzinfo=None) if end.tzinfo else end
+        now = datetime.now()
+        period = (end - start).total_seconds()
+        remaining = (end - now).total_seconds()
+        if period <= 0 or remaining <= 0:
+            return
+        fraction = round(min(remaining / period, 1.0), 4)
+        if fraction <= 0:
+            return
+        amount = round(LIBERCLAW_TIERS[old_sub.tier]["credits_limit"] * fraction, 2)
+        if amount <= 0:
+            return
+        ref = f"upgrade_remainder:{old_sub.id}"
+        try:
+            # A SAVEPOINT: a DB-level failure inside the grant (unique collision, deadlock)
+            # must roll back only to here, not poison the surrounding webhook transaction —
+            # the activation this runs inside of must still be able to commit.
+            async with self.db.begin_nested():
+                granted = await LiberclawService.grant_extra_credits_by_account_id(
+                    self.db, old_sub.liberclaw_account_id, amount, ref
+                )
+        except Exception:
+            logger.error(f"Failed to grant LCLW upgrade remainder for sub {old_sub.id}", exc_info=True)
+            await self._log_event(old_sub, "upgrade_remainder_pending", metadata={"amount": amount})
+        else:
+            await self._log_event(old_sub, "upgrade_remainder_credited", metadata={"amount": granted})
 
     # ------------------------------------------------------------------ webhook dispatch
     async def handle_event(self, event: PaymentEvent) -> None:
@@ -1301,6 +1524,9 @@ class PaymentManager:
                 self._product_scope(),
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.cancel_at_period_end == True,
+                # Already terminal at the provider (e.g. a wind-down confirmed by its own
+                # cancel echo): nothing left to cancel there.
+                PlanSubscription.provider_cancelled == False,
                 PlanSubscription.current_period_end <= pre_cutoff,
             )
         )
@@ -1326,7 +1552,7 @@ class PaymentManager:
                 self._product_scope(),
                 PlanSubscription.status.in_(["active", "overdue"]),
                 PlanSubscription.current_period_end < cutoff,
-                (PlanSubscription.cancel_at_period_end == True) | (PlanSubscription.is_trial == True),
+                PlanSubscription.cancel_at_period_end == True,
             )
             .with_for_update()
         )
@@ -1339,6 +1565,74 @@ class PaymentManager:
                 assert sub.liberclaw_account_id is not None  # liberclaw rows always carry it
                 await LiberclawService.update_tier_by_account_id(self.db, sub.liberclaw_account_id, new_tier)
             count += 1
+
+        # Manual grants and trials (provider="manual") have no renewal webhook to wait for and
+        # no grace period: they end exactly when they say they will. A NULL period end is an
+        # open-ended override and is never touched here.
+        now = datetime.now()
+        manual_result = await self.db.execute(
+            select(PlanSubscription)
+            .where(
+                self._product_scope(),
+                PlanSubscription.status == "active",
+                (PlanSubscription.provider == "manual") | (PlanSubscription.is_trial == True),
+                PlanSubscription.current_period_end.is_not(None),
+                PlanSubscription.current_period_end < now,
+            )
+            .with_for_update()
+        )
+        for sub in manual_result.scalars().all():
+            sub.status = "expired"
+            await self._log_event(sub, "expired", metadata={"new_tier": DEFAULT_TIERS[sub.product]})
+            if sub.product == PRODUCT_LIBERCLAW:
+                await self._lclw_sync_tier_free_unless_live(Owner.from_subscription(sub), exclude_sub_id=sub.id)
+            count += 1
+
+        # LCLW-only: a recurring subscription's period only moves forward on a renewal webhook.
+        # Past this much longer grace than the general cancel_at_period_end pass above, none is
+        # coming — there was never an explicit cancel to key off of.
+        lapsed_cutoff = now - timedelta(days=RENEWAL_GRACE_DAYS)
+        lapsed_result = await self.db.execute(
+            select(PlanSubscription)
+            .where(
+                self._product_scope(),
+                PlanSubscription.product == PRODUCT_LIBERCLAW,
+                PlanSubscription.status.in_(("active", "overdue")),
+                PlanSubscription.is_trial == False,
+                PlanSubscription.current_period_end < lapsed_cutoff,
+            )
+            .with_for_update()
+        )
+        for sub in lapsed_result.scalars().all():
+            sub.status = "expired"
+            await self._log_event(sub, "expired", metadata={"new_tier": DEFAULT_TIERS[PRODUCT_LIBERCLAW]})
+            await self._lclw_sync_tier_free_unless_live(Owner.from_subscription(sub), exclude_sub_id=sub.id)
+            count += 1
+
+        # LCLW-only: a checkout nobody ever paid, cleaned up after 24h so the account isn't
+        # blocked from a fresh checkout. Routed through the single retirement helper: the
+        # provider-cancel gate keeps a row payable (and thus never falsely marked dead) if the
+        # provider link can't be confirmed cancelled.
+        stale_pending_result = await self.db.execute(
+            select(PlanSubscription)
+            .where(
+                self._product_scope(),
+                PlanSubscription.product == PRODUCT_LIBERCLAW,
+                PlanSubscription.status == "pending",
+                PlanSubscription.current_period_start.is_(None),
+                PlanSubscription.created_at < cutoff,
+            )
+            .with_for_update()
+        )
+        for sub in stale_pending_result.scalars().all():
+            # Retried every pass until it succeeds — a first failed cancel must not leave the
+            # row permanently pending. Only the audit event dedups (dedup_event=True): logging
+            # it again on every retry would be one row per attempt for a link that's been
+            # payable at the provider for weeks.
+            cancelled = await self._cancel_on_provider(sub)
+            await self._record_checkout_retired(sub, cancelled=cancelled, dedup_event=True)
+            if cancelled:
+                count += 1
 
         # An "upgrading" row is a paid subscription holding no entitlement while the provider
         # keeps billing it, so it is restored to "active" once it has sat untouched for 1h. No
