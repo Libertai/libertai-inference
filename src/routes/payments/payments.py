@@ -34,6 +34,7 @@ from src.services.geo import resolve_currency, vat_rate_for_currency
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.credit_subscription import CreditSubscriptionService
 from src.services.payments.manager import PaymentManager
+from src.services.payments.owner import Owner
 from src.services.payments.registry import payment_registry
 from src.subscription_tiers import DEFAULT_TIER, SUBSCRIPTION_TIERS
 from src.topup_packs import TOPUP_PACKS, get_pack
@@ -249,7 +250,10 @@ async def subscribe(
         manager = PaymentManager(provider, db)
         try:
             result = await manager.start_checkout(
-                user, tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base), currency=currency
+                Owner.for_user(user),
+                tier=body.tier,
+                redirect_url=_checkout_redirect(body.redirect_base),
+                currency=currency,
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -298,7 +302,10 @@ async def upgrade(
         manager = PaymentManager(provider, db)
         try:
             result = await manager.upgrade(
-                user, new_tier=body.tier, redirect_url=_checkout_redirect(body.redirect_base), currency=currency
+                Owner.for_user(user),
+                new_tier=body.tier,
+                redirect_url=_checkout_redirect(body.redirect_base),
+                currency=currency,
             )
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -335,7 +342,7 @@ async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_use
         provider = _require_provider(sub.provider) if sub else _require_provider("revolut")
         manager = PaymentManager(provider, db)
         try:
-            result = await manager.request_downgrade(user, new_tier=body.tier)
+            result = await manager.request_downgrade(Owner.for_user(user), new_tier=body.tier)
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except httpx.HTTPError as e:
@@ -371,7 +378,7 @@ async def cancel(user: User = Depends(get_current_user)) -> CancelResponse:
             await db.commit()
             return CancelResponse(message=res["message"], effective_date=res["effective_date"])
         manager = PaymentManager(_require_provider(sub.provider), db)
-        result = await manager.cancel(user)
+        result = await manager.cancel(Owner.for_user(user))
         await db.commit()
     return CancelResponse(message=result["message"], effective_date=result["effective_date"])
 
@@ -398,7 +405,7 @@ async def resume(user: User = Depends(get_current_user)) -> ResumeResponse:
             return ResumeResponse(message=res["message"], tier=res["tier"])
         manager = PaymentManager(_require_provider(sub.provider), db)
         try:
-            result = await manager.resume(user)
+            result = await manager.resume(Owner.for_user(user))
         except (ValueError, UnsupportedCapability) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except httpx.HTTPError as e:
