@@ -28,6 +28,10 @@ USER_SUBSCRIPTION_LOCK_CLASS = 911004
 # one sees the first's row (gap-free, no double allocation across replicas).
 INVOICE_NUMBER_LOCK_CLASS = 911006
 
+# LiberClaw snapshot-push retry drain (src/services/payments/tier_push.py): keeps two
+# replicas from draining the same tier_push_pending markers concurrently.
+LCLW_TIER_PUSH_DRAIN_LOCK_ID = 911007
+
 T = TypeVar("T")
 
 
