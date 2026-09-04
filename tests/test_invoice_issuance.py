@@ -10,6 +10,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.invoice import Invoice
 from src.services.payments.base import PaymentEvent, PaymentEventType
 from src.services.payments.manager import PaymentManager, order_invoice_fields
+from src.services.payments.owner import Owner
 from tests.test_payment_manager import FakeProvider, _active_plus_sub, _make_user
 
 
@@ -114,7 +115,7 @@ async def test_subscription_activation_issues_invoice_with_period(db):
     user = await _make_user(db)
     provider = FakeProvider()
     mgr = PaymentManager(provider, db)
-    await mgr.start_checkout(user, tier="plus", redirect_url="http://x", currency="USD")
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
     provider.orders["setup_1"] = {
         "amount": 2000,
         "currency": "USD",
