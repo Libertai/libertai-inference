@@ -897,6 +897,28 @@ async def test_verify_passes_for_clean_migration(lc, capsys):
     assert "FAIL" not in out
 
 
+async def test_manual_trial_without_activated_event_passes_verify(lc, capsys):
+    """The activated-event check covers revolut rows only: manual trials log trial_*
+    events, never "activated", and receive no webhooks."""
+    now = datetime.now(timezone.utc)
+    user_id = lc.insert_user(email="trial@example.com", tier="free")
+    sub_id = lc.insert_sub(
+        user_id=user_id,
+        status="expired",
+        provider="manual",
+        is_trial=True,
+        current_period_start=now - timedelta(days=14),
+        current_period_end=now - timedelta(days=7),
+        provider_subscription_id=None,
+    )
+    lc.insert_event(sub_id, event_type="trial_granted")
+
+    exit_code = await main([f"--lc-dsn={lc.url}"])
+
+    assert exit_code == 0
+    assert "FAIL" not in capsys.readouterr().out
+
+
 async def test_aborts_before_any_write_on_lc_upgrading_status(lc, inf_engine, capsys):
     """C4 regression: LC's parked status is literally 'upgrading' (not inference's own
     'pending_upgrade'). The check aborts the run rather than reporting a failure after the

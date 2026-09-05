@@ -797,15 +797,19 @@ def verify_target(
     ).all()
     ok &= _report("provider_subscription_id globally unique", [str(tuple(r)) for r in dup_provider_ids])
 
+    # Revolut rows only: manual trials/grants log trial_* events, never "activated", and
+    # receive no webhooks — the renewal-classification concern this check guards is
+    # exclusive to provider-billed rows.
     activated_sub_ids = sa.select(PSE.c.subscription_id).where(PSE.c.event_type == "activated")
     missing_activated = inf_conn.execute(
         sa.select(PS.c.id).where(
             PS.c.product == "liberclaw",
+            PS.c.provider == "revolut",
             sa.or_(PS.c.current_period_start.isnot(None), PS.c.current_period_end.isnot(None)),
             ~PS.c.id.in_(activated_sub_ids),
         )
     ).all()
-    ok &= _report("every sub with period dates has an activated event", [str(r.id) for r in missing_activated])
+    ok &= _report("every revolut sub with period dates has an activated event", [str(r.id) for r in missing_activated])
 
     # Durable across re-runs — every account holding a manual+active inference row, regardless
     # of which run created it, rather than this run's own run-local created-ids set.
