@@ -424,7 +424,9 @@ async def test_subscribe_uses_region_resolved_currency(async_client, monkeypatch
 
     seen: dict = {}
 
-    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+    async def fake_create_subscription(
+        *, user_email, tier, currency, redirect_url, provider_customer_id=None, product=None
+    ):
         seen["currency"] = currency
         return CheckoutResult(
             checkout_url="http://pay/sub",
@@ -457,7 +459,9 @@ async def test_upgrade_uses_region_resolved_currency(async_client, monkeypatch):
 
     seen: dict = {}
 
-    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+    async def fake_create_subscription(
+        *, user_email, tier, currency, redirect_url, provider_customer_id=None, product=None
+    ):
         seen["currency"] = currency
         return CheckoutResult(
             checkout_url="http://pay/sub",
@@ -677,7 +681,9 @@ async def test_upgrade_revolut_allowed_for_wallet_user_with_active_revolut_sub(a
 
     seen: dict = {}
 
-    async def fake_create_subscription(*, user_email, tier, currency, redirect_url, provider_customer_id=None):
+    async def fake_create_subscription(
+        *, user_email, tier, currency, redirect_url, provider_customer_id=None, product=None
+    ):
         seen["tier"] = tier
         return CheckoutResult(
             checkout_url="http://pay/sub",

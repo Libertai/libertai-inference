@@ -133,6 +133,31 @@ async def test_create_subscription_retries_with_fresh_customer_when_reused_id_is
 
 
 @pytest.mark.asyncio
+async def test_create_subscription_resolves_liberclaw_plan_registry():
+    """``tier`` names collide across products (e.g. "starter" is liberclaw-only); the plan
+    lookup must resolve in the caller's product registry, not always the libertai one."""
+    provider = _provider()
+    provider._client = _FakeClient()
+
+    result = await provider.create_subscription(
+        user_email="a@b.c",
+        tier="starter",
+        currency="EUR",
+        redirect_url="https://app/payment/callback",
+        product="liberclaw",
+    )
+    assert result.checkout_url == "https://pay/x"
+
+
+def test_get_provider_plan_defaults_to_libertai_registry():
+    """Baseline for the test above: without a product, a liberclaw-only tier is invisible."""
+    from src.subscription_tiers import get_provider_plan
+
+    with pytest.raises(ValueError, match="Unknown tier: starter"):
+        get_provider_plan("starter", "revolut", "EUR")
+
+
+@pytest.mark.asyncio
 async def test_create_subscription_does_not_retry_with_freshly_created_customer():
     """If the failure happens with a customer we JUST created, retrying won't help — propagate."""
     import httpx

@@ -22,7 +22,9 @@ from src.models.base import AsyncSessionLocal
 from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.services.payments.manager import PaymentManager, paid_subscription_ids
+from src.services.payments.owner import Owner
 from src.services.payments.registry import payment_registry
+from src.subscription_tiers import PRODUCT_LIBERTAI
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -100,8 +102,9 @@ async def cutover(db, provider, dry_run: bool = False) -> dict[str, int]:
             # Serializes against start_checkout/upgrade, which take this same lock before
             # writing a new row for the user — without it, FOR UPDATE below only locks rows
             # that already exist, not one inserted concurrently under the row we are about to
-            # promote.
-            await manager._lock_user(user_id)
+            # promote. Pre-cutover rows are all libertai (product didn't exist yet).
+            owner = Owner(product=PRODUCT_LIBERTAI, user_id=user_id, liberclaw_account_id=None, email=None)
+            await manager._lock_owner(owner)
             subs = (
                 (
                     await db.execute(

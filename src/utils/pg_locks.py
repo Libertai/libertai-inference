@@ -19,14 +19,18 @@ LTAI_SOLANA_LOCK_ID = 911003
 LIFECYCLE_EMAILS_LOCK_ID = 911005
 
 # Classid for the two-argument ``pg_advisory_*(classid, objid)`` form, whose keyspace is
-# disjoint from the single-argument ids above. Its objid is derived per user, so the ids it
-# spans cannot be enumerated here (see ``PaymentManager._lock_user``).
+# disjoint from the single-argument ids above. Its objid is derived per owner, so the ids it
+# spans cannot be enumerated here (see ``PaymentManager._lock_owner``).
 USER_SUBSCRIPTION_LOCK_CLASS = 911004
 
 # Classid for invoice-number allocation; objid = invoice year. Held to end of
 # transaction, so concurrent issuances serialize through commit and the second
 # one sees the first's row (gap-free, no double allocation across replicas).
 INVOICE_NUMBER_LOCK_CLASS = 911006
+
+# LiberClaw snapshot-push retry drain (src/services/payments/tier_push.py): keeps two
+# replicas from draining the same tier_push_pending markers concurrently.
+LCLW_TIER_PUSH_DRAIN_LOCK_ID = 911007
 
 T = TypeVar("T")
 
