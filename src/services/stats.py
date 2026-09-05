@@ -70,16 +70,16 @@ from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscript
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.payments.credit_subscription import CREDITS_PROVIDER
-from src.subscription_tiers import PAID_TIERS, get_tier
+from src.subscription_tiers import PAID_TIERS, PRODUCT_LIBERTAI, get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 
-def _tier_price(tier: str) -> float:
+def _tier_price(tier: str, product: str = PRODUCT_LIBERTAI) -> float:
     """Price for a tier; unknown/legacy tier strings are skipped (0) instead of 500ing the endpoint."""
     try:
-        return get_tier(tier).price_cents / 100
+        return get_tier(tier, product=product).price_cents / 100
     except ValueError:
         logger.warning(f"Unknown subscription tier in MRR computation: {tier}")
         return 0.0
@@ -1276,7 +1276,11 @@ class StatsService:
                 return GlobalTierEconomicsStats(
                     daily=daily,
                     tier_prices=[
-                        TierPrice(tier=t, monthly_price=_tier_price(t), weekly_credits=get_tier(t).weekly_credits)
+                        TierPrice(
+                            tier=t,
+                            monthly_price=_tier_price(t, product=PRODUCT_LIBERTAI),
+                            weekly_credits=get_tier(t, product=PRODUCT_LIBERTAI).weekly_credits,
+                        )
                         for t in sorted(PAID_TIERS, key=_tier_price)
                     ],
                 )
@@ -1303,7 +1307,11 @@ class StatsService:
                 else:
                     condition = PlanSubscription.status.in_([s.value for s in statuses])
 
-                count_stmt = select(func.count()).select_from(PlanSubscription)
+                count_stmt = (
+                    select(func.count())
+                    .select_from(PlanSubscription)
+                    .where(PlanSubscription.product == PRODUCT_LIBERTAI)
+                )
                 if condition is not None:
                     count_stmt = count_stmt.where(condition)
                 total = (await db.execute(count_stmt)).scalar_one()
@@ -1311,6 +1319,7 @@ class StatsService:
                 stmt = (
                     select(PlanSubscription, User)
                     .join(User, PlanSubscription.user_id == User.id)
+                    .where(PlanSubscription.product == PRODUCT_LIBERTAI)
                     .order_by(PlanSubscription.created_at.desc())
                 )
                 if condition is not None:
@@ -1391,10 +1400,19 @@ class StatsService:
                     )
                     .exists(),
                 )
-                condition = and_(PlanSubscriptionEvent.event_type.in_(raw_types), ~is_upgrade_activation)
+                condition = and_(
+                    PlanSubscriptionEvent.event_type.in_(raw_types),
+                    ~is_upgrade_activation,
+                    PlanSubscription.product == PRODUCT_LIBERTAI,
+                )
 
                 total = (
-                    await db.execute(select(func.count()).select_from(PlanSubscriptionEvent).where(condition))
+                    await db.execute(
+                        select(func.count())
+                        .select_from(PlanSubscriptionEvent)
+                        .join(PlanSubscription, PlanSubscriptionEvent.subscription_id == PlanSubscription.id)
+                        .where(condition)
+                    )
                 ).scalar_one()
 
                 rows = (
@@ -1438,8 +1456,19 @@ class StatsService:
     # an upgrade pair (the replacement row has its own ``activated``), avoiding double-counting.
     # ``expired_insufficient_credits`` is a credits-provider renewal that couldn't be covered —
     # also terminal. ``expired_abandoned_checkout`` (never-activated checkout) stays excluded: it
-    # has no activation to end.
-    _TERMINAL_EVENTS = ("cancelled", "expired", "finished", "cancelled_for_upgrade", "expired_insufficient_credits")
+    # has no activation to end. ``expired_superseded``, ``expired_never_paid`` and
+    # ``expired_abandoned_upgrade`` are LiberClaw-migrated vocabulary: this codebase never emits
+    # them itself, only replays them from migrated LC event history.
+    _TERMINAL_EVENTS = (
+        "cancelled",
+        "expired",
+        "finished",
+        "cancelled_for_upgrade",
+        "expired_insufficient_credits",
+        "expired_superseded",
+        "expired_never_paid",
+        "expired_abandoned_upgrade",
+    )
     # Events that leave a cycle unbilled. ``payment_failed`` (card declined on a live sub) and
     # ``overdue`` (provider-side notice) are two reports of the same incident, so either opens the
     # window and the first one wins.
@@ -1624,13 +1653,23 @@ class StatsService:
         return StatsService._replay_subscription_timelines(subs, events_by_sub)
 
     @staticmethod
-    async def _all_subscription_timelines(db) -> list[dict]:
-        """Replayed timelines for every subscription, ALL providers (trials excluded).
+    async def _all_subscription_timelines(db, product: str = PRODUCT_LIBERTAI) -> list[dict]:
+        """Replayed timelines for every subscription of ``product``, ALL providers (trials excluded).
 
         Tier attribution spans both rails, unlike either MRR series: a credits-rail subscriber
         still holds a tier and burns credits against it, whoever funded them.
         """
-        subs = (await db.execute(select(PlanSubscription).where(PlanSubscription.is_trial.is_(False)))).scalars().all()
+        subs = (
+            (
+                await db.execute(
+                    select(PlanSubscription).where(
+                        PlanSubscription.is_trial.is_(False), PlanSubscription.product == product
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
         return await StatsService._timelines_for(db, subs)
 
     @staticmethod
@@ -1735,7 +1774,7 @@ class StatsService:
             for t in timelines:
                 tier = StatsService._billed_tier_at(t, day)
                 if tier:
-                    total += _tier_price(tier)
+                    total += _tier_price(tier, product=PRODUCT_LIBERTAI)
             daily.append(MrrDay(date=day.strftime("%Y-%m-%d"), mrr=round(total, 2)))
             day += timedelta(days=1)
         return daily
@@ -1746,7 +1785,7 @@ class StatsService:
         for t in timelines:
             tier = StatsService._billed_tier_at(t, day)
             if tier:
-                by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier)
+                by_tier[tier] = by_tier.get(tier, 0.0) + _tier_price(tier, product=PRODUCT_LIBERTAI)
         return by_tier
 
     @staticmethod
@@ -1773,6 +1812,7 @@ class StatsService:
                             select(PlanSubscription).where(
                                 PlanSubscription.provider == "revolut",
                                 PlanSubscription.is_trial.is_(False),
+                                PlanSubscription.product == PRODUCT_LIBERTAI,
                             )
                         )
                     )
@@ -1944,6 +1984,7 @@ class StatsService:
                             select(PlanSubscription).where(
                                 PlanSubscription.provider == "revolut",
                                 PlanSubscription.is_trial.is_(False),
+                                PlanSubscription.product == PRODUCT_LIBERTAI,
                             )
                         )
                     )

@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Boolean, ForeignKey, Index, String, func, text
+import sqlalchemy as sa
+from sqlalchemy import TIMESTAMP, UUID, Boolean, CheckConstraint, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base
@@ -31,7 +32,7 @@ class PlanSubscription(Base):
     __tablename__ = "plan_subscriptions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     tier: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     provider: Mapped[str] = mapped_column(String, nullable=False)
@@ -47,6 +48,11 @@ class PlanSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.current_timestamp(), onupdate=func.current_timestamp()
     )
+    product: Mapped[str] = mapped_column(String, nullable=False, default="libertai", server_default="libertai")
+    liberclaw_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, nullable=True
+    )  # LiberClaw users.id; no FK (cross-DB)
+    provider_cancelled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
 
     user: Mapped["User"] = relationship("User", back_populates="plan_subscriptions")
     events: Mapped[list["PlanSubscriptionEvent"]] = relationship(
@@ -70,11 +76,25 @@ class PlanSubscription(Base):
             postgresql_where=text("status = 'pending_upgrade'"),
         ),
         Index("ix_plan_subscriptions_provider_subscription_id", "provider_subscription_id"),
+        # Owner is at least one of user_id (libertai) / liberclaw_account_id (liberclaw);
+        # phase 2 fills both.
+        CheckConstraint("num_nonnulls(user_id, liberclaw_account_id) >= 1", name="ck_plan_subscriptions_owner"),
+        Index("ix_plan_subscriptions_lclw_account_status", "liberclaw_account_id", "status"),
+        # At most one live subscription per liberclaw account, mirroring uq_one_active_plan_subscription.
+        # Phase 2 (LiberClaw billing cutover into this table): once user_id starts getting filled for
+        # liberclaw rows too, this and uq_one_active_plan_subscription must gain a `product` column
+        # filter, or a libertai and a liberclaw row for the same user_id would collide.
+        Index(
+            "uq_one_active_plan_subscription_lclw",
+            "liberclaw_account_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'active', 'overdue')"),
+        ),
     )
 
     def __init__(
         self,
-        user_id: uuid.UUID,
+        user_id: uuid.UUID | None,
         tier: str,
         provider: str,
         status: str = "pending",
@@ -86,6 +106,10 @@ class PlanSubscription(Base):
         cancel_at_period_end: bool = False,
         pending_tier: str | None = None,
         is_trial: bool = False,
+        *,
+        product: str = "libertai",
+        liberclaw_account_id: uuid.UUID | None = None,
+        provider_cancelled: bool = False,
     ):
         self.user_id = user_id
         self.tier = tier
@@ -99,3 +123,6 @@ class PlanSubscription(Base):
         self.cancel_at_period_end = cancel_at_period_end
         self.pending_tier = pending_tier
         self.is_trial = is_trial
+        self.product = product
+        self.liberclaw_account_id = liberclaw_account_id
+        self.provider_cancelled = provider_cancelled

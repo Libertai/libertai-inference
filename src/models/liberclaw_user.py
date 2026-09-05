@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, String, UniqueConstraint
+from sqlalchemy import TIMESTAMP, UUID, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -30,7 +30,16 @@ class LiberclawUser(Base):
         "LiberclawCreditGrant", back_populates="liberclaw_user"
     )
 
-    __table_args__ = (UniqueConstraint("user_id", "user_type", name="unique_liberclaw_user"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "user_type", name="unique_liberclaw_user"),
+        # Partial: many rows have no liberclaw_account_id yet (legacy/backfill-pending).
+        Index(
+            "uq_liberclaw_users_account_id",
+            "liberclaw_account_id",
+            unique=True,
+            postgresql_where=text("liberclaw_account_id IS NOT NULL"),
+        ),
+    )
 
     def __init__(
         self, user_id: str, user_type: str, tier: str = "free", liberclaw_account_id: uuid.UUID | None = None
