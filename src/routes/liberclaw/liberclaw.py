@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 
 import httpx
 from fastapi import Depends, HTTPException, Query, Response, status
-from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,9 +26,7 @@ from src.interfaces.liberclaw import (
     LiberclawExtendResponse,
     LiberclawExtraCreditsGrant,
     LiberclawExtraCreditsResponse,
-    LiberclawInvoiceIssueRequest,
     LiberclawTierRequest,
-    LiberclawTierUpdate,
     LiberclawTrialEligibilityResponse,
     LiberclawTrialRequest,
     LiberclawUpgradeRequest,
@@ -47,7 +44,7 @@ from src.services.auth import verify_liberclaw_token
 from src.services.invoice import SERIES_LCLW
 from src.services.invoice_pdf import get_or_render_pdf
 from src.services.liberclaw import LiberclawService
-from src.services.liberclaw_invoices import account_is_known, issue_for_liberclaw
+from src.services.liberclaw_invoices import account_is_known
 from src.services.payments.base import CheckoutResult, UnsupportedCapability
 from src.services.payments.manager import PaymentManager, ProviderCancelFailed, SupersedeFailed
 from src.services.payments.owner import Owner
@@ -74,10 +71,6 @@ MAX_CYCLES = 36
 CYCLE_WALK_DELAY_SECONDS = 0.1
 
 # HTTP status per issuance outcome; anything else (issued, duplicate, skipped_*) is 200.
-_ISSUE_STATUS_CODES = {
-    "rejected_foreign": status.HTTP_409_CONFLICT,
-    "unresolvable": status.HTTP_422_UNPROCESSABLE_ENTITY,
-}
 
 
 @router.post("/api-key", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
@@ -102,18 +95,6 @@ async def deactivate_api_key(request: LiberclawApiKeyRequest) -> LiberclawApiKey
         return LiberclawApiKeyDeactivateResponse(deactivated=deactivated)
     except Exception as e:
         logger.error(f"Error in deactivate_api_key: {e!s}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.put("/tier", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
-async def update_tier(request: LiberclawTierUpdate) -> None:
-    """Update a Liberclaw user's tier."""
-    try:
-        await LiberclawService.update_tier(user_id=request.user_id, user_type=request.user_type, tier=request.tier)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error in update_tier: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -146,23 +127,6 @@ async def get_user(user_id: str, user_type: str) -> LiberclawUserResponse:
     except Exception as e:
         logger.error(f"Error in get_user: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/invoices", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
-async def issue_invoice(body: LiberclawInvoiceIssueRequest) -> Response:
-    """Issue (or no-op on) an LCLW invoice for a settled Revolut order.
-
-    Always 200 with the outcome envelope, except the two outcomes that are themselves an
-    error: rejected_foreign (409) and unresolvable (422).
-    """
-    provider = payment_registry.get("revolut")
-    async with AsyncSessionLocal() as db:
-        result = await issue_for_liberclaw(db, provider, body)
-        await db.commit()
-    return JSONResponse(
-        status_code=_ISSUE_STATUS_CODES.get(result.status, status.HTTP_200_OK),
-        content=result.model_dump(mode="json"),
-    )
 
 
 @router.get("/invoices", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore

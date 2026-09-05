@@ -28,7 +28,7 @@ from src.subscription_tiers import PRODUCT_LIBERCLAW
 def _enable(monkeypatch):
     monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", True)
     monkeypatch.setattr(config, "LIBERCLAW_API_URL", "https://lclw.test")
-    monkeypatch.setattr(config, "LIBERCLAW_PUSH_SECRET", "s3cret")
+    monkeypatch.setattr(config, "LIBERCLAW_SECRET", "s3cret")
 
 
 def _lclw_sub(**overrides) -> PlanSubscription:

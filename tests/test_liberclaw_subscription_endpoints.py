@@ -13,12 +13,11 @@ from src.models.base import AsyncSessionLocal
 from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
-from src.models.user import User
 from src.routes.liberclaw import liberclaw as liberclaw_routes
 from src.services.payments.base import CheckoutResult, PaymentEvent, PaymentEventType
 from src.services.payments.manager import PaymentManager
 from src.subscription_tiers import PRODUCT_LIBERCLAW
-from tests.test_liberclaw_invoice_endpoints import HEADERS, _cleanup, _install_fake_provider, _order, _post
+from tests.test_liberclaw_invoice_endpoints import HEADERS, _install_fake_provider
 from tests.test_payment_manager import FakeProvider
 
 
@@ -882,78 +881,3 @@ async def test_webhook_flag_on_processes_lclw_event(db, monkeypatch):
 
 
 # --------------------------------------------------------------------- foreign-order product check (retained HTTP path)
-
-
-async def test_ltai_owned_sub_order_is_rejected_foreign(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    own_sub_id = f"psub_ltai_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": own_sub_id})
-    async with AsyncSessionLocal() as db:
-        user = User(email=f"lclw-b6-{uuid.uuid4().hex}@example.com")
-        db.add(user)
-        await db.flush()
-        db.add(
-            PlanSubscription(
-                user_id=user.id, tier="go", provider="revolut", provider_subscription_id=own_sub_id, status="active"
-            )
-        )
-        await db.commit()
-        await db.refresh(user)
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
-async def test_lclw_owned_sub_order_is_not_rejected_foreign(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    own_sub_id = f"psub_lclw_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": own_sub_id})
-    await _seed_sub(account_id, tier="starter", provider_subscription_id=own_sub_id)
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices",
-            headers=HEADERS,
-            json=_post(order_id=order_id, liberclaw_account_id=account_id, tier="starter"),
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "issued"
-    finally:
-        await _cleanup_account(account_id)
-        await _cleanup(account_id=account_id)
-
-
-async def test_lclw_checkout_declined_event_is_not_rejected_foreign(async_client, monkeypatch):
-    """checkout_declined/activation_refused/refunded events carry an order_id with no invoice
-    ever issued against it — an LCLW hit here must not 409 LC's own order during the overlap
-    window (the owned_event arm is narrowed the same way as the resolved-sub arm)."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={})
-    sub_id = await _seed_sub(account_id, tier="starter")
-    async with AsyncSessionLocal() as db:
-        db.add(
-            PlanSubscriptionEvent(
-                subscription_id=sub_id, event_type="checkout_declined", metadata_json={"order_id": order_id}
-            )
-        )
-        await db.commit()
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices",
-            headers=HEADERS,
-            json=_post(order_id=order_id, liberclaw_account_id=account_id, tier="starter"),
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "issued"
-    finally:
-        await _cleanup_account(account_id)

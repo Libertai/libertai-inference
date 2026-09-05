@@ -70,9 +70,9 @@ def push_ready() -> bool:
     global _warned_unconfigured
     if not config.LIBERCLAW_BILLING_ENABLED:
         return False
-    if not config.LIBERCLAW_API_URL or not config.LIBERCLAW_PUSH_SECRET:
+    if not config.LIBERCLAW_API_URL or not config.LIBERCLAW_SECRET:
         if not _warned_unconfigured:
-            logger.warning("LIBERCLAW_API_URL/LIBERCLAW_PUSH_SECRET unset; snapshot push disabled")
+            logger.warning("LIBERCLAW_API_URL/LIBERCLAW_SECRET unset; snapshot push disabled")
             _warned_unconfigured = True
         return False
     return True
@@ -183,7 +183,8 @@ async def _put_snapshot(snapshot: dict[str, Any]) -> httpx.Response:
         return await client.put(
             f"{config.LIBERCLAW_API_URL}/internal/subscription-state",
             json=snapshot,
-            headers={"x-libertai-token": config.LIBERCLAW_PUSH_SECRET},
+            # Same shared secret as the LC->inference channel; the pair is one value by design.
+            headers={"x-libertai-token": config.LIBERCLAW_SECRET},
         )
 
 

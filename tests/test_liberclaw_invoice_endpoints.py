@@ -5,21 +5,18 @@ so most of this exercises the foreign-order screen (never invoice an order that 
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import delete, select
 
 from src.config import config
-from src.interfaces.credits import CreditTransactionProvider
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.models.invoice import Invoice
 from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.plan_subscription import PlanSubscription
-from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
-from src.services.invoice import SERIES_LTAI, issue_invoice
+from src.services.invoice import SERIES_LCLW, issue_invoice
 from src.services.payments.registry import payment_registry
 from tests.test_payment_manager import FakeProvider
 
@@ -130,423 +127,50 @@ def _post(order_id=None, provider_subscription_id=None, **overrides) -> dict:
 # --------------------------------------------------------------------- 1. issue by order_id
 
 
-async def test_issue_by_order_id_happy_path(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(amount=1200, currency="EUR")
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(LiberclawBillingDetails(liberclaw_account_id=account_id, name="Acme SAS", country="France"))
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices",
-            headers=HEADERS,
-            json=_post(order_id=order_id, liberclaw_account_id=account_id, tier="starter"),
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "issued"
-        assert body["number"].startswith("LCLW-")
-
-        async with AsyncSessionLocal() as db:
-            invoice = (
-                await db.execute(select(Invoice).where(Invoice.id == uuid.UUID(body["invoice_id"])))
-            ).scalar_one()
-        assert invoice.line_label == "LiberClaw Starter subscription"  # derived from tier, not caller text
-        assert invoice.gross_amount == Decimal("12.00")
-        assert invoice.vat_amount == Decimal("2.00")  # EUR, no line_items -> back-calculated 20%
-        assert invoice.buyer["email"] == "buyer@example.com"
-        assert invoice.buyer["name"] == "Acme SAS"  # from liberclaw_billing_details, not the request
-        assert invoice.provider_subscription_id == "lc_sub_default"
-        assert invoice.cycle_id == "lc_cyc_default"  # taken from the order's channel_data
-    finally:
-        await _cleanup(account_id=account_id)
-
-
 # --------------------------------------------------------------------- 2. duplicate re-submit
-
-
-async def test_duplicate_resubmit_same_number_no_provider_call(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order()
-    body = _post(order_id=order_id, liberclaw_account_id=account_id, tier="pro")
-    try:
-        first = await async_client.post("/liberclaw/invoices", headers=HEADERS, json=body)
-        assert first.json()["status"] == "issued"
-        calls_after_first = fake.get_order_calls
-
-        second = await async_client.post("/liberclaw/invoices", headers=HEADERS, json=body)
-        assert second.status_code == 200
-        assert second.json()["status"] == "duplicate"
-        assert second.json()["number"] == first.json()["number"]
-        assert fake.get_order_calls == calls_after_first  # lock-free pre-check: no provider I/O
-    finally:
-        await _cleanup(account_id=account_id)
-
-
-async def test_external_reference_claimed_by_ltai_is_rejected_foreign(async_client, monkeypatch):
-    """The unique external_reference collision issue_invoice reports as None can be won by an
-    LTAI-series row (unrelated to this order's foreign-order screen). The fallback re-read must
-    never leak that row's number over the LCLW channel."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={})
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            await issue_invoice(
-                db,
-                series=SERIES_LTAI,
-                user_id=user.id,
-                user_email=user.email,
-                external_reference=f"revolut:{order_id}",
-                gross_minor=1200,
-                currency="EUR",
-                tax_minor=None,
-                payment_date=datetime(2026, 9, 1),
-                line_label="Prepaid credits",
-            )
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert resp.json()["number"] is None
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
 
 
 # --------------------------------------------------------------------- 3. issue by provider_subscription_id
 
 
-async def test_issue_by_provider_subscription_id(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    sub_id = "psub_lc_1"
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.cycles["cyc_1"] = {"order_id": order_id, "start_date": "2026-09-01", "end_date": "2026-10-01"}
-    fake.current_cycle_ids[sub_id] = "cyc_1"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": sub_id})
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices",
-            headers=HEADERS,
-            json=_post(provider_subscription_id=sub_id, liberclaw_account_id=account_id, tier="team"),
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "issued"
-
-        async with AsyncSessionLocal() as db:
-            invoice = (
-                await db.execute(select(Invoice).where(Invoice.id == uuid.UUID(body["invoice_id"])))
-            ).scalar_one()
-        assert invoice.external_reference == f"revolut:{order_id}"
-        assert invoice.provider_subscription_id == sub_id
-    finally:
-        await _cleanup(account_id=account_id)
-
-
 # --------------------------------------------------------------------- 4. foreign-order rejections
-
-
-async def test_reject_order_with_topup_ext_ref(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(merchant_order_ext_ref=f"topup:{uuid.uuid4()}", channel_data={})
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
-
-
-async def test_reject_order_matching_own_plan_subscription(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    own_sub_id = f"psub_own_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": own_sub_id})
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(
-                PlanSubscription(
-                    user_id=user.id,
-                    tier="go",
-                    provider="revolut",
-                    provider_subscription_id=own_sub_id,
-                    status="active",
-                )
-            )
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
-async def test_reject_order_matching_credit_transaction(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={})
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(
-                CreditTransaction(
-                    user_id=user.id,
-                    amount=10,
-                    amount_left=10,
-                    provider=CreditTransactionProvider.revolut,
-                    external_reference=f"revolut:{order_id}",
-                )
-            )
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
-async def test_reject_order_matching_multiple_subscription_events(async_client, monkeypatch):
-    """A retried charge can log more than one event carrying the same order id: the ownership
-    probe must not 500 (MultipleResultsFound) on more than one match."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={})
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            sub = PlanSubscription(user_id=user.id, tier="go", provider="revolut", status="active")
-            db.add(sub)
-            await db.flush()
-            db.add(
-                PlanSubscriptionEvent(
-                    subscription_id=sub.id, event_type="activated", metadata_json={"order_id": order_id}
-                )
-            )
-            db.add(
-                PlanSubscriptionEvent(
-                    subscription_id=sub.id, event_type="renewed", metadata_json={"order_id": order_id}
-                )
-            )
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
-async def test_reject_order_matching_multiple_plan_subscriptions(async_client, monkeypatch):
-    """Same MultipleResultsFound hazard, on the plan_subscriptions probe."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    own_sub_id = f"psub_own_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": own_sub_id})
-    user_a = await _make_user()
-    user_b = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(
-                PlanSubscription(
-                    user_id=user_a.id,
-                    tier="go",
-                    provider="revolut",
-                    provider_subscription_id=own_sub_id,
-                    status="cancelled",
-                )
-            )
-            db.add(
-                PlanSubscription(
-                    user_id=user_b.id,
-                    tier="go",
-                    provider="revolut",
-                    provider_subscription_id=own_sub_id,
-                    status="cancelled",
-                )
-            )
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id, user_id=user_a.id)
-        await _cleanup(user_id=user_b.id)
 
 
 # --------------------------------------------------------------------- 5. NULL-guard
 
 
-async def test_null_channel_data_not_rejected_by_null_plan_subscription(async_client, monkeypatch):
-    """The false-positive trap: a NULL channel_data.subscription_id must never match a
-    plan_subscriptions row whose provider_subscription_id also happens to be NULL."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(channel_data={})
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(PlanSubscription(user_id=user.id, tier="go", provider="revolut", status="pending"))
-            await db.commit()
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "issued"
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
 # --------------------------------------------------------------------- 6. refund / zero
-
-
-async def test_refund_order_skipped(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = {"state": "completed", "type": "refund", "channel_data": {}}
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "skipped_refund"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
-
-
-async def test_zero_amount_order_skipped(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(amount=0)
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "skipped_zero"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
 
 
 # --------------------------------------------------------------------- 6b. settlement gate
 
 
-async def test_unsettled_order_is_unresolvable_not_issued(async_client, monkeypatch):
-    """A cycle names its order at creation, before it settles — the sweep's provider_subscription_id
-    path must not mint an invoice for a charge that hasn't (or hasn't yet) gone through."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order(state="pending")
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 422
-        assert resp.json()["status"] == "unresolvable"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
-
-
-async def test_malformed_order_payload_is_unresolvable_with_envelope(async_client, monkeypatch):
-    """order_invoice_fields' ValueError (missing amount/currency) must stay inside the
-    {status: ...} envelope, not leak out as FastAPI's bare {detail: ...} shape."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = {"state": "completed", "type": "payment", "channel_data": {}}  # no amount/currency
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 422
-        assert resp.json()["status"] == "unresolvable"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
-
-
 # --------------------------------------------------------------------- 7. positive assertion mismatch
-
-
-async def test_subscription_id_mismatch_rejected(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    sub_id = "psub_claimed"
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.cycles["cyc_1"] = {"order_id": order_id}
-    fake.current_cycle_ids[sub_id] = "cyc_1"
-    fake.orders[order_id] = _order(channel_data={"subscription_id": "psub_actual_other"})
-    try:
-        resp = await async_client.post(
-            "/liberclaw/invoices",
-            headers=HEADERS,
-            json=_post(provider_subscription_id=sub_id, liberclaw_account_id=account_id),
-        )
-        assert resp.status_code == 409
-        assert resp.json()["status"] == "rejected_foreign"
-        assert await _invoice_count(account_id) == 0
-    finally:
-        await _cleanup(account_id=account_id)
 
 
 # --------------------------------------------------------------------- 8. list + pdf ownership
 
 
 async def test_list_and_pdf_ownership(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
     account_id = uuid.uuid4()
     other_account_id = uuid.uuid4()
     order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order()
     try:
-        issue_resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        invoice_id = issue_resp.json()["invoice_id"]
+        async with AsyncSessionLocal() as db:
+            inv = await issue_invoice(
+                db,
+                series=SERIES_LCLW,
+                liberclaw_account_id=account_id,
+                user_email="lclw@example.com",
+                external_reference=f"revolut:{order_id}",
+                gross_minor=700,
+                currency="EUR",
+                tax_minor=None,
+                payment_date=datetime(2026, 9, 1),
+                line_label="LiberClaw Starter subscription",
+            )
+            await db.commit()
+        invoice_id = str(inv.id)
 
         own_list = await async_client.get(
             "/liberclaw/invoices", headers=HEADERS, params={"liberclaw_account_id": str(account_id)}
@@ -646,77 +270,7 @@ async def test_non_ascii_token_rejected_not_500(async_client):
 # --------------------------------------------------------------------- 6c. cross-series disclosure
 
 
-async def test_ltai_order_number_never_crosses_channel(async_client, monkeypatch):
-    """A pre-existing LTAI invoice for this order id must never surface (or leak its number)
-    over the LiberClaw channel — the pre-check falls through to the ownership screen instead,
-    which (re-)identifies the order as inference's own and 409s it."""
-    fake = _install_fake_provider(monkeypatch)
-    account_id = uuid.uuid4()
-    order_id = f"ord_{uuid.uuid4().hex}"
-    user = await _make_user()
-    try:
-        async with AsyncSessionLocal() as db:
-            await issue_invoice(
-                db,
-                user_id=user.id,
-                user_email=user.email,
-                external_reference=f"revolut:{order_id}",
-                gross_minor=1000,
-                currency="USD",
-                tax_minor=None,
-                payment_date=datetime(2026, 8, 1),
-                line_label="LibertAI usage credits",
-            )
-            await db.commit()
-        # Make the order identify as inference's own topup so the fallthrough ownership check catches it.
-        fake.orders[order_id] = _order(merchant_order_ext_ref=f"topup:{user.id}", channel_data={})
-
-        resp = await async_client.post(
-            "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, liberclaw_account_id=account_id)
-        )
-        assert resp.status_code == 409
-        body = resp.json()
-        assert body["status"] == "rejected_foreign"
-        assert body.get("number") is None
-    finally:
-        await _cleanup(account_id=account_id, user_id=user.id)
-
-
 # --------------------------------------------------------------------- request-shape validation
-
-
-async def test_unknown_tier_is_422(async_client, monkeypatch):
-    fake = _install_fake_provider(monkeypatch)
-    order_id = f"ord_{uuid.uuid4().hex}"
-    fake.orders[order_id] = _order()
-    resp = await async_client.post(
-        "/liberclaw/invoices", headers=HEADERS, json=_post(order_id=order_id, tier="enterprise")
-    )
-    assert resp.status_code == 422
-    assert resp.json()["status"] == "unresolvable"
-
-
-async def test_both_order_references_given_is_422(async_client):
-    resp = await async_client.post(
-        "/liberclaw/invoices",
-        headers=HEADERS,
-        json=_post(order_id="ord_x", provider_subscription_id="sub_y"),
-    )
-    assert resp.status_code == 422
-
-
-async def test_neither_order_reference_given_is_422(async_client):
-    resp = await async_client.post("/liberclaw/invoices", headers=HEADERS, json=_post())
-    assert resp.status_code == 422
-
-
-async def test_cycle_id_with_order_id_is_422(async_client):
-    resp = await async_client.post(
-        "/liberclaw/invoices",
-        headers=HEADERS,
-        json=_post(order_id="ord_x", cycle_id="cyc_1"),
-    )
-    assert resp.status_code == 422
 
 
 # --------------------------------------------------------------------- 11. subscription-cycles listing

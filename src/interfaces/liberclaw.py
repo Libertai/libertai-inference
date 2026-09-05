@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LiberclawApiKeyRequest(BaseModel):
@@ -10,12 +10,6 @@ class LiberclawApiKeyRequest(BaseModel):
     # LiberClaw's own users.id. Identity bridge to Invoice.liberclaw_account_id —
     # stored on the LiberclawUser row when provided (never overwritten once set).
     liberclaw_account_id: uuid.UUID | None = None
-
-
-class LiberclawTierUpdate(BaseModel):
-    user_id: str
-    user_type: str
-    tier: str
 
 
 class LiberclawApiKeyResponse(BaseModel):
@@ -58,33 +52,6 @@ class LiberclawUserResponse(BaseModel):
     # direct link — ends in a call here, so this is the only complete record of
     # whether the user has ever actually used anything.
     last_call_at: datetime | None = None
-
-
-class LiberclawInvoiceIssueRequest(BaseModel):
-    liberclaw_account_id: uuid.UUID
-    email: EmailStr
-    tier: str
-    period_start: datetime | None = None
-    period_end: datetime | None = None
-    # Direct path: the settled order to invoice. Sweep/backfill path: a subscription (+
-    # optional cycle, to target a past one) that inference resolves to its order itself.
-    order_id: str | None = None
-    provider_subscription_id: str | None = None
-    cycle_id: str | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one_order_reference(self) -> "LiberclawInvoiceIssueRequest":
-        if (self.order_id is None) == (self.provider_subscription_id is None):
-            raise ValueError("Provide exactly one of order_id or provider_subscription_id")
-        if self.cycle_id is not None and self.order_id is not None:
-            raise ValueError("cycle_id may only accompany provider_subscription_id")
-        return self
-
-
-class IssueResult(BaseModel):
-    status: str
-    invoice_id: uuid.UUID | None = None
-    number: str | None = None
 
 
 class SubscriptionCycle(BaseModel):
