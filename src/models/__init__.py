@@ -1,9 +1,11 @@
 # Import all models here so SQLAlchemy sees every mapped class before relationships are configured.
 # Order doesn't matter for that; kept alphabetical (ruff I001).
+from src.models.anon_chat_usage import AnonChatUsage
 from src.models.api_key import ApiKey
 from src.models.auth_code import AuthCode
 from src.models.base import Base
 from src.models.blocked_email_domain import BlockedEmailDomain
+from src.models.chat_request import ChatRequest
 from src.models.credit_transaction import CreditTransaction, CreditTransactionProvider, CreditTransactionStatus
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
@@ -11,6 +13,7 @@ from src.models.invoice import Invoice
 from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
+from src.models.lifecycle_email_send import LifecycleEmailSend
 from src.models.magic_link import MagicLink
 from src.models.oauth_connection import OAuthConnection
 from src.models.plan_subscription import PlanSubscription
@@ -21,10 +24,12 @@ from src.models.user_billing_details import UserBillingDetails
 from src.models.wallet_connection import WalletConnection
 
 __all__ = [
+    "AnonChatUsage",
     "ApiKey",
     "AuthCode",
     "Base",
     "BlockedEmailDomain",
+    "ChatRequest",
     "CreditTransaction",
     "CreditTransactionProvider",
     "CreditTransactionStatus",
@@ -34,6 +39,7 @@ __all__ = [
     "LiberclawBillingDetails",
     "LiberclawCreditGrant",
     "LiberclawUser",
+    "LifecycleEmailSend",
     "MagicLink",
     "OAuthConnection",
     "PlanSubscription",
