@@ -343,11 +343,26 @@ class SubscriptionStatusFilter(str, Enum):
     pending_upgrade = "pending_upgrade"
 
 
+class SubscriberWindowUsage(BaseModel):
+    """Fill level of one entitlement window, in credits plus the derived share.
+
+    ``limit`` of 0 means the tier grants no allowance for this window; ``percent`` is then 0.
+    """
+
+    used: float
+    limit: float
+    percent: float  # 0-100, clamped
+
+
 class LatestSubscriber(BaseModel):
     """A single recent plan subscription with a human-friendly label for its user.
 
     ``user_label`` is ``display_name (contact)`` when the user set a name, else the bare
     ``contact`` (contact resolves email > wallet address > user id).
+
+    The window fields measure the user's live entitlement consumption against the tier they
+    are on *now* (their active subscription, else free), which is not the row's ``tier`` for
+    an ended subscription. A user with no open window of a kind reads as 0 used.
     """
 
     user_label: str
@@ -358,6 +373,8 @@ class LatestSubscriber(BaseModel):
     cancel_at_period_end: bool
     created_at: str  # ISO date-time
     current_period_end: str | None
+    window_5h: SubscriberWindowUsage
+    weekly: SubscriberWindowUsage
 
 
 class GlobalLatestSubscribersStats(BaseModel):

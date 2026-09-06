@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from fastapi import HTTPException, status
 from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from src.config import config
@@ -45,6 +46,7 @@ from src.interfaces.stats import (
     MrrDay,
     SegmentCallUsage,
     SegmentMessageUsage,
+    SubscriberWindowUsage,
     SubscriptionActivityEvent,
     SubscriptionActivityType,
     SubscriptionStatusFilter,
@@ -69,8 +71,9 @@ from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, used_percent, window_usage_by_users
 from src.services.payments.credit_subscription import CREDITS_PROVIDER
-from src.subscription_tiers import PAID_TIERS, PRODUCT_LIBERTAI, get_tier
+from src.subscription_tiers import DEFAULT_TIER, PAID_TIERS, PRODUCT_LIBERTAI, TierConfig, get_tier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -83,6 +86,20 @@ def _tier_price(tier: str, product: str = PRODUCT_LIBERTAI) -> float:
     except ValueError:
         logger.warning(f"Unknown subscription tier in MRR computation: {tier}")
         return 0.0
+
+
+def _tier_or_free(tier: str) -> TierConfig:
+    """Tier config for an allowance lookup; a legacy tier string falls back to free rather
+    than 500ing the endpoint."""
+    try:
+        return get_tier(tier, product=PRODUCT_LIBERTAI)
+    except ValueError:
+        logger.warning(f"Unknown subscription tier in window usage: {tier}")
+        return get_tier(DEFAULT_TIER, product=PRODUCT_LIBERTAI)
+
+
+def _window_usage(used: float, limit: float) -> SubscriberWindowUsage:
+    return SubscriberWindowUsage(used=round(used, 6), limit=limit, percent=used_percent(used, limit))
 
 
 def _user_label(user: User) -> str:
@@ -1328,9 +1345,16 @@ class StatsService:
                     stmt = stmt.limit(limit)
                 rows = (await db.execute(stmt)).all()
 
+                now = datetime.now()
+                user_ids = {user.id for _, user in rows}
+                usage_5h = await window_usage_by_users(db, user_ids, WINDOW_5H, now)
+                usage_weekly = await window_usage_by_users(db, user_ids, WINDOW_WEEKLY, now)
+                live_tiers = await StatsService._active_libertai_tiers(db, user_ids)
+
                 subscribers = []
                 for sub, user in rows:
                     label = _user_label(user)
+                    tier_config = _tier_or_free(live_tiers.get(user.id, DEFAULT_TIER))
                     subscribers.append(
                         LatestSubscriber(
                             user_label=label,
@@ -1341,12 +1365,31 @@ class StatsService:
                             cancel_at_period_end=sub.cancel_at_period_end,
                             created_at=sub.created_at.isoformat(),
                             current_period_end=sub.current_period_end.isoformat() if sub.current_period_end else None,
+                            window_5h=_window_usage(usage_5h.get(user.id, 0.0), tier_config.window_5h_credits),
+                            weekly=_window_usage(usage_weekly.get(user.id, 0.0), tier_config.weekly_credits),
                         )
                     )
                 return GlobalLatestSubscribersStats(subscribers=subscribers, total=total)
         except Exception as e:
             logger.error(f"Error retrieving latest subscribers: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def _active_libertai_tiers(db: AsyncSession, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """Active LTAI tier per user (absent => free). Scoped to ``PRODUCT_LIBERTAI`` so a
+        LiberClaw subscription doesn't stand in for the inference allowances."""
+        if not user_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(PlanSubscription.user_id, PlanSubscription.tier).where(
+                    PlanSubscription.user_id.in_(user_ids),
+                    PlanSubscription.product == PRODUCT_LIBERTAI,
+                    PlanSubscription.status == "active",
+                )
+            )
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     # Raw event_type -> human-facing activity type. Only completed, meaningful transitions are
     # shown; intents (created/initiated/*_requested), bookkeeping (cancelled_for_upgrade,

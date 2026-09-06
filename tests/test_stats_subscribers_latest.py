@@ -3,13 +3,19 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.stats import SubscriptionActivityType, SubscriptionStatusFilter
+from src.models.api_key import ApiKey
 from src.models.base import AsyncSessionLocal
+from src.models.entitlement_window import EntitlementWindow
+from src.models.inference_call import InferenceCall
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
 from src.services.auth_tokens import create_access_token
+from src.services.entitlement import WINDOW_5H
 from src.services.stats import StatsService
+from src.subscription_tiers import get_tier
 
 
 async def test_latest_subscribers_newest_first_with_user_label():
@@ -340,3 +346,54 @@ async def test_latest_subscribers_label_prefers_display_name_with_contact_in_par
     assert "Alice (named@example.com)" in labels  # display_name + email contact
     assert "Bob (0xWALLET)" in labels  # no email -> wallet address as contact
     assert "anon@example.com" in labels  # no display_name -> bare contact
+
+
+# Also membership-only, for the same reason as the label test above.
+async def test_latest_subscribers_report_window_usage_against_the_live_tier():
+    """Windows are measured against the tier the user is on now, so an ended subscription's
+    row reads against free — not the tier that row once granted."""
+    now = datetime.now()
+    async with AsyncSessionLocal() as db:
+        paying = User(email="windows-paying@example.com")
+        ended = User(email="windows-ended@example.com")
+        db.add_all([paying, ended])
+        await db.flush()
+
+        for user, status, tier in ((paying, "active", "go"), (ended, "expired", "max")):
+            sub = PlanSubscription(user_id=user.id, tier=tier, status=status, provider="revolut")
+            sub.created_at = datetime(2099, 6, 1)
+            db.add(sub)
+            db.add(
+                EntitlementWindow(
+                    user_id=user.id,
+                    kind=WINDOW_5H,
+                    started_at=now - timedelta(hours=1),
+                    expires_at=now + timedelta(hours=4),
+                )
+            )
+            key = ApiKey(key=ApiKey.generate_key(), name=uuid.uuid4().hex, user_id=user.id, type=ApiKeyType.api)
+            db.add(key)
+            await db.flush()
+            spend = get_tier(tier).window_5h_credits / 2 if tier == "go" else get_tier("free").window_5h_credits
+            call = InferenceCall(api_key_id=key.id, credits_used=spend, model_name="m", tier_credits_used=spend)
+            call.used_at = now - timedelta(minutes=30)
+            db.add(call)
+        await db.commit()
+
+    rows = {
+        s.user_label: s
+        for s in (
+            await StatsService.get_latest_subscribers(limit=None, statuses=[SubscriptionStatusFilter.all])
+        ).subscribers
+    }
+
+    paid_row = rows["windows-paying@example.com"]
+    assert paid_row.window_5h.limit == get_tier("go").window_5h_credits
+    assert paid_row.window_5h.percent == pytest.approx(50.0)
+    assert paid_row.weekly.percent == 0.0  # no weekly window open
+
+    # The row says "max", but the subscription ended: the allowance is free's, and it's spent.
+    ended_row = rows["windows-ended@example.com"]
+    assert ended_row.tier == "max"
+    assert ended_row.window_5h.limit == get_tier("free").window_5h_credits
+    assert ended_row.window_5h.percent == pytest.approx(100.0)
