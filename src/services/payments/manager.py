@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, true
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -146,6 +146,12 @@ PAYMENT_BEING_CONFIRMED = "A payment on your subscription is still being confirm
 # Days past current_period_end before a recurring liberclaw subscription with no renewal
 # webhook in sight is expired. Only a renewal payment moves that date forward.
 RENEWAL_GRACE_DAYS = 7
+
+# How long a wind-down still live at the provider is held past its period end, in case the
+# provider billed the next cycle anyway and its renewal webhook is late: expiring on the
+# stored end alone would demote an owner who has just been charged. A row already cancelled
+# at the provider has no such webhook coming and skips this entirely.
+RENEWAL_WEBHOOK_GRACE = timedelta(hours=24)
 
 # Self-serve (no admin) trial tier per product — the cheapest paid tier each sells.
 SELF_SERVE_TRIAL_TIER = {PRODUCT_LIBERTAI: "go", PRODUCT_LIBERCLAW: "starter"}
@@ -1592,16 +1598,25 @@ class PaymentManager:
             if sub.current_period_end and sub.current_period_end > pre_cutoff:
                 logger.info(f"Deferring provider cancel for sub {sub.id}: provider cycle still running")
                 continue
-            await self._cancel_on_provider(sub)
+            if await self._cancel_on_provider(sub):
+                # Terminal at the provider: no renewal can arrive, so the row skips the
+                # webhook grace below, and resume() refuses instead of promising one.
+                sub.provider_cancelled = True
 
-        cutoff = datetime.now() - timedelta(hours=24)
+        expiry_now = datetime.now()
         result = await self.db.execute(
             select(PlanSubscription)
             .where(
                 self._product_scope(),
                 PlanSubscription.status.in_(["active", "overdue"]),
-                PlanSubscription.current_period_end < cutoff,
                 PlanSubscription.cancel_at_period_end == True,
+                or_(
+                    and_(
+                        PlanSubscription.provider_cancelled == True,
+                        PlanSubscription.current_period_end < expiry_now,
+                    ),
+                    PlanSubscription.current_period_end < expiry_now - RENEWAL_WEBHOOK_GRACE,
+                ),
             )
             .with_for_update()
         )
@@ -1662,6 +1677,7 @@ class PaymentManager:
         # blocked from a fresh checkout. Routed through the single retirement helper: the
         # provider-cancel gate keeps a row payable (and thus never falsely marked dead) if the
         # provider link can't be confirmed cancelled.
+        unpaid_checkout_cutoff = now - timedelta(hours=24)
         stale_pending_result = await self.db.execute(
             select(PlanSubscription)
             .where(
@@ -1669,7 +1685,7 @@ class PaymentManager:
                 PlanSubscription.product == PRODUCT_LIBERCLAW,
                 PlanSubscription.status == "pending",
                 PlanSubscription.current_period_start.is_(None),
-                PlanSubscription.created_at < cutoff,
+                PlanSubscription.created_at < unpaid_checkout_cutoff,
             )
             .with_for_update()
         )

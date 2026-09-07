@@ -1720,6 +1720,65 @@ async def test_deferred_cancel_skips_when_the_provider_cannot_be_read(db):
 
 
 @pytest.mark.asyncio
+async def test_wind_down_cancelled_at_the_provider_expires_at_period_end(db):
+    """A row already cancelled at the provider cannot renew, so it expires the moment its
+    period ends — the renewal-webhook grace has nothing left to wait for, and holding the
+    row live blocks the owner from taking the same tier again."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(Owner.for_user(user))
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    sub.provider_cancelled = True
+    sub.current_period_end = datetime.now() - timedelta(minutes=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+
+    assert await mgr.current_tier(Owner.for_user(user)) == "free"
+    assert (await db.get(PlanSubscription, sub.id)).status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_wind_down_still_live_at_the_provider_keeps_the_renewal_grace(db):
+    """The provider cancel never landed, so the provider may still bill the next cycle and
+    announce it late. Expiring on the period end alone would demote an owner who just paid."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(Owner.for_user(user))
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    sub.current_period_end = datetime.now() - timedelta(hours=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+
+    assert (await db.get(PlanSubscription, sub.id)).status == "active"
+
+
+@pytest.mark.asyncio
+async def test_deferred_provider_cancel_marks_the_row_cancelled_at_the_provider(db):
+    """Recording the terminal cancel stops the next pass re-issuing it, and makes resume()
+    refuse instead of promising a renewal the cancelled provider subscription cannot deliver."""
+    from datetime import datetime, timedelta
+
+    provider = FakeProvider()
+    provider.cycle_end_days = 1 / 24
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.cancel(Owner.for_user(user))
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    sub.current_period_end = datetime.now() + timedelta(hours=1)
+    await db.flush()
+
+    await mgr.check_expirations()
+
+    assert "psub_1" in provider.cancelled
+    assert (await db.get(PlanSubscription, sub.id)).provider_cancelled is True
+
+
+@pytest.mark.asyncio
 async def test_refund_order_is_not_booked_as_a_renewal(db):
     """A refund settles as its own order and the provider announces it with the same
     ORDER_COMPLETED event a payment uses, under a new order id — so event-id dedup cannot see
