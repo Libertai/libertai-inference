@@ -1,8 +1,13 @@
 """Canonical form of an email address, used to decide which addresses are one account.
 
-Gmail ignores dots and ``+tag`` suffixes in the local part, so every such variant of a
-gmail address is one mailbox. Folding is therefore restricted to gmail.com/googlemail.com:
-dots are significant on every other domain.
+A ``+tag`` suffix is a subaddress: every mainstream provider (Gmail, Yandex, Outlook,
+Fastmail, Proton, iCloud) delivers ``user+anything@`` to ``user@``, so the tag is stripped
+on every domain. Dots are folded for gmail.com/googlemail.com only — Google ignores them,
+everyone else treats them as significant.
+
+Only addresses with exactly one ``@`` are folded. ``a@b.com@c.com`` is left whole: splitting
+it would canonicalise it onto ``a@b.com`` and let an attacker collide with that mailbox's
+account. Malformed input is normalised but never rewritten.
 
 The canonical form drives account lookup and the ``users.email`` uniqueness index; the
 stored address stays exactly as the user typed it (after the usual strip/lower).
@@ -16,21 +21,28 @@ GMAIL_DOMAINS = ("gmail.com", "googlemail.com")
 _CANONICAL_GMAIL_DOMAIN = "gmail.com"
 
 # Parenthesised so it is valid both as an index element and as a WHERE operand.
+# The first branch is the well-formedness guard described above.
 CANONICAL_EMAIL_SQL = (
-    "(CASE WHEN split_part(lower(btrim({col})), '@', 2) IN ('gmail.com', 'googlemail.com') "
+    "(CASE "
+    "WHEN length(lower(btrim({col}))) - length(replace(lower(btrim({col})), '@', '')) <> 1 "
+    "THEN lower(btrim({col})) "
+    "WHEN split_part(lower(btrim({col})), '@', 2) IN ('gmail.com', 'googlemail.com') "
     "THEN replace(split_part(split_part(lower(btrim({col})), '@', 1), '+', 1), '.', '') || '@gmail.com' "
-    "ELSE lower(btrim({col})) END)"
+    "ELSE split_part(split_part(lower(btrim({col})), '@', 1), '+', 1) "
+    "|| '@' || split_part(lower(btrim({col})), '@', 2) END)"
 )
 
 
 def canonical_email(email: str) -> str:
-    """The address's canonical form: gmail dot/tag variants collapse, other domains only normalise."""
+    """The address's canonical form: the ``+tag`` goes everywhere, dots only on gmail."""
     normalized = email.strip().lower()
-    local, _, rest = normalized.partition("@")
-    domain, _, _ = rest.partition("@")
-    if domain not in GMAIL_DOMAINS:
+    if normalized.count("@") != 1:
         return normalized
-    return f"{local.partition('+')[0].replace('.', '')}@{_CANONICAL_GMAIL_DOMAIN}"
+    local, _, domain = normalized.partition("@")
+    untagged = local.partition("+")[0]
+    if domain not in GMAIL_DOMAINS:
+        return f"{untagged}@{domain}"
+    return f"{untagged.replace('.', '')}@{_CANONICAL_GMAIL_DOMAIN}"
 
 
 def canonical_email_expression(column: str = "email") -> ColumnElement[str]:

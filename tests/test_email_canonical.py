@@ -22,9 +22,15 @@ from src.utils.email_canonical import CANONICAL_EMAIL_SQL, canonical_email, cano
         ("A.B@GoogleMail.com", "ab@gmail.com"),
         ("  a.b@gmail.com  ", "ab@gmail.com"),
         ("a.b@example.com", "a.b@example.com"),
-        ("a.b+tag@example.com", "a.b+tag@example.com"),
+        # The +tag is a subaddress everywhere, so it folds off-gmail too; dots do not.
+        ("a.b+tag@example.com", "a.b@example.com"),
+        ("ab+tag@yandex.com", "ab@yandex.com"),
+        ("ab+1@outlook.com", "ab@outlook.com"),
         ("A.B@Example.com", "a.b@example.com"),
         ("not-an-address", "not-an-address"),
+        # Folding an address with two @ would collide it onto the first domain's mailbox.
+        ("victim@gmail.com@attacker.tld", "victim@gmail.com@attacker.tld"),
+        ("victim@yandex.com@attacker.tld", "victim@yandex.com@attacker.tld"),
     ],
 )
 def test_canonical_form(address, expected):
