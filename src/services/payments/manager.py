@@ -569,7 +569,7 @@ class PaymentManager:
             "effective_date": sub.current_period_end.isoformat() if sub.current_period_end else None,
         }
 
-    async def force_cancel(self, owner: Owner) -> PlanSubscription:
+    async def force_cancel(self, owner: Owner, source: str = "admin_force_cancel") -> PlanSubscription:
         """Immediate terminal cancel, bypassing the deferred wind-down.
 
         ``provider_cancelled`` is pre-marked and flushed BEFORE the provider call (echo arm 1):
@@ -592,11 +592,37 @@ class PaymentManager:
             await self.db.rollback()
             raise ProviderCancelFailed(f"Subscription {sub_id} could not be cancelled at the provider")
         sub.status = "cancelled"
-        await self._log_event(sub, "cancelled", metadata={"source": "admin_force_cancel"})
+        await self._log_event(sub, "cancelled", metadata={"source": source})
         if owner.product == PRODUCT_LIBERCLAW:
             await self._lclw_sync_tier_free_unless_live(owner, exclude_sub_id=sub.id)
         await self.db.flush()
         return sub
+
+    async def restart_after_failure(self, owner: Owner, redirect_url: str, currency: str) -> CheckoutResult:
+        """Sell the tier again after a declined charge, on a card the owner enters at checkout.
+
+        A saved card cannot be swapped on a provider subscription, so recovering from a decline
+        means ending this one and opening a checkout whose setup order saves a new one. The old
+        subscription is cancelled at the provider FIRST (and the whole transaction abandoned if
+        that cannot be confirmed): leaving it live there would keep its retries running against
+        the dead card alongside the replacement.
+
+        The failed cycle is not collected. ``overdue`` already paused the entitlement, so the
+        owner has had nothing to pay for since, and the replacement bills a cycle of its own.
+        """
+        await self._lock_owner(owner)
+        sub = await self._active_subscription(owner)
+        if sub is None or sub.status != "overdue":
+            raise ValueError("No failed payment to recover from")
+        if sub.cancel_at_period_end:
+            raise ValueError("Subscription is being cancelled")
+        if sub.provider != self.provider.id:
+            raise ValueError("Subscription is held at another payment provider")
+        # A scheduled paid downgrade is the plan the next cycle would have billed.
+        tier = sub.pending_tier or sub.tier
+
+        await self.force_cancel(owner, source="payment_failure_restart")
+        return await self._open_checkout(owner, tier, redirect_url, currency, "pending")
 
     async def resume(self, owner: Owner) -> dict:
         """Undo a scheduled cancellation or paid downgrade before it takes effect."""

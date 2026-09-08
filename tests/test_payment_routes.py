@@ -500,6 +500,96 @@ async def test_upgrade_uses_region_resolved_currency(async_client, monkeypatch):
         await _cleanup(user.id)
 
 
+async def test_restart_replaces_an_overdue_subscription(async_client, monkeypatch):
+    """The recovery the payment-failed email points at: the overdue row ends at the provider
+    and the caller gets a checkout that saves the new card."""
+    user, headers = await _auth_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+
+    cancelled: list[str] = []
+
+    async def fake_create_subscription(
+        *, user_email, tier, currency, redirect_url, provider_customer_id=None, product=None
+    ):
+        return CheckoutResult(
+            checkout_url="http://pay/restart",
+            provider_subscription_id=f"psub_new_{user.id}",
+            provider_customer_id="cust_restart",
+            order_id=f"setup_restart_{user.id}",
+        )
+
+    async def fake_cancel_subscription(provider_subscription_id):
+        cancelled.append(provider_subscription_id)
+
+    monkeypatch.setattr(revolut, "create_subscription", fake_create_subscription)
+    monkeypatch.setattr(revolut, "cancel_subscription", fake_cancel_subscription)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                PlanSubscription(
+                    user_id=user.id,
+                    tier="plus",
+                    status="overdue",
+                    provider="revolut",
+                    provider_subscription_id=f"psub_dead_{user.id}",
+                    currency="USD",
+                )
+            )
+            await db.commit()
+
+        resp = await async_client.post("/payments/restart", json={"provider": "revolut"}, headers=headers)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["checkout_url"] == "http://pay/restart"
+        assert cancelled == [f"psub_dead_{user.id}"]
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_subscription_names_the_paused_tier_when_overdue(async_client):
+    """``tier`` is the effective entitlement (free while overdue), so the tier the restart
+    would sell back has to be reported separately for the UI to name it."""
+    user, headers = await _auth_user()
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                PlanSubscription(
+                    user_id=user.id,
+                    tier="plus",
+                    status="overdue",
+                    provider="revolut",
+                    provider_subscription_id=f"psub_paused_{user.id}",
+                    currency="USD",
+                )
+            )
+            await db.commit()
+
+        body = (await async_client.get("/payments/subscription", headers=headers)).json()
+
+        assert body["tier"] == "free"
+        assert body["paused_tier"] == "plus"
+    finally:
+        await _cleanup(user.id)
+
+
+async def test_restart_rejected_without_a_failed_payment(async_client, monkeypatch):
+    """Nothing to recover from: the caller has no subscription at all."""
+    user, headers = await _auth_user()
+    revolut = payment_registry.get("revolut")
+    monkeypatch.setattr(revolut, "secret_key", "sk_test")
+    monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")
+
+    try:
+        resp = await async_client.post("/payments/restart", json={"provider": "revolut"}, headers=headers)
+        assert resp.status_code == 400
+        assert "No failed payment" in resp.json()["detail"]
+    finally:
+        await _cleanup(user.id)
+
+
 async def test_webhook_bad_signature_rejected(async_client, monkeypatch):
     revolut = payment_registry.get("revolut")
     monkeypatch.setattr(revolut, "webhook_secret", "wsk_test")

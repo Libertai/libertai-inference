@@ -16,6 +16,7 @@ from src.interfaces.payments import (
     DowngradeResponse,
     PaymentProviderResponse,
     RegionResponse,
+    RestartRequest,
     ResumeResponse,
     SubscribeRequest,
     SubscriptionResponse,
@@ -33,7 +34,7 @@ from src.services.entitlement import get_allowance_state, used_percent
 from src.services.geo import resolve_currency, vat_rate_for_currency
 from src.services.payments.base import PaymentProviderKind, UnsupportedCapability
 from src.services.payments.credit_subscription import CreditSubscriptionService
-from src.services.payments.manager import PaymentManager
+from src.services.payments.manager import PaymentManager, ProviderCancelFailed
 from src.services.payments.owner import Owner
 from src.services.payments.registry import payment_registry
 from src.services.payments.tier_push import drain_pending_tier_pushes, push_ready
@@ -336,6 +337,37 @@ async def upgrade(
     return CheckoutResponse(checkout_url=result.checkout_url)
 
 
+@router.post("/restart", description="Replace a subscription whose payment failed with a fresh checkout")  # type: ignore
+async def restart(body: RestartRequest, request: Request, user: User = Depends(get_current_user)) -> CheckoutResponse:
+    provider = _require_provider(body.provider)
+    currency = resolve_currency(request)
+    async with AsyncSessionLocal() as db:
+        manager = PaymentManager(provider, db)
+        try:
+            result = await manager.restart_after_failure(
+                Owner.for_user(user),
+                redirect_url=_checkout_redirect(body.redirect_base),
+                currency=currency,
+            )
+        except (ValueError, UnsupportedCapability) as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except ProviderCancelFailed:
+            # The old subscription is still payable at the provider, so no replacement was
+            # opened: retrying once the provider answers is the whole recovery.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not end the failed subscription — please try again later",
+            )
+        except httpx.HTTPError as e:
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment provider error — please try again later",
+            )
+        await db.commit()
+    return CheckoutResponse(checkout_url=result.checkout_url)
+
+
 @router.post("/downgrade", description="Queue a downgrade for the end of the billing period")  # type: ignore
 async def downgrade(body: DowngradeRequest, user: User = Depends(get_current_user)) -> DowngradeResponse:
     async with AsyncSessionLocal() as db:
@@ -461,6 +493,7 @@ async def get_subscription(user: User = Depends(get_current_user)) -> Subscripti
         current_period_end=sub.current_period_end if sub else None,
         cancel_at_period_end=sub.cancel_at_period_end if sub else False,
         pending_tier=sub.pending_tier if sub else None,
+        paused_tier=((sub.pending_tier or sub.tier) if sub and sub.status == "overdue" else None),
         is_trial=sub.is_trial if sub else False,
         allowed=allowance.allowed,
         source=allowance.source,

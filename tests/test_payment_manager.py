@@ -22,7 +22,12 @@ from src.services.payments.base import (
     ProviderDescriptor,
     SubscriptionInfo,
 )
-from src.services.payments.manager import PaymentManager, SupersedeFailed, _topup_external_ref
+from src.services.payments.manager import (
+    PaymentManager,
+    ProviderCancelFailed,
+    SupersedeFailed,
+    _topup_external_ref,
+)
 from src.services.payments.owner import Owner
 from src.subscription_tiers import PRODUCT_LIBERTAI
 
@@ -551,6 +556,127 @@ async def test_successful_retry_restores_an_overdue_subscription(db):
     assert sub.tier == "plus"
     assert await mgr.current_tier(Owner.for_user(user)) == "plus"
     assert "renewed" in await _event_types(db, sub.id)
+
+
+async def _overdue_plus_sub(db, provider) -> tuple:
+    """User whose active 'plus' subscription has just had a renewal charge declined."""
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_FAILED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
+    )
+    return user, mgr
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_replaces_the_overdue_subscription(db):
+    """The card that failed cannot be swapped on a Revolut subscription, so restoring the
+    tier means ending this one at the provider and opening a checkout that saves a new card."""
+    provider = FakeProvider()
+    user, mgr = await _overdue_plus_sub(db, provider)
+    old_id = (await mgr._active_subscription(Owner.for_user(user), lock=False)).id
+
+    result = await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+
+    assert result.checkout_url
+    assert "psub_1" in provider.cancelled
+    old = await db.get(PlanSubscription, old_id)
+    assert old.status == "cancelled"
+    new = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    assert new.id != old_id
+    assert (new.tier, new.status) == ("plus", "pending")
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_refuses_a_subscription_that_is_paying(db):
+    """Only a declined charge justifies discarding a subscription: on a healthy one this
+    would cancel a live plan and bill a fresh period for the tier it already has."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+
+    with pytest.raises(ValueError, match="No failed payment"):
+        await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_refuses_a_subscription_winding_down(db):
+    """The owner asked to leave and the charge then failed. Restoring the tier here would
+    sell back the plan they just cancelled."""
+    provider = FakeProvider()
+    user, mgr = await _overdue_plus_sub(db, provider)
+    await mgr.cancel(Owner.for_user(user))
+
+    with pytest.raises(ValueError, match="being cancelled"):
+        await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_uses_the_scheduled_downgrade_tier(db):
+    """A pending paid downgrade is the plan the next cycle would have billed, so the restart
+    sells that one rather than the tier the owner is on their way out of."""
+    provider = FakeProvider()
+    user, mgr = await _active_plus_sub(db, provider)
+    await mgr.request_downgrade(Owner.for_user(user), new_tier="go")
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_failed,
+            provider_event_id="ORDER_PAYMENT_FAILED:renew_1",
+            provider_subscription_id="psub_1",
+            order_id="renew_1",
+            metadata={"order_id": "renew_1"},
+        )
+    )
+
+    await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+
+    new = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    assert new.tier == "go"
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_refuses_another_providers_subscription(db):
+    """The row's provider owns its cancellation. Ending it through whichever provider the
+    caller happens to be on would hand a foreign subscription id to this one's API."""
+    provider = FakeProvider()
+    user = await _make_user(db)
+    db.add(
+        PlanSubscription(
+            user_id=user.id,
+            tier="plus",
+            status="overdue",
+            provider="credits",
+            provider_subscription_id="psub_elsewhere",
+            currency="USD",
+        )
+    )
+    await db.flush()
+    mgr = PaymentManager(provider, db)
+
+    with pytest.raises(ValueError, match="another payment provider"):
+        await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+    assert provider.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_restart_after_failure_opens_nothing_when_the_provider_cancel_fails(db):
+    """An unconfirmed cancel leaves the old subscription payable at the provider: opening a
+    second one there would bill the owner twice for the same tier."""
+    provider = FakeProvider()
+    user, mgr = await _overdue_plus_sub(db, provider)
+    provider.cancel_failures.add("psub_1")
+
+    with pytest.raises(ProviderCancelFailed):
+        await mgr.restart_after_failure(Owner.for_user(user), redirect_url="http://x", currency="USD")
+    assert provider.sub_seq == 1  # no second subscription created at the provider
 
 
 @pytest.mark.asyncio

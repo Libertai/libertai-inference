@@ -54,6 +54,14 @@ class SubscribeRequest(BaseModel):
     redirect_base: str | None = None
 
 
+class RestartRequest(BaseModel):
+    """Tier comes from the subscription being recovered, so the caller cannot pick one."""
+
+    provider: str = "revolut"
+    # Origin of the app the user paid from (chat vs console); checkout returns there if allowlisted.
+    redirect_base: str | None = None
+
+
 class DowngradeRequest(BaseModel):
     tier: str
 
@@ -72,6 +80,9 @@ class SubscriptionResponse(BaseModel):
     current_period_end: UtcDatetime | None = None
     cancel_at_period_end: bool = False
     pending_tier: str | None = None
+    # Set only while a declined charge holds the subscription in ``overdue``: the tier the
+    # entitlement is suspended from, which is also what a restart sells back.
+    paused_tier: str | None = None
     is_trial: bool = False
     # Live gateway decision for the next call: lets the UI show the paywall directly.
     allowed: bool = True
