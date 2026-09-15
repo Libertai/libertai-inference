@@ -23,6 +23,7 @@ from src.services.payments.base import (
     SubscriptionInfo,
 )
 from src.services.payments.manager import (
+    CycleNotStarted,
     PaymentManager,
     ProviderCancelFailed,
     SupersedeFailed,
@@ -49,6 +50,7 @@ class FakeProvider(PaymentProvider):
         self.orders: dict[str, dict] = {}  # order_id -> payload returned by get_order
         self.cycle_end_days: float = 20.0  # provider-side cycle end, days from now
         self.sub_read_failures: set[str] = set()  # provider sub ids whose get_subscription raises
+        self.cycle_not_started: set[str] = set()  # provider sub ids with no current cycle yet
 
     def descriptor(self) -> ProviderDescriptor:
         return ProviderDescriptor(
@@ -104,6 +106,8 @@ class FakeProvider(PaymentProvider):
 
         if provider_subscription_id in self.sub_read_failures:
             raise RuntimeError(f"provider read failed for {provider_subscription_id}")
+        if provider_subscription_id in self.cycle_not_started:
+            return SubscriptionInfo(provider_subscription_id=provider_subscription_id, state=self.sub_state)
         now = datetime.now(timezone.utc)
         return SubscriptionInfo(
             provider_subscription_id=provider_subscription_id,
@@ -2368,6 +2372,59 @@ async def test_reconcile_pending_leaves_an_unpaid_checkout_alone(db):
     assert await mgr.reconcile_pending() == 0
     await db.refresh(sub)
     assert sub.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_first_activation_is_refused_until_the_provider_opens_the_cycle(db):
+    """The setup order can complete before the provider opens cycle 1. Activating then would
+    leave a live row with no period end, which no expiry or wind-down pass ever selects."""
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(Owner.for_user(user), tier="plus", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    provider.cycle_not_started.add(sub.provider_subscription_id)
+    event = PaymentEvent(
+        provider="fake",
+        type=PaymentEventType.order_completed,
+        provider_event_id="ORDER_COMPLETED:setup_1",
+        provider_subscription_id=sub.provider_subscription_id,
+        order_id="setup_1",
+    )
+
+    with pytest.raises(CycleNotStarted):
+        await mgr.handle_event(event)
+    await db.refresh(sub)
+    assert sub.status == "pending"
+    assert sub.current_period_end is None
+    assert await _event_types(db, sub.id) == ["created"]
+
+    provider.cycle_not_started.clear()
+    await mgr.handle_event(event)
+    await db.refresh(sub)
+    assert sub.status == "active"
+    assert sub.current_period_end is not None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_retries_an_activation_whose_cycle_is_not_open_yet(db):
+    user = await _make_user(db)
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+    await mgr.start_checkout(Owner.for_user(user), tier="go", redirect_url="http://x", currency="USD")
+    sub = await mgr._active_subscription(Owner.for_user(user), lock=False)
+    provider.sub_state = "active"
+    provider.cycle_not_started.add(sub.provider_subscription_id)
+
+    assert await mgr.reconcile_pending() == 0
+    await db.refresh(sub)
+    assert sub.status == "pending"
+
+    provider.cycle_not_started.clear()
+    assert await mgr.reconcile_pending() == 1
+    await db.refresh(sub)
+    assert sub.status == "active"
+    assert sub.current_period_end is not None
 
 
 @pytest.mark.asyncio

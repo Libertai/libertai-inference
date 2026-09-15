@@ -62,6 +62,14 @@ logger = setup_logger(__name__)
 TOPUP_EXT_REF_PREFIX = "topup:"
 
 
+class CycleNotStarted(Exception):
+    """A first payment completed before the provider opened the subscription's cycle.
+
+    Raised before anything is written, so the provider's redelivery (or reconcile_pending)
+    activates the row once the cycle, and with it the period end, exists.
+    """
+
+
 class SupersedeFailed(Exception):
     """A live subscription an activation replaces could not be cancelled at the provider.
 
@@ -1170,6 +1178,14 @@ class PaymentManager:
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            # Ahead of every write: the provider can deliver the setup order's completion before
+            # it opens cycle 1, and a first activation without a period end is never selected
+            # by the expiry or wind-down passes.
+            has_period = await self._refresh_cycle_dates(sub)
+            if not has_period and already_activated is None:
+                raise CycleNotStarted(
+                    f"Sub {sub.id} (order {event.order_id}): no cycle dates readable at the provider yet"
+                )
             superseded, upgraded_from = await self._supersede_other_subs(owner, exclude_sub_id=sub.id)
             if not superseded:
                 detail = (
@@ -1187,7 +1203,6 @@ class PaymentManager:
                 await self._log_event(sub, "downgraded", metadata={"from": sub.tier, "to": sub.pending_tier})
                 sub.tier = sub.pending_tier
                 sub.pending_tier = None
-            has_period = await self._refresh_cycle_dates(sub)
             # Last mutation of this row, and only reached once every row it replaces is flushed
             # non-live: the one-live-subscription index is enforced per statement, so any flush
             # while two rows are live fails.
