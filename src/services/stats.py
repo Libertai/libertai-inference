@@ -72,6 +72,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
+from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
@@ -2058,3 +2059,267 @@ class StatsService:
         except Exception as e:
             logger.error(f"Error retrieving subscriptions churn: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        """Masked ``prefix…suffix`` window into a raw api key; key material stays secret."""
+        return f"{key[:6]}…{key[-4:]}" if len(key) > 10 else "…"
+
+    @staticmethod
+    async def get_top_usage(
+        key_type: ApiKeyType, start_date: date, end_date: date, group_by: str, limit: int
+    ) -> GlobalTopUsageStats:
+        """Top usage consumers for one usage type, ranked by credits spent (calls for chat).
+
+        Identity is the owning account user for api/cli/chat (one row per user) or the
+        liberclaw identity for liberclaw keys; ``group_by="api_key"`` switches grouping to
+        one row per key, so a user with several keys appears once per key (duplicate
+        emails). Keys with no identity (legacy) are excluded; x402 is anonymous and
+        returns empty. Chat requests carry no credits, so their rows rank by call count.
+        """
+        if key_type == ApiKeyType.x402:
+            return GlobalTopUsageStats(rows=[], total=0)
+
+        async with AsyncSessionLocal() as db:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            is_chat = key_type == ApiKeyType.chat
+            is_lib = key_type == ApiKeyType.liberclaw
+            call_table = ChatRequest if is_chat else InferenceCall
+            time_col = ChatRequest.created_at if is_chat else InferenceCall.used_at
+            # Chat requests carry no credits; rank them by call count instead.
+            credits_expr = literal(0.0) if is_chat else func.sum(InferenceCall.credits_used)
+            conditions = [
+                ApiKey.type == key_type,
+                time_col >= start_datetime,
+                time_col <= end_datetime,
+            ]
+            if is_lib:
+                conditions.append(ApiKey.liberclaw_user_id.isnot(None))
+            else:
+                conditions.append(ApiKey.user_id.isnot(None))
+
+            calls_expr = func.count(call_table.id)
+
+            if group_by == "api_key":
+                # One row per key: a user with several keys shows up once per key.
+                rows_stmt = (
+                    select(
+                        ApiKey.key.label("api_key"),
+                        ApiKey.created_at.label("api_key_created_at"),
+                        User.email.label("email"),
+                        User.display_name.label("display_name"),
+                        User.created_at.label("user_created_at"),
+                        LiberclawUser.user_id.label("lib_user_id"),
+                        LiberclawUser.created_at.label("lib_created_at"),
+                        credits_expr.label("credits"),
+                        calls_expr.label("calls"),
+                    )
+                    .select_from(call_table)
+                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                    .outerjoin(User, ApiKey.user_id == User.id)
+                    .outerjoin(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
+                    .where(*conditions)
+                    .group_by(
+                        ApiKey.id,
+                        ApiKey.key,
+                        ApiKey.created_at,
+                        User.email,
+                        User.display_name,
+                        User.created_at,
+                        LiberclawUser.user_id,
+                        LiberclawUser.created_at,
+                    )
+                    .order_by(credits_expr.desc(), calls_expr.desc())
+                    .limit(limit)
+                )
+                raw_rows = (await db.execute(rows_stmt)).all()
+                total = (
+                    await db.execute(
+                        select(func.count(func.distinct(ApiKey.id)))
+                        .select_from(call_table)
+                        .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                        .where(*conditions)
+                    )
+                ).scalar() or 0
+                rows = [
+                    TopUsageRow(
+                        rank=i + 1,
+                        user_label=str(r.email or r.lib_user_id or "unknown"),
+                        api_key_label=StatsService._mask_key(r.api_key),
+                        credits_spent=round(float(r.credits or 0), 2),
+                        calls=int(r.calls or 0),
+                        account_created_at=(r.user_created_at or r.lib_created_at).isoformat()
+                        if (r.user_created_at or r.lib_created_at)
+                        else None,
+                        api_key_created_at=r.api_key_created_at.isoformat() if r.api_key_created_at else None,
+                    )
+                    for i, r in enumerate(raw_rows)
+                ]
+                return GlobalTopUsageStats(rows=rows, total=int(total))
+
+            # One row per user (or liberclaw identity): keys of one user are merged.
+            if is_lib:
+                rows_stmt = (
+                    select(
+                        LiberclawUser.user_id.label("user_id_label"),
+                        literal(None).label("display_name"),
+                        LiberclawUser.created_at.label("user_created_at"),
+                        credits_expr.label("credits"),
+                        calls_expr.label("calls"),
+                    )
+                    .select_from(call_table)
+                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                    .join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
+                    .where(*conditions)
+                    .group_by(LiberclawUser.user_id, LiberclawUser.created_at)
+                    .order_by(credits_expr.desc(), calls_expr.desc())
+                    .limit(limit)
+                )
+            else:
+                rows_stmt = (
+                    select(
+                        User.email.label("email"),
+                        User.display_name.label("display_name"),
+                        User.created_at.label("user_created_at"),
+                        credits_expr.label("credits"),
+                        calls_expr.label("calls"),
+                    )
+                    .select_from(call_table)
+                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                    # A suspended account is not part of the user base.
+                    .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                    .where(*conditions)
+                    .group_by(User.email, User.display_name, User.created_at)
+                    .order_by(credits_expr.desc(), calls_expr.desc())
+                    .limit(limit)
+                )
+            raw_rows = (await db.execute(rows_stmt)).all()
+            identity_col = ApiKey.liberclaw_user_id if is_lib else ApiKey.user_id
+            total = (
+                await db.execute(
+                    select(func.count(func.distinct(identity_col)))
+                    .select_from(call_table)
+                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                    .where(*conditions)
+                )
+            ).scalar() or 0
+            rows = []
+            for i, r in enumerate(raw_rows):
+                label = r.user_id_label if is_lib else r.email
+                label = label or "unknown"
+                if getattr(r, "display_name", None):
+                    label = f"{r.display_name} ({label})"
+                rows.append(
+                    TopUsageRow(
+                        rank=i + 1,
+                        user_label=label,
+                        api_key_label=None,
+                        credits_spent=round(float(r.credits or 0), 2),
+                        calls=int(r.calls or 0),
+                        account_created_at=r.user_created_at.isoformat() if r.user_created_at else None,
+                        api_key_created_at=None,
+                    )
+                )
+            return GlobalTopUsageStats(rows=rows, total=int(total))
+
+    @staticmethod
+    async def get_active_users(
+        start_date: date, end_date: date, limit: int = 20, offset: int = 0
+    ) -> GlobalActiveUsersStats:
+        """Account users with at least one inference call (api/cli) or chat request in the range.
+
+        Liberclaw identities (liberclaw_users, not account users) and x402 (anonymous) have
+        no account identity, so they are not listed. The two usage sources are aggregated
+        separately (per-user SUM/COUNT/MIN/MAX) and merged in Python — bounded by the
+        number of distinct active users — then ranked by credits spent, calls as
+        tie-breaker.
+        """
+        async with AsyncSessionLocal() as db:
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+
+            inference_rows = (
+                await db.execute(
+                    select(
+                        ApiKey.user_id.label("user_id"),
+                        func.count(InferenceCall.id).label("calls"),
+                        func.sum(InferenceCall.credits_used).label("credits"),
+                        func.min(InferenceCall.used_at).label("first_active"),
+                        func.max(InferenceCall.used_at).label("last_active"),
+                    )
+                    .select_from(InferenceCall)
+                    .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                    .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                    .where(
+                        ApiKey.type.in_((ApiKeyType.api, ApiKeyType.cli)),
+                        InferenceCall.used_at >= start_datetime,
+                        InferenceCall.used_at <= end_datetime,
+                    )
+                    .group_by(ApiKey.user_id)
+                )
+            ).all()
+
+            chat_rows = (
+                await db.execute(
+                    select(
+                        ApiKey.user_id.label("user_id"),
+                        func.count(ChatRequest.id).label("calls"),
+                        literal(0.0).label("credits"),
+                        func.min(ChatRequest.created_at).label("first_active"),
+                        func.max(ChatRequest.created_at).label("last_active"),
+                    )
+                    .select_from(ChatRequest)
+                    .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                    .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                    .where(
+                        ApiKey.type == ApiKeyType.chat,
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    )
+                    .group_by(ApiKey.user_id)
+                )
+            ).all()
+
+            merged: dict = {}
+            for r in [*inference_rows, *chat_rows]:
+                acc = merged.setdefault(
+                    r.user_id,
+                    {"calls": 0, "credits": 0.0, "first_active": r.first_active, "last_active": r.last_active},
+                )
+                acc["calls"] += int(r.calls or 0)
+                acc["credits"] += float(r.credits or 0)
+                if r.first_active and r.first_active < acc["first_active"]:
+                    acc["first_active"] = r.first_active
+                if r.last_active and r.last_active > acc["last_active"]:
+                    acc["last_active"] = r.last_active
+
+            ranked = sorted(merged.items(), key=lambda kv: (-kv[1]["credits"], -kv[1]["calls"]))
+            total = len(ranked)
+            page = ranked[offset : offset + limit]
+
+            users: list[ActiveUserRow] = []
+            if page:
+                page_users = (
+                    (
+                        await db.execute(
+                            select(User).where(User.id.in_([user_id for user_id, _ in page]))
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                users_by_id = {u.id: u for u in page_users}
+                for user_id, agg in page:
+                    user = users_by_id.get(user_id)
+                    users.append(
+                        ActiveUserRow(
+                            user_label=_user_label(user) if user else str(user_id),
+                            credits_spent=round(agg["credits"], 2),
+                            calls=agg["calls"],
+                            first_active_at=agg["first_active"].isoformat() if agg["first_active"] else "",
+                            last_active_at=agg["last_active"].isoformat() if agg["last_active"] else "",
+                            account_created_at=user.created_at.isoformat() if user else None,
+                        )
+                    )
+            return GlobalActiveUsersStats(users=users, total=total)
