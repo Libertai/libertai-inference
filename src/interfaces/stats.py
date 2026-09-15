@@ -510,3 +510,53 @@ class GlobalSubscriptionsChurnStats(BaseModel):
     weekly: list[ChurnWeek]
     total_new: int
     total_churned: int
+
+
+class TopUsageRow(BaseModel):
+    """One row of the top-users-by-usage table.
+
+    ``api_key_label`` identifies the key without exposing key material: a masked
+    ``prefix…suffix`` window into the raw key. When grouping by user (one row per user)
+    the key column is None.
+    """
+
+    rank: int
+    user_label: str
+    api_key_label: str | None
+    credits_spent: float
+    calls: int
+    account_created_at: str | None
+    api_key_created_at: str | None
+
+
+class GlobalTopUsageStats(BaseModel):
+    """Top usage consumers for a date range, ranked by credits spent (or calls for chat).
+
+    ``total`` counts rows after grouping (distinct users or keys), so the client can render
+    an "N of M" footer.
+    """
+
+    rows: list[TopUsageRow]
+    total: int
+
+
+class ActiveUserRow(BaseModel):
+    """One user with at least one call in the range, one row per page."""
+
+    user_label: str
+    credits_spent: float
+    calls: int
+    first_active_at: str
+    last_active_at: str
+    account_created_at: str | None
+
+
+class GlobalActiveUsersStats(BaseModel):
+    """Paginated list of users active in a date range.
+
+    Users are the union across the requested usage types, deduplicated by identity;
+    liberclaw identities (liberclaw_users.id, not accounts users) are listed separately.
+    """
+
+    users: list[ActiveUserRow]
+    total: int
