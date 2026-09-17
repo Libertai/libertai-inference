@@ -19,10 +19,12 @@ from src.models.liberclaw_user import LiberclawUser
 from src.services.stats import StatsService
 from src.services.users import get_or_create_user_by_wallet
 
-START = date(2020, 1, 1)
-END = date(2020, 1, 3)
-DAY1 = datetime(2020, 1, 1, 12, 0, 0)
-DAY2 = datetime(2020, 1, 2, 12, 0, 0)
+# 2020-02 window: distinct from test_stats_users.py's 2020-01 so neither suite's
+# committed rows pollute the other's absolute counts.
+START = date(2020, 2, 1)
+END = date(2020, 2, 3)
+DAY1 = datetime(2020, 2, 1, 12, 0, 0)
+DAY2 = datetime(2020, 2, 2, 12, 0, 0)
 
 U1 = "0xDA0100000000000000000000000000000000B001"
 U2 = "0xDA0100000000000000000000000000000000B002"
@@ -149,8 +151,16 @@ async def test_top_usage_chat_ranks_by_calls():
 
 
 async def test_top_usage_excludes_suspended_accounts():
-    """A suspended account must be excluded in BOTH grouping modes (by-user and by-key)."""
+    """A suspended account must be excluded in BOTH grouping modes (by-user and by-key).
+
+    Idempotent: guarded like _seed() — its 100-credit call would otherwise
+    double on re-runs and shift the other tests' totals.
+    """
     async with AsyncSessionLocal() as db:
+        already = (await db.execute(select(ApiKey).where(ApiKey.name == f"{SUSPENDED}-api"))).scalars().first()
+        if already is not None:
+            return
+
         user = await get_or_create_user_by_wallet(db, SUSPENDED)
         await db.flush()
         user.suspended_at = DAY1
@@ -161,10 +171,16 @@ async def test_top_usage_excludes_suspended_accounts():
         await db.commit()
 
     by_user = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", 10)
-    assert all(row.user_label != SUSPENDED for row in by_user.rows)
+    # Positive assertions: the suspended account's 100-credit call must be absent,
+    # and the leaderboard must be exactly the seeded pair (u1=9, u2=2).
+    assert by_user.total == 2
+    assert all(row.credits_spent != 100.0 for row in by_user.rows)
+    assert by_user.rows[0].credits_spent == 9.0
 
     by_key = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
-    assert all(row.user_label != SUSPENDED for row in by_key.rows)
+    assert by_key.total == 2
+    assert all(row.credits_spent != 100.0 for row in by_key.rows)
+    assert all(row.user_label != "unknown" for row in by_key.rows)
 
 
 async def test_top_usage_liberclaw_identity():

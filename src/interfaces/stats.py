@@ -541,13 +541,18 @@ class GlobalTopUsageStats(BaseModel):
 
 
 class ActiveUserRow(BaseModel):
-    """One user with at least one call in the range, one row per page."""
+    """One user with at least one call in the range, one row per page.
+
+    ``first/last_active_at``: min/max over the user's calls in the range; None only
+    if the aggregate somehow yielded no timestamp (never in practice — a GROUP BY
+    over existing rows can't produce NULL min/max).
+    """
 
     user_label: str
     credits_spent: float
     calls: int
-    first_active_at: str
-    last_active_at: str
+    first_active_at: str | None
+    last_active_at: str | None
     account_created_at: str | None
 
 

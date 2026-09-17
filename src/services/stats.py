@@ -2061,11 +2061,6 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
-    def _mask_key(key: str) -> str:
-        """Masked key label; key material stays secret. Same 4+4 window as ``ApiKey.masked_key``."""
-        return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "****"
-
-    @staticmethod
     async def get_top_usage(
         key_type: ApiKeyType, start_date: date, end_date: date, group_by: str, limit: int
     ) -> GlobalTopUsageStats:
@@ -2106,14 +2101,16 @@ class StatsService:
 
             if group_by == "api_key":
                 # One row per key: a user with several keys shows up once per key.
-                # Same suspension rule as the by-user branch below (plain outerjoin
-                # could either surface suspended accounts in by-key view or - via its
-                # NULL semantics - drop rows if naively inner-joined; spell it out).
+                # Suspension rule (same as the by-user branch and _live_keys): the
+                # predicate must live in WHERE, not in the ON clause of the outer
+                # join — there it only NULLs the User columns while keeping the
+                # key's row (labeled "unknown") with its full usage.
                 rows_stmt = (
                     select(
                         ApiKey.key.label("api_key"),
                         ApiKey.created_at.label("api_key_created_at"),
                         User.email.label("email"),
+                        User.address.label("address"),
                         User.display_name.label("display_name"),
                         User.created_at.label("user_created_at"),
                         LiberclawUser.user_id.label("lib_user_id"),
@@ -2123,9 +2120,9 @@ class StatsService:
                     )
                     .select_from(call_table)
                     .join(ApiKey, call_table.api_key_id == ApiKey.id)
-                    .outerjoin(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                    .outerjoin(User, ApiKey.user_id == User.id)
                     .outerjoin(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
-                    .where(*conditions)
+                    .where(*conditions, or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None)))
                     .group_by(
                         ApiKey.id,
                         ApiKey.key,
@@ -2133,6 +2130,7 @@ class StatsService:
                         User.email,
                         User.display_name,
                         User.created_at,
+                        User.address,
                         LiberclawUser.user_id,
                         LiberclawUser.created_at,
                     )
@@ -2151,8 +2149,8 @@ class StatsService:
                 rows = [
                     TopUsageRow(
                         rank=i + 1,
-                        user_label=str(r.email or r.lib_user_id or "unknown"),
-                        api_key_label=StatsService._mask_key(r.api_key),
+                        user_label=str(r.email or r.address or r.lib_user_id or "unknown"),
+                        api_key_label=ApiKey.mask_key_string(r.api_key),
                         credits_spent=round(float(r.credits or 0), 2),
                         calls=int(r.calls or 0),
                         account_created_at=(r.user_created_at or r.lib_created_at).isoformat()
@@ -2321,8 +2319,8 @@ class StatsService:
                             user_label=_user_label(user) if user else str(user_id),
                             credits_spent=round(agg["credits"], 2),
                             calls=agg["calls"],
-                            first_active_at=agg["first_active"].isoformat() if agg["first_active"] else "",
-                            last_active_at=agg["last_active"].isoformat() if agg["last_active"] else "",
+                            first_active_at=agg["first_active"].isoformat() if agg["first_active"] else None,
+                            last_active_at=agg["last_active"].isoformat() if agg["last_active"] else None,
                             account_created_at=user.created_at.isoformat() if user else None,
                         )
                     )
