@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Query
 
@@ -208,14 +209,16 @@ async def get_subscriptions_churn(
     dependencies=[Depends(require_staff)],
 )
 async def get_top_usage(
-    type: InferenceKeyType = Query(..., description="Usage type to rank: api, cli, chat or liberclaw"),
+    type: ApiKeyType = Query(..., description="Usage type to rank: api, cli, chat or liberclaw"),
     start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
     end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
-    group_by: str = Query("user", description="Group rows by user (default) or api_key (one row per key)"),
+    group_by: Literal["user", "api_key"] = Query(
+        "user", description="Group rows by user (default) or api_key (one row per key)"
+    ),
     limit: int = Query(10, ge=1, le=50, description="Max rows to return"),
 ) -> GlobalTopUsageStats:
     try:
-        return await StatsService.get_top_usage(ApiKeyType(type.value), start_date, end_date, group_by, limit)
+        return await StatsService.get_top_usage(type, start_date, end_date, group_by, limit)
     except HTTPException:
         raise
     except Exception as e:

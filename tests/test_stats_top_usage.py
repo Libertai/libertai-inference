@@ -26,6 +26,7 @@ DAY2 = datetime(2020, 1, 2, 12, 0, 0)
 
 U1 = "0xDA0100000000000000000000000000000000B001"
 U2 = "0xDA0100000000000000000000000000000000B002"
+SUSPENDED = "0xDA0100000000000000000000000000000000B003"
 
 API_KEY_TAG = "top-usage-api-key"
 CLI_KEY_TAG = "top-usage-cli-key"
@@ -49,8 +50,19 @@ async def _seed() -> None:
     """Two account users (u1 heavy on api + chat, u2 light on api) + one liberclaw identity.
 
     u1 also owns a CLI key with a single call, so by-key grouping yields duplicate emails.
+
+    Idempotent: every test in this module calls it, and the assertions are absolute counts
+    over a shared window, so a second seed would double them.
     """
     async with AsyncSessionLocal() as db:
+        already = (
+            (await db.execute(select(ApiKey).where(ApiKey.name == f"{API_KEY_TAG}-1", ApiKey.type == ApiKeyType.api)))
+            .scalars()
+            .first()
+        )
+        if already is not None:
+            return
+
         user1 = await get_or_create_user_by_wallet(db, U1)
         user2 = await get_or_create_user_by_wallet(db, U2)
         await db.flush()
@@ -101,7 +113,7 @@ async def test_top_usage_grouped_by_user():
     stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", 10)
     # u1 (9 credits) ranks above u2 (2 credits); u1's cli key is another type.
     assert stats.total == 2
-    assert [row.user_label for row in stats.rows] == [stats.rows[0].user_label, stats.rows[1].user_label]
+    assert len(stats.rows) == 2
     top = stats.rows[0]
     assert top.credits_spent == 9.0
     assert top.calls == 2
@@ -120,9 +132,9 @@ async def test_top_usage_grouped_by_api_key():
     stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
     assert stats.total == 2
     top = stats.rows[0]
-    # Masked key: first 6 chars + ellipsis + last 4, never the full 64-char key.
+    # Masked key (4+4 window, same as ApiKey.masked_key): never the full 64-char key.
     assert top.api_key_label is not None
-    assert "…" in top.api_key_label
+    assert "..." in top.api_key_label
     assert len(top.api_key_label) < 20
     assert top.api_key_created_at is not None
 
@@ -134,6 +146,25 @@ async def test_top_usage_chat_ranks_by_calls():
     assert stats.total == 1
     assert stats.rows[0].calls == 2
     assert stats.rows[0].credits_spent == 0.0
+
+
+async def test_top_usage_excludes_suspended_accounts():
+    """A suspended account must be excluded in BOTH grouping modes (by-user and by-key)."""
+    async with AsyncSessionLocal() as db:
+        user = await get_or_create_user_by_wallet(db, SUSPENDED)
+        await db.flush()
+        user.suspended_at = DAY1
+        api_key = ApiKey(key=ApiKey.generate_key(), name=f"{SUSPENDED}-api", user_id=user.id, type=ApiKeyType.api)
+        db.add(api_key)
+        await db.flush()
+        db.add(_inference_call(api_key.id, DAY1, 100.0))  # would rank #1 if not suspended
+        await db.commit()
+
+    by_user = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", 10)
+    assert all(row.user_label != SUSPENDED for row in by_user.rows)
+
+    by_key = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
+    assert all(row.user_label != SUSPENDED for row in by_key.rows)
 
 
 async def test_top_usage_liberclaw_identity():

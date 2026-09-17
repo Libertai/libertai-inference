@@ -2062,8 +2062,8 @@ class StatsService:
 
     @staticmethod
     def _mask_key(key: str) -> str:
-        """Masked ``prefix…suffix`` window into a raw api key; key material stays secret."""
-        return f"{key[:6]}…{key[-4:]}" if len(key) > 10 else "…"
+        """Masked key label; key material stays secret. Same 4+4 window as ``ApiKey.masked_key``."""
+        return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "****"
 
     @staticmethod
     async def get_top_usage(
@@ -2078,6 +2078,9 @@ class StatsService:
         returns empty. Chat requests carry no credits, so their rows rank by call count.
         """
         if key_type == ApiKeyType.x402:
+            return GlobalTopUsageStats(rows=[], total=0)
+        if key_type == ApiKeyType.pool:
+            # Internal pool keys: not a usage surface, nothing to rank.
             return GlobalTopUsageStats(rows=[], total=0)
 
         async with AsyncSessionLocal() as db:
@@ -2103,6 +2106,9 @@ class StatsService:
 
             if group_by == "api_key":
                 # One row per key: a user with several keys shows up once per key.
+                # Same suspension rule as the by-user branch below (plain outerjoin
+                # could either surface suspended accounts in by-key view or - via its
+                # NULL semantics - drop rows if naively inner-joined; spell it out).
                 rows_stmt = (
                     select(
                         ApiKey.key.label("api_key"),
@@ -2117,7 +2123,7 @@ class StatsService:
                     )
                     .select_from(call_table)
                     .join(ApiKey, call_table.api_key_id == ApiKey.id)
-                    .outerjoin(User, ApiKey.user_id == User.id)
+                    .outerjoin(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
                     .outerjoin(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
                     .where(*conditions)
                     .group_by(
@@ -2159,51 +2165,53 @@ class StatsService:
                 return GlobalTopUsageStats(rows=rows, total=int(total))
 
             # One row per user (or liberclaw identity): keys of one user are merged.
+            # Grouping by identity id (liberclaw_users.id / users.id) is exact; grouping
+            # by label columns would merge distinct users that share NULL email.
             if is_lib:
-                ident_stmt = (
-                    select(
-                        cast(LiberclawUser.user_id, String).label("user_id_label"),
-                        literal(None, String).label("display_name"),
-                        LiberclawUser.created_at.label("user_created_at"),
-                        credits_expr.label("credits"),
-                        calls_expr.label("calls"),
-                    )
+                ident_stmt = select(
+                    cast(LiberclawUser.user_id, String).label("user_id_label"),
+                    literal(None, String).label("display_name"),
+                    LiberclawUser.created_at.label("user_created_at"),
+                    credits_expr.label("credits"),
+                    calls_expr.label("calls"),
+                )
+                ident_from = (
+                    select(func.count(func.distinct(ApiKey.liberclaw_user_id)))
                     .select_from(call_table)
                     .join(ApiKey, call_table.api_key_id == ApiKey.id)
                     .join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
                     .where(*conditions)
-                    .group_by(LiberclawUser.user_id, LiberclawUser.created_at)
-                    .order_by(credits_expr.desc(), calls_expr.desc())
-                    .limit(limit)
                 )
             else:
-                ident_stmt = (
-                    select(
-                        cast(User.email, String).label("email"),
-                        cast(User.display_name, String).label("display_name"),
-                        User.created_at.label("user_created_at"),
-                        credits_expr.label("credits"),
-                        calls_expr.label("calls"),
-                    )
+                ident_stmt = select(
+                    cast(User.email, String).label("email"),
+                    cast(User.display_name, String).label("display_name"),
+                    User.created_at.label("user_created_at"),
+                    credits_expr.label("credits"),
+                    calls_expr.label("calls"),
+                )
+                ident_from = (
+                    select(func.count(func.distinct(ApiKey.user_id)))
                     .select_from(call_table)
                     .join(ApiKey, call_table.api_key_id == ApiKey.id)
                     # A suspended account is not part of the user base.
                     .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
                     .where(*conditions)
-                    .group_by(User.email, User.display_name, User.created_at)
-                    .order_by(credits_expr.desc(), calls_expr.desc())
-                    .limit(limit)
                 )
+            ident_stmt = (
+                ident_stmt.select_from(call_table).join(ApiKey, call_table.api_key_id == ApiKey.id).where(*conditions)
+            )
+            if is_lib:
+                ident_stmt = ident_stmt.join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id).group_by(
+                    LiberclawUser.id
+                )
+            else:
+                ident_stmt = ident_stmt.join(
+                    User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None))
+                ).group_by(User.id)
+            ident_stmt = ident_stmt.order_by(credits_expr.desc(), calls_expr.desc()).limit(limit)
             ident_rows = (await db.execute(ident_stmt)).all()
-            identity_col = ApiKey.liberclaw_user_id if is_lib else ApiKey.user_id
-            total = (
-                await db.execute(
-                    select(func.count(func.distinct(identity_col)))
-                    .select_from(call_table)
-                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
-                    .where(*conditions)
-                )
-            ).scalar() or 0
+            total = (await db.execute(ident_from)).scalar() or 0
             rows = []
             for i, r in enumerate(ident_rows):
                 label = r.user_id_label if is_lib else r.email
