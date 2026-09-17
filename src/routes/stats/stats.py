@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, Query
 from src.interfaces.api_keys import ApiKeyType, InferenceKeyType
 from src.interfaces.stats import (
     DashboardStats,
+    GlobalActiveUsersStats,
     GlobalApiStats,
     GlobalChatCallsStats,
     GlobalChatTokensStats,
@@ -22,6 +23,7 @@ from src.interfaces.stats import (
     GlobalTierEconomicsStats,
     GlobalTokensStats,
     GlobalTopupsStats,
+    GlobalTopUsageStats,
     GlobalUserBaseActivityStats,
     GlobalUsersStats,
     SubscriptionActivityType,
@@ -197,6 +199,45 @@ async def get_subscriptions_churn(
         return await StatsService.get_global_subscriptions_churn(start_date, end_date)
     except Exception as e:
         logger.error(f"Error in subscriptions churn route: {e!s}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/top-users",
+    response_model=GlobalTopUsageStats,
+    dependencies=[Depends(require_staff)],
+)
+async def get_top_usage(
+    type: InferenceKeyType = Query(..., description="Usage type to rank: api, cli, chat or liberclaw"),
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    group_by: str = Query("user", description="Group rows by user (default) or api_key (one row per key)"),
+    limit: int = Query(10, ge=1, le=50, description="Max rows to return"),
+) -> GlobalTopUsageStats:
+    try:
+        return await StatsService.get_top_usage(ApiKeyType(type.value), start_date, end_date, group_by, limit)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in top usage route: {e!s}", exc_info=True)
+        raise
+
+
+@router.get(  # type: ignore
+    "/global/users/active",
+    response_model=GlobalActiveUsersStats,
+    dependencies=[Depends(require_staff)],
+)
+async def get_active_users(
+    start_date: date = Query(..., description="Start date in format YYYY-MM-DD"),
+    end_date: date = Query(..., description="End date in format YYYY-MM-DD"),
+    limit: int = Query(20, ge=1, le=100, description="Rows per page"),
+    offset: int = Query(0, ge=0, description="Rows to skip (pagination)"),
+) -> GlobalActiveUsersStats:
+    try:
+        return await StatsService.get_active_users(start_date, end_date, limit, offset)
+    except Exception as e:
+        logger.error(f"Error in active users route: {e!s}", exc_info=True)
         raise
 
 

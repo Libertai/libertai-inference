@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import ClassVar
 
 from fastapi import HTTPException, status
-from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, or_, select
+from sqlalchemy import Date, Integer, String, and_, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -11,6 +11,7 @@ from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.interfaces.stats import (
+    ActiveUserRow,
     Call,
     ChatCallUsage,
     ChatTokenUsage,
@@ -21,6 +22,7 @@ from src.interfaces.stats import (
     DailyTierActiveUsers,
     DailyTokens,
     DashboardStats,
+    GlobalActiveUsersStats,
     GlobalApiStats,
     GlobalChatCallsStats,
     GlobalChatTokensStats,
@@ -36,11 +38,10 @@ from src.interfaces.stats import (
     GlobalSubscriptionsStats,
     GlobalSummaryStats,
     GlobalTierEconomicsStats,
-    GlobalTopUsageStats,
     GlobalTokensStats,
     GlobalTopupsStats,
+    GlobalTopUsageStats,
     GlobalUserBaseActivityStats,
-    GlobalActiveUsersStats,
     GlobalUsersStats,
     LatestSubscriber,
     ModelApiUsage,
@@ -57,11 +58,10 @@ from src.interfaces.stats import (
     TierPrice,
     TierSubscribers,
     TierSubscribersDay,
-    ActiveUserRow,
     TokenStats,
     TopupDay,
-    TopUsageRow,
     TopupRow,
+    TopUsageRow,
     UsageByEntity,
     UsageStats,
     UsersWindow,
@@ -2160,10 +2160,10 @@ class StatsService:
 
             # One row per user (or liberclaw identity): keys of one user are merged.
             if is_lib:
-                rows_stmt = (
+                ident_stmt = (
                     select(
-                        LiberclawUser.user_id.label("user_id_label"),
-                        literal(None).label("display_name"),
+                        cast(LiberclawUser.user_id, String).label("user_id_label"),
+                        literal(None, String).label("display_name"),
                         LiberclawUser.created_at.label("user_created_at"),
                         credits_expr.label("credits"),
                         calls_expr.label("calls"),
@@ -2177,10 +2177,10 @@ class StatsService:
                     .limit(limit)
                 )
             else:
-                rows_stmt = (
+                ident_stmt = (
                     select(
-                        User.email.label("email"),
-                        User.display_name.label("display_name"),
+                        cast(User.email, String).label("email"),
+                        cast(User.display_name, String).label("display_name"),
                         User.created_at.label("user_created_at"),
                         credits_expr.label("credits"),
                         calls_expr.label("calls"),
@@ -2194,7 +2194,7 @@ class StatsService:
                     .order_by(credits_expr.desc(), calls_expr.desc())
                     .limit(limit)
                 )
-            raw_rows = (await db.execute(rows_stmt)).all()
+            ident_rows = (await db.execute(ident_stmt)).all()
             identity_col = ApiKey.liberclaw_user_id if is_lib else ApiKey.user_id
             total = (
                 await db.execute(
@@ -2205,7 +2205,7 @@ class StatsService:
                 )
             ).scalar() or 0
             rows = []
-            for i, r in enumerate(raw_rows):
+            for i, r in enumerate(ident_rows):
                 label = r.user_id_label if is_lib else r.email
                 label = label or "unknown"
                 if getattr(r, "display_name", None):
@@ -2301,11 +2301,7 @@ class StatsService:
             users: list[ActiveUserRow] = []
             if page:
                 page_users = (
-                    (
-                        await db.execute(
-                            select(User).where(User.id.in_([user_id for user_id, _ in page]))
-                        )
-                    )
+                    (await db.execute(select(User).where(User.id.in_([user_id for user_id, _ in page]))))
                     .scalars()
                     .all()
                 )
