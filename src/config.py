@@ -149,6 +149,8 @@ class _Config:
             "https://analytics.libertai.io",
             "https://beta.chat.libertai.io",
             "https://chat.libertai.io",
+            "https://libertai.io",
+            "https://www.libertai.io",
         ] + (["http://localhost:5173", "http://localhost:3000"] if self.ALLOW_LOCALHOST_FRONTENDS else [])
         self.API_URL = os.getenv("API_URL", "")
         self.JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "90"))
