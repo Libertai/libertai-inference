@@ -242,3 +242,47 @@ async def test_active_users_respect_date_range():
     stats = await StatsService.get_active_users(date(2019, 1, 1), date(2019, 1, 31), limit=20, offset=0)
     assert stats.total == 0
     assert stats.users == []
+
+
+async def test_top_usage_limit_truncates_rows_not_total():
+    """limit truncates the leaderboard but not the footer's "N of M" total.
+
+    The frontend footer shows ``rows/limit of total``, so total must stay the full
+    count even when fewer rows are returned.
+    """
+    await _seed()
+
+    stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", limit=1)
+    assert len(stats.rows) == 1
+    assert stats.total == 2  # unchanged by the limit, exactly what "1 of 2" needs
+    assert stats.rows[0].credits_spent == 9.5  # still the top user
+
+    by_key = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", limit=2)
+    assert len(by_key.rows) == 2
+    assert by_key.total == 3  # the 3 seeded keys, regardless of the limit
+
+
+async def test_top_usage_grouped_by_api_key_chat_ranks_by_calls():
+    """By-key grouping must also work for chat, which has no credits (ranks by call count)."""
+    await _seed()
+
+    stats = await StatsService.get_top_usage(ApiKeyType.chat, START, END, "api_key", 10)
+    assert stats.total == 1
+    row = stats.rows[0]
+    assert row.calls == 2
+    assert row.credits_spent == 0.0
+    assert row.api_key_label is not None
+    # fallback/copies are the by-key labels of a real account user (u1's chat key)
+    assert row.user_label != "unknown"
+
+
+async def test_top_usage_grouped_by_api_key_liberclaw():
+    """By-key grouping for a liberclaw key uses the liberclaw identity as the label."""
+    await _seed()
+
+    stats = await StatsService.get_top_usage(ApiKeyType.liberclaw, START, END, "api_key", 10)
+    assert stats.total == 1
+    row = stats.rows[0]
+    assert row.user_label == LC_TAG  # liberclaw user_id doubles as the label
+    assert row.credits_spent == 7.0
+    assert row.api_key_label is not None

@@ -2210,6 +2210,7 @@ class StatsService:
                         cast(User.email, String).label("email"),
                         cast(User.address, String).label("address"),
                         cast(User.display_name, String).label("display_name"),
+                        cast(User.id, String).label("user_id"),
                         User.created_at.label("user_created_at"),
                         credits_expr.label("credits"),
                         calls_expr.label("calls"),
@@ -2248,7 +2249,11 @@ class StatsService:
                     if is_lib:
                         label = _row_user_label(email=r.user_id_label, display_name=r.display_name)
                     else:
-                        label = _row_user_label(email=r.email, address=r.address, display_name=r.display_name)
+                        # Same contact chain and fallback as the by-key branch above and
+                        # _user_label: email > address > user id, not a bare "unknown".
+                        label = _row_user_label(
+                            email=r.email, address=r.address, display_name=r.display_name, fallback=r.user_id
+                        )
                     rows.append(
                         TopUsageRow(
                             rank=i + 1,
