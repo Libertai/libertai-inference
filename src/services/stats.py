@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import Date, Integer, String, and_, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import Label
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
@@ -112,6 +113,15 @@ def _user_label(user: User) -> str:
     bare contact. ``contact`` resolves email > wallet address > user id."""
     contact = user.email or user.address or str(user.id)
     return f"{user.display_name} ({contact})" if user.display_name else contact
+
+
+def _row_user_label(
+    email: str | None, address: str | None = None, display_name: str | None = None, fallback: str = "unknown"
+) -> str:
+    """Display label for a stats row: same contact chain as ``_user_label``
+    (email > wallet address > fallback) built from raw query columns."""
+    contact = email or address or fallback
+    return f"{display_name} ({contact})" if display_name else contact
 
 
 def _live_keys(stmt):
@@ -2143,13 +2153,18 @@ class StatsService:
                         select(func.count(func.distinct(ApiKey.id)))
                         .select_from(call_table)
                         .join(ApiKey, call_table.api_key_id == ApiKey.id)
-                        .where(*conditions)
+                        # Same suspension rule as the rows query above, so the footer's
+                        # "N of M" agrees with the leaderboard.
+                        .outerjoin(User, ApiKey.user_id == User.id)
+                        .where(*conditions, or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None)))
                     )
                 ).scalar() or 0
                 rows = [
                     TopUsageRow(
                         rank=i + 1,
-                        user_label=str(r.email or r.address or r.lib_user_id or "unknown"),
+                        user_label=_row_user_label(
+                            email=r.email, address=r.address, display_name=r.display_name, fallback=r.lib_user_id
+                        ),
                         api_key_label=ApiKey.mask_key_string(r.api_key),
                         credits_spent=round(float(r.credits or 0), 2),
                         calls=int(r.calls or 0),
@@ -2165,14 +2180,15 @@ class StatsService:
             # One row per user (or liberclaw identity): keys of one user are merged.
             # Grouping by identity id (liberclaw_users.id / users.id) is exact; grouping
             # by label columns would merge distinct users that share NULL email.
+            ident_cols: list[Label] = []
             if is_lib:
-                ident_stmt = select(
+                ident_cols = [
                     cast(LiberclawUser.user_id, String).label("user_id_label"),
                     literal(None, String).label("display_name"),
                     LiberclawUser.created_at.label("user_created_at"),
                     credits_expr.label("credits"),
                     calls_expr.label("calls"),
-                )
+                ]
                 ident_from = (
                     select(func.count(func.distinct(ApiKey.liberclaw_user_id)))
                     .select_from(call_table)
@@ -2181,13 +2197,14 @@ class StatsService:
                     .where(*conditions)
                 )
             else:
-                ident_stmt = select(
+                ident_cols = [
                     cast(User.email, String).label("email"),
+                    cast(User.address, String).label("address"),
                     cast(User.display_name, String).label("display_name"),
                     User.created_at.label("user_created_at"),
                     credits_expr.label("credits"),
                     calls_expr.label("calls"),
-                )
+                ]
                 ident_from = (
                     select(func.count(func.distinct(ApiKey.user_id)))
                     .select_from(call_table)
@@ -2197,7 +2214,10 @@ class StatsService:
                     .where(*conditions)
                 )
             ident_stmt = (
-                ident_stmt.select_from(call_table).join(ApiKey, call_table.api_key_id == ApiKey.id).where(*conditions)
+                select(*ident_cols)
+                .select_from(call_table)
+                .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                .where(*conditions)
             )
             if is_lib:
                 ident_stmt = ident_stmt.join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id).group_by(
@@ -2212,10 +2232,11 @@ class StatsService:
             total = (await db.execute(ident_from)).scalar() or 0
             rows = []
             for i, r in enumerate(ident_rows):
-                label = r.user_id_label if is_lib else r.email
-                label = label or "unknown"
-                if getattr(r, "display_name", None):
-                    label = f"{r.display_name} ({label})"
+                # Same contact chain as _user_label: email > wallet address > liberclaw id.
+                if is_lib:
+                    label = _row_user_label(email=r.user_id_label, display_name=r.display_name)
+                else:
+                    label = _row_user_label(email=r.email, address=r.address, display_name=r.display_name)
                 rows.append(
                     TopUsageRow(
                         rank=i + 1,
@@ -2300,7 +2321,10 @@ class StatsService:
                 if r.last_active and r.last_active > acc["last_active"]:
                     acc["last_active"] = r.last_active
 
-            ranked = sorted(merged.items(), key=lambda kv: (-kv[1]["credits"], -kv[1]["calls"]))
+            # user_id as final tie-breaker: Postgres gives no stable order for rows tied
+            # on (credits, calls), and the two source queries may group differently —
+            # without it a tied user could appear on two pages or be skipped between fetches.
+            ranked = sorted(merged.items(), key=lambda kv: (-kv[1]["credits"], -kv[1]["calls"], kv[0]))
             total = len(ranked)
             page = ranked[offset : offset + limit]
 

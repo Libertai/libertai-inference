@@ -80,6 +80,9 @@ async def _seed() -> None:
             await db.flush()
 
         u1_api = ApiKey(key=ApiKey.generate_key(), name=f"{API_KEY_TAG}-1", user_id=user1.id, type=ApiKeyType.api)
+        # Second api key for u1 so the by-key view exercises duplicate emails
+        # (the PR's headline behavior: one row per key, same user twice).
+        u1_api2 = ApiKey(key=ApiKey.generate_key(), name=f"{API_KEY_TAG}-1b", user_id=user1.id, type=ApiKeyType.api)
         u1_cli = ApiKey(key=ApiKey.generate_key(), name=f"{CLI_KEY_TAG}-1", user_id=user1.id, type=ApiKeyType.cli)
         u1_chat = ApiKey(key=ApiKey.generate_key(), name=f"{CHAT_KEY_TAG}-1", user_id=user1.id, type=ApiKeyType.chat)
         u2_api = ApiKey(key=ApiKey.generate_key(), name=f"{API_KEY_TAG}-2", user_id=user2.id, type=ApiKeyType.api)
@@ -89,7 +92,7 @@ async def _seed() -> None:
             liberclaw_user_id=liberclaw_user.id,
             type=ApiKeyType.liberclaw,
         )
-        db.add_all([u1_api, u1_cli, u1_chat, u2_api, lc_key])
+        db.add_all([u1_api, u1_api2, u1_cli, u1_chat, u2_api, lc_key])
         await db.flush()
 
         db.add_all(
@@ -97,6 +100,7 @@ async def _seed() -> None:
                 # u1: 3 api calls (9 credits) + 1 cli call (1 credit) + 2 chat requests
                 _inference_call(u1_api.id, DAY1, 4.0),
                 _inference_call(u1_api.id, DAY2, 5.0),
+                _inference_call(u1_api2.id, DAY1, 0.5),
                 _inference_call(u1_cli.id, DAY1, 1.0),
                 _chat_request(u1_chat.id, DAY1),
                 _chat_request(u1_chat.id, DAY2),
@@ -113,12 +117,12 @@ async def test_top_usage_grouped_by_user():
     await _seed()
 
     stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", 10)
-    # u1 (9 credits) ranks above u2 (2 credits); u1's cli key is another type.
+    # u1 (9.5 credits over 2 keys) ranks above u2 (2 credits); cli/chat are other types.
     assert stats.total == 2
     assert len(stats.rows) == 2
     top = stats.rows[0]
-    assert top.credits_spent == 9.0
-    assert top.calls == 2
+    assert top.credits_spent == 9.5
+    assert top.calls == 3
     assert top.api_key_label is None  # grouped by user: no key column
     assert top.account_created_at is not None
 
@@ -132,7 +136,10 @@ async def test_top_usage_grouped_by_api_key():
     await _seed()
 
     stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
-    assert stats.total == 2
+    # 3 keys seeded: u1's two api keys (duplicate email) + u2's one.
+    assert stats.total == 3
+    labels = [row.user_label for row in stats.rows]
+    assert labels[0] == labels[1]  # u1's two keys: same email twice (rank 1 and 2)
     top = stats.rows[0]
     # Masked key (4+4 window, same as ApiKey.masked_key): never the full 64-char key.
     assert top.api_key_label is not None
@@ -172,13 +179,15 @@ async def test_top_usage_excludes_suspended_accounts():
 
     by_user = await StatsService.get_top_usage(ApiKeyType.api, START, END, "user", 10)
     # Positive assertions: the suspended account's 100-credit call must be absent,
-    # and the leaderboard must be exactly the seeded pair (u1=9, u2=2).
+    # and the leaderboard must be exactly the seeded pair (u1=9.5, u2=2).
     assert by_user.total == 2
     assert all(row.credits_spent != 100.0 for row in by_user.rows)
-    assert by_user.rows[0].credits_spent == 9.0
+    assert by_user.rows[0].credits_spent == 9.5
 
     by_key = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
-    assert by_key.total == 2
+    # Same 3 keys as test_top_usage_grouped_by_api_key; total must match rows
+    # (the total-count query applies the same suspension rule as the rows query).
+    assert by_key.total == 3
     assert all(row.credits_spent != 100.0 for row in by_key.rows)
     assert all(row.user_label != "unknown" for row in by_key.rows)
 
@@ -204,12 +213,12 @@ async def test_active_users_paginated():
     await _seed()
 
     page1 = await StatsService.get_active_users(START, END, limit=1, offset=0)
-    assert page1.total == 2  # u1 (10 credits across api+cli) + u2 (2 credits); liberclaw has no account
+    assert page1.total == 2  # u1 (10.5 credits across api+cli) + u2 (2 credits); liberclaw has no account
     assert len(page1.users) == 1
     top = page1.users[0]
-    assert top.credits_spent == 10.0  # 9 api + 1 cli
-    # u1's chat requests carry no credits, but count toward calls: 3 inference + 2 chat
-    assert top.calls == 5
+    assert top.credits_spent == 10.5  # 9.5 api + 1 cli
+    # u1's chat requests carry no credits, but count toward calls: 4 inference + 2 chat
+    assert top.calls == 6
     assert top.account_created_at is not None
     assert top.first_active_at is not None
     assert top.last_active_at is not None
