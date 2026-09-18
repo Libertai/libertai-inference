@@ -137,9 +137,12 @@ async def test_top_usage_grouped_by_api_key():
 
     stats = await StatsService.get_top_usage(ApiKeyType.api, START, END, "api_key", 10)
     # 3 keys seeded: u1's two api keys (duplicate email) + u2's one.
+    # Ranking by credits DESC: u1_api (9.0), u2_api (2.0), u1_api2 (0.5) —
+    # u1's keys sit at ranks 1 and 3, so the duplicate labels are not adjacent.
     assert stats.total == 3
     labels = [row.user_label for row in stats.rows]
-    assert labels[0] == labels[1]  # u1's two keys: same email twice (rank 1 and 2)
+    assert labels[0] == labels[2]  # u1's two keys: same email twice (rank 1 and 3)
+    assert labels[1] != labels[0]  # u2's key sits between them
     top = stats.rows[0]
     # Masked key (4+4 window, same as ApiKey.masked_key): never the full 64-char key.
     assert top.api_key_label is not None

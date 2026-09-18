@@ -557,10 +557,11 @@ class ActiveUserRow(BaseModel):
 
 
 class GlobalActiveUsersStats(BaseModel):
-    """Paginated list of users active in a date range.
+    """Paginated list of account users active in a date range.
 
-    Users are the union across the requested usage types, deduplicated by identity;
-    liberclaw identities (liberclaw_users.id, not accounts users) are listed separately.
+    Users are the union across inference (api/cli) and chat, deduplicated by
+    account. Liberclaw identities (liberclaw_users, not account users) and
+    anonymous x402 traffic have no account identity, so they are not listed.
     """
 
     users: list[ActiveUserRow]
