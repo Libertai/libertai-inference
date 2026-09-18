@@ -3,14 +3,16 @@ from datetime import date, datetime, timedelta, timezone
 from typing import ClassVar
 
 from fastapi import HTTPException, status
-from sqlalchemy import Date, Integer, and_, case, cast, distinct, func, literal, or_, select
+from sqlalchemy import Date, Integer, String, and_, case, cast, distinct, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import Label
 
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.interfaces.stats import (
+    ActiveUserRow,
     Call,
     ChatCallUsage,
     ChatTokenUsage,
@@ -21,6 +23,7 @@ from src.interfaces.stats import (
     DailyTierActiveUsers,
     DailyTokens,
     DashboardStats,
+    GlobalActiveUsersStats,
     GlobalApiStats,
     GlobalChatCallsStats,
     GlobalChatTokensStats,
@@ -38,6 +41,7 @@ from src.interfaces.stats import (
     GlobalTierEconomicsStats,
     GlobalTokensStats,
     GlobalTopupsStats,
+    GlobalTopUsageStats,
     GlobalUserBaseActivityStats,
     GlobalUsersStats,
     LatestSubscriber,
@@ -58,6 +62,7 @@ from src.interfaces.stats import (
     TokenStats,
     TopupDay,
     TopupRow,
+    TopUsageRow,
     UsageByEntity,
     UsageStats,
     UsersWindow,
@@ -68,6 +73,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
+from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
@@ -107,6 +113,15 @@ def _user_label(user: User) -> str:
     bare contact. ``contact`` resolves email > wallet address > user id."""
     contact = user.email or user.address or str(user.id)
     return f"{user.display_name} ({contact})" if user.display_name else contact
+
+
+def _row_user_label(
+    email: str | None, address: str | None = None, display_name: str | None = None, fallback: str = "unknown"
+) -> str:
+    """Display label for a stats row: same contact chain as ``_user_label``
+    (email > wallet address > fallback) built from raw query columns."""
+    contact = email or address or fallback
+    return f"{display_name} ({contact})" if display_name else contact
 
 
 def _live_keys(stmt):
@@ -2053,4 +2068,308 @@ class StatsService:
                 return StatsService._churn_from_timelines(timelines, start_date, end_date)
         except Exception as e:
             logger.error(f"Error retrieving subscriptions churn: {e!s}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_top_usage(
+        key_type: ApiKeyType, start_date: date, end_date: date, group_by: str, limit: int
+    ) -> GlobalTopUsageStats:
+        """Top usage consumers for one usage type, ranked by credits spent (calls for chat).
+
+        Identity is the owning account user for api/cli/chat (one row per user) or the
+        liberclaw identity for liberclaw keys; ``group_by="api_key"`` switches grouping to
+        one row per key, so a user with several keys appears once per key (duplicate
+        emails). Keys with no identity (legacy) are excluded; x402 is anonymous and
+        returns empty. Chat requests carry no credits, so their rows rank by call count.
+        """
+        if key_type == ApiKeyType.x402:
+            return GlobalTopUsageStats(rows=[], total=0)
+        if key_type == ApiKeyType.pool:
+            # Internal pool keys: not a usage surface, nothing to rank.
+            return GlobalTopUsageStats(rows=[], total=0)
+
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                is_chat = key_type == ApiKeyType.chat
+                is_lib = key_type == ApiKeyType.liberclaw
+                call_table = ChatRequest if is_chat else InferenceCall
+                time_col = ChatRequest.created_at if is_chat else InferenceCall.used_at
+                # Chat requests carry no credits; rank them by call count instead.
+                credits_expr = literal(0.0) if is_chat else func.sum(InferenceCall.credits_used)
+                conditions = [
+                    ApiKey.type == key_type,
+                    time_col >= start_datetime,
+                    time_col <= end_datetime,
+                ]
+                if is_lib:
+                    conditions.append(ApiKey.liberclaw_user_id.isnot(None))
+                else:
+                    conditions.append(ApiKey.user_id.isnot(None))
+
+                calls_expr = func.count(call_table.id)
+
+                if group_by == "api_key":
+                    # One row per key: a user with several keys shows up once per key.
+                    # Suspension rule (same as the by-user branch and _live_keys): the
+                    # predicate must live in WHERE, not in the ON clause of the outer
+                    # join — there it only NULLs the User columns while keeping the
+                    # key's row (labeled "unknown") with its full usage.
+                    rows_stmt = (
+                        select(
+                            ApiKey.key.label("api_key"),
+                            ApiKey.created_at.label("api_key_created_at"),
+                            User.email.label("email"),
+                            User.address.label("address"),
+                            User.display_name.label("display_name"),
+                            cast(User.id, String).label("user_id"),
+                            User.created_at.label("user_created_at"),
+                            LiberclawUser.user_id.label("lib_user_id"),
+                            LiberclawUser.created_at.label("lib_created_at"),
+                            credits_expr.label("credits"),
+                            calls_expr.label("calls"),
+                        )
+                        .select_from(call_table)
+                        .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                        .outerjoin(User, ApiKey.user_id == User.id)
+                        .outerjoin(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
+                        .where(*conditions, or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None)))
+                        .group_by(
+                            ApiKey.id,
+                            ApiKey.key,
+                            ApiKey.created_at,
+                            User.email,
+                            User.display_name,
+                            User.created_at,
+                            User.address,
+                            User.id,
+                            LiberclawUser.user_id,
+                            LiberclawUser.created_at,
+                        )
+                        .order_by(credits_expr.desc(), calls_expr.desc(), ApiKey.id)
+                        .limit(limit)
+                    )
+                    raw_rows = (await db.execute(rows_stmt)).all()
+                    total = (
+                        await db.execute(
+                            select(func.count(func.distinct(ApiKey.id)))
+                            .select_from(call_table)
+                            .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                            # Same suspension rule as the rows query above, so the footer's
+                            # "N of M" agrees with the leaderboard.
+                            .outerjoin(User, ApiKey.user_id == User.id)
+                            .where(*conditions, or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None)))
+                        )
+                    ).scalar() or 0
+                    rows = [
+                        TopUsageRow(
+                            rank=i + 1,
+                            # user_id / lib_user_id as final fallback mirrors _user_label's
+                            # str(user.id): a user with no contact info still gets a label
+                            # instead of user_label=None → pydantic 500.
+                            user_label=_row_user_label(
+                                email=r.email,
+                                address=r.address,
+                                display_name=r.display_name,
+                                fallback=r.user_id or r.lib_user_id,
+                            ),
+                            api_key_label=ApiKey.mask_key_string(r.api_key),
+                            credits_spent=round(float(r.credits or 0), 2),
+                            calls=int(r.calls or 0),
+                            account_created_at=(r.user_created_at or r.lib_created_at).isoformat()
+                            if (r.user_created_at or r.lib_created_at)
+                            else None,
+                            api_key_created_at=r.api_key_created_at.isoformat() if r.api_key_created_at else None,
+                        )
+                        for i, r in enumerate(raw_rows)
+                    ]
+                    return GlobalTopUsageStats(rows=rows, total=int(total))
+
+                # One row per user (or liberclaw identity): keys of one user are merged.
+                # Grouping by identity id (liberclaw_users.id / users.id) is exact; grouping
+                # by label columns would merge distinct users that share NULL email.
+                ident_cols: list[Label] = []
+                if is_lib:
+                    ident_cols = [
+                        cast(LiberclawUser.user_id, String).label("user_id_label"),
+                        literal(None, String).label("display_name"),
+                        LiberclawUser.created_at.label("user_created_at"),
+                        credits_expr.label("credits"),
+                        calls_expr.label("calls"),
+                    ]
+                    ident_from = (
+                        select(func.count(func.distinct(ApiKey.liberclaw_user_id)))
+                        .select_from(call_table)
+                        .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                        .join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id)
+                        .where(*conditions)
+                    )
+                else:
+                    ident_cols = [
+                        cast(User.email, String).label("email"),
+                        cast(User.address, String).label("address"),
+                        cast(User.display_name, String).label("display_name"),
+                        cast(User.id, String).label("user_id"),
+                        User.created_at.label("user_created_at"),
+                        credits_expr.label("credits"),
+                        calls_expr.label("calls"),
+                    ]
+                    ident_from = (
+                        select(func.count(func.distinct(ApiKey.user_id)))
+                        .select_from(call_table)
+                        .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                        # A suspended account is not part of the user base.
+                        .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                        .where(*conditions)
+                    )
+                ident_stmt = (
+                    select(*ident_cols)
+                    .select_from(call_table)
+                    .join(ApiKey, call_table.api_key_id == ApiKey.id)
+                    .where(*conditions)
+                )
+                if is_lib:
+                    ident_stmt = ident_stmt.join(LiberclawUser, ApiKey.liberclaw_user_id == LiberclawUser.id).group_by(
+                        LiberclawUser.id
+                    )
+                else:
+                    ident_stmt = ident_stmt.join(
+                        User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None))
+                    ).group_by(User.id)
+                # Identity-id tie-breaker (mirrors get_active_users): rows tied on both
+                # credits and calls must not reshuffle between requests.
+                ident_order = (LiberclawUser.id if is_lib else User.id).desc()
+                ident_stmt = ident_stmt.order_by(credits_expr.desc(), calls_expr.desc(), ident_order).limit(limit)
+                ident_rows = (await db.execute(ident_stmt)).all()
+                total = (await db.execute(ident_from)).scalar() or 0
+                rows = []
+                for i, r in enumerate(ident_rows):
+                    # Same contact chain as _user_label: email > wallet address > liberclaw id.
+                    if is_lib:
+                        label = _row_user_label(email=r.user_id_label, display_name=r.display_name)
+                    else:
+                        # Same contact chain and fallback as the by-key branch above and
+                        # _user_label: email > address > user id, not a bare "unknown".
+                        label = _row_user_label(
+                            email=r.email, address=r.address, display_name=r.display_name, fallback=r.user_id
+                        )
+                    rows.append(
+                        TopUsageRow(
+                            rank=i + 1,
+                            user_label=label,
+                            api_key_label=None,
+                            credits_spent=round(float(r.credits or 0), 2),
+                            calls=int(r.calls or 0),
+                            account_created_at=r.user_created_at.isoformat() if r.user_created_at else None,
+                            api_key_created_at=None,
+                        )
+                    )
+                return GlobalTopUsageStats(rows=rows, total=int(total))
+        except Exception as e:
+            logger.error(f"Error retrieving top usage: {e!s}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @staticmethod
+    async def get_active_users(
+        start_date: date, end_date: date, limit: int = 20, offset: int = 0
+    ) -> GlobalActiveUsersStats:
+        """Account users with at least one inference call (api/cli) or chat request in the range.
+
+        Liberclaw identities (liberclaw_users, not account users) and x402 (anonymous) have
+        no account identity, so they are not listed. The two usage sources are aggregated
+        separately (per-user SUM/COUNT/MIN/MAX) and merged in Python — bounded by the
+        number of distinct active users — then ranked by credits spent, calls as
+        tie-breaker.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+
+                inference_rows = (
+                    await db.execute(
+                        select(
+                            ApiKey.user_id.label("user_id"),
+                            func.count(InferenceCall.id).label("calls"),
+                            func.sum(InferenceCall.credits_used).label("credits"),
+                            func.min(InferenceCall.used_at).label("first_active"),
+                            func.max(InferenceCall.used_at).label("last_active"),
+                        )
+                        .select_from(InferenceCall)
+                        .join(ApiKey, InferenceCall.api_key_id == ApiKey.id)
+                        .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                        .where(
+                            ApiKey.type.in_((ApiKeyType.api, ApiKeyType.cli)),
+                            InferenceCall.used_at >= start_datetime,
+                            InferenceCall.used_at <= end_datetime,
+                        )
+                        .group_by(ApiKey.user_id)
+                    )
+                ).all()
+
+                chat_rows = (
+                    await db.execute(
+                        select(
+                            ApiKey.user_id.label("user_id"),
+                            func.count(ChatRequest.id).label("calls"),
+                            literal(0.0).label("credits"),
+                            func.min(ChatRequest.created_at).label("first_active"),
+                            func.max(ChatRequest.created_at).label("last_active"),
+                        )
+                        .select_from(ChatRequest)
+                        .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                        .join(User, and_(ApiKey.user_id == User.id, User.suspended_at.is_(None)))
+                        .where(
+                            ApiKey.type == ApiKeyType.chat,
+                            ChatRequest.created_at >= start_datetime,
+                            ChatRequest.created_at <= end_datetime,
+                        )
+                        .group_by(ApiKey.user_id)
+                    )
+                ).all()
+
+                merged: dict = {}
+                for r in [*inference_rows, *chat_rows]:
+                    acc = merged.setdefault(
+                        r.user_id,
+                        {"calls": 0, "credits": 0.0, "first_active": r.first_active, "last_active": r.last_active},
+                    )
+                    acc["calls"] += int(r.calls or 0)
+                    acc["credits"] += float(r.credits or 0)
+                    if r.first_active and r.first_active < acc["first_active"]:
+                        acc["first_active"] = r.first_active
+                    if r.last_active and r.last_active > acc["last_active"]:
+                        acc["last_active"] = r.last_active
+
+                # user_id as final tie-breaker: Postgres gives no stable order for rows tied
+                # on (credits, calls), and the two source queries may group differently —
+                # without it a tied user could appear on two pages or be skipped between fetches.
+                ranked = sorted(merged.items(), key=lambda kv: (-kv[1]["credits"], -kv[1]["calls"], kv[0]))
+                total = len(ranked)
+                page = ranked[offset : offset + limit]
+
+                users: list[ActiveUserRow] = []
+                if page:
+                    page_users = (
+                        (await db.execute(select(User).where(User.id.in_([user_id for user_id, _ in page]))))
+                        .scalars()
+                        .all()
+                    )
+                    users_by_id = {u.id: u for u in page_users}
+                    for user_id, agg in page:
+                        user = users_by_id.get(user_id)
+                        users.append(
+                            ActiveUserRow(
+                                user_label=_user_label(user) if user else str(user_id),
+                                credits_spent=round(agg["credits"], 2),
+                                calls=agg["calls"],
+                                first_active_at=agg["first_active"].isoformat() if agg["first_active"] else None,
+                                last_active_at=agg["last_active"].isoformat() if agg["last_active"] else None,
+                                account_created_at=user.created_at.isoformat() if user else None,
+                            )
+                        )
+                return GlobalActiveUsersStats(users=users, total=total)
+        except Exception as e:
+            logger.error(f"Error retrieving active users: {e!s}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")

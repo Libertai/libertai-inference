@@ -86,9 +86,15 @@ class ApiKey(Base):
 
     @property
     def masked_key(self) -> str:
-        if len(self.key) <= 8:
+        return self.mask_key_string(self.key)
+
+    @staticmethod
+    def mask_key_string(key: str) -> str:
+        """Masked ``prefix...suffix`` label; key material stays secret. One masking
+        convention for every caller (property, stats tables)."""
+        if len(key) <= 8:
             return "****"
-        return f"{self.key[:4]}...{self.key[-4:]}"
+        return f"{key[:4]}...{key[-4:]}"
 
     @staticmethod
     def generate_key() -> str:
