@@ -8,6 +8,7 @@ from other tests (stamped "now") never fall in range and can't pollute the count
 
 from datetime import date, datetime
 
+import pytest
 from sqlalchemy import select
 
 from src.interfaces.api_keys import ApiKeyType
@@ -16,6 +17,7 @@ from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.models.inference_call import InferenceCall
 from src.models.liberclaw_user import LiberclawUser
+from src.services.aleph import aleph_service
 from src.services.stats import StatsService
 from src.services.users import get_or_create_user_by_wallet
 
@@ -34,6 +36,26 @@ API_KEY_TAG = "top-usage-api-key"
 CLI_KEY_TAG = "top-usage-cli-key"
 CHAT_KEY_TAG = "top-usage-chat-key"
 LC_TAG = "top-usage-lc"
+
+
+UNKNOWN_MODEL_USER = "0xDA0100000000000000000000000000000000B004"
+UNKNOWN_MODEL_DAY = datetime(2020, 2, 10, 12, 0, 0)
+UNKNOWN_MODEL_WINDOW = date(2020, 2, 10)
+
+
+async def _fake_price(
+    model_id: str, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0, image_count: int = 0
+) -> float:
+    """Half a credit per token, so a seeded chat request is worth 1.0."""
+    if model_id != "test-model":
+        raise ValueError(f"Invalid model ID: {model_id}")
+    return (input_tokens + output_tokens) * 0.5
+
+
+@pytest.fixture(autouse=True)
+def _priced_chat(monkeypatch):
+    """Chat spend comes from the Aleph price list; keep the suite off the network."""
+    monkeypatch.setattr(aleph_service, "calculate_price", _fake_price)
 
 
 def _inference_call(api_key_id, when: datetime, credits: float) -> InferenceCall:
@@ -151,12 +173,40 @@ async def test_top_usage_grouped_by_api_key():
     assert top.api_key_created_at is not None
 
 
-async def test_top_usage_chat_ranks_by_calls():
+async def test_top_usage_chat_priced_from_tokens():
     await _seed()
 
     stats = await StatsService.get_top_usage(ApiKeyType.chat, START, END, "user", 10)
     assert stats.total == 1
     assert stats.rows[0].calls == 2
+    # 2 requests x (1 input + 1 output) token at half a credit each
+    assert stats.rows[0].credits_spent == 2.0
+
+
+async def test_top_usage_chat_prices_unknown_model_as_zero():
+    """A model the price list no longer carries must not fail the leaderboard."""
+    async with AsyncSessionLocal() as db:
+        already = (
+            (await db.execute(select(ApiKey).where(ApiKey.name == f"{UNKNOWN_MODEL_USER}-chat"))).scalars().first()
+        )
+        if already is None:
+            user = await get_or_create_user_by_wallet(db, UNKNOWN_MODEL_USER)
+            await db.flush()
+            key = ApiKey(
+                key=ApiKey.generate_key(), name=f"{UNKNOWN_MODEL_USER}-chat", user_id=user.id, type=ApiKeyType.chat
+            )
+            db.add(key)
+            await db.flush()
+            request = ChatRequest(
+                api_key_id=key.id, input_tokens=10, output_tokens=10, cached_tokens=0, model_name="retired-model"
+            )
+            request.created_at = UNKNOWN_MODEL_DAY
+            db.add(request)
+            await db.commit()
+
+    stats = await StatsService.get_top_usage(ApiKeyType.chat, UNKNOWN_MODEL_WINDOW, UNKNOWN_MODEL_WINDOW, "user", 10)
+    assert stats.total == 1
+    assert stats.rows[0].calls == 1
     assert stats.rows[0].credits_spent == 0.0
 
 
@@ -216,11 +266,11 @@ async def test_active_users_paginated():
     await _seed()
 
     page1 = await StatsService.get_active_users(START, END, limit=1, offset=0)
-    assert page1.total == 2  # u1 (10.5 credits across api+cli) + u2 (2 credits); liberclaw has no account
+    assert page1.total == 2  # u1 (12.5 credits across api+cli+chat) + u2 (2 credits); liberclaw has no account
     assert len(page1.users) == 1
     top = page1.users[0]
-    assert top.credits_spent == 10.5  # 9.5 api + 1 cli
-    # u1's chat requests carry no credits, but count toward calls: 4 inference + 2 chat
+    assert top.credits_spent == 12.5  # 9.5 api + 1 cli + 2 chat
+    # 4 inference calls + 2 chat requests
     assert top.calls == 6
     assert top.account_created_at is not None
     assert top.first_active_at is not None
@@ -262,15 +312,15 @@ async def test_top_usage_limit_truncates_rows_not_total():
     assert by_key.total == 3  # the 3 seeded keys, regardless of the limit
 
 
-async def test_top_usage_grouped_by_api_key_chat_ranks_by_calls():
-    """By-key grouping must also work for chat, which has no credits (ranks by call count)."""
+async def test_top_usage_grouped_by_api_key_chat_priced_from_tokens():
+    """By-key grouping must also work for chat, whose spend is priced from the tokens."""
     await _seed()
 
     stats = await StatsService.get_top_usage(ApiKeyType.chat, START, END, "api_key", 10)
     assert stats.total == 1
     row = stats.rows[0]
     assert row.calls == 2
-    assert row.credits_spent == 0.0
+    assert row.credits_spent == 2.0
     assert row.api_key_label is not None
     # fallback/copies are the by-key labels of a real account user (u1's chat key)
     assert row.user_label != "unknown"

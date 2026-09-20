@@ -77,6 +77,7 @@ from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.aleph import aleph_service
 from src.services.entitlement import WINDOW_5H, WINDOW_WEEKLY, used_percent, window_usage_by_users
 from src.services.payments.credit_subscription import CREDITS_PROVIDER
 from src.subscription_tiers import DEFAULT_TIER, PAID_TIERS, PRODUCT_LIBERTAI, TierConfig, get_tier
@@ -2071,16 +2072,59 @@ class StatsService:
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @staticmethod
+    async def _chat_credits_by(db: AsyncSession, group_col, conditions: list) -> dict[str, float]:
+        """Chat spend per group (keys stringified), priced from the model price list.
+
+        ``chat_requests`` store tokens, not credits, so their value only exists in the
+        price list. Every pricing formula is linear in the token counts, so pricing one
+        summed row per (group, model) equals pricing each request. A model the list no
+        longer carries contributes 0 rather than failing the whole leaderboard.
+        """
+        rows = (
+            await db.execute(
+                select(
+                    group_col.label("grp"),
+                    ChatRequest.model_name.label("model_name"),
+                    func.sum(ChatRequest.input_tokens).label("input_tokens"),
+                    func.sum(ChatRequest.output_tokens).label("output_tokens"),
+                    func.sum(ChatRequest.cached_tokens).label("cached_tokens"),
+                    func.sum(ChatRequest.image_count).label("image_count"),
+                )
+                .select_from(ChatRequest)
+                .join(ApiKey, ChatRequest.api_key_id == ApiKey.id)
+                .where(*conditions)
+                .group_by(group_col, ChatRequest.model_name)
+            )
+        ).all()
+
+        credits: dict[str, float] = {}
+        for r in rows:
+            try:
+                price = await aleph_service.calculate_price(
+                    r.model_name,
+                    input_tokens=int(r.input_tokens or 0),
+                    output_tokens=int(r.output_tokens or 0),
+                    cached_tokens=int(r.cached_tokens or 0),
+                    image_count=int(r.image_count or 0),
+                )
+            except Exception as e:
+                logger.warning(f"Chat usage of model {r.model_name} counted as 0 credits: {e!s}")
+                continue
+            credits[str(r.grp)] = credits.get(str(r.grp), 0.0) + price
+        return credits
+
+    @staticmethod
     async def get_top_usage(
         key_type: ApiKeyType, start_date: date, end_date: date, group_by: str, limit: int
     ) -> GlobalTopUsageStats:
-        """Top usage consumers for one usage type, ranked by credits spent (calls for chat).
+        """Top usage consumers for one usage type, ranked by credits spent.
 
         Identity is the owning account user for api/cli/chat (one row per user) or the
         liberclaw identity for liberclaw keys; ``group_by="api_key"`` switches grouping to
         one row per key, so a user with several keys appears once per key (duplicate
         emails). Keys with no identity (legacy) are excluded; x402 is anonymous and
-        returns empty. Chat requests carry no credits, so their rows rank by call count.
+        returns empty. Chat spend is priced from the tokens (see ``_chat_credits_by``), so
+        chat rows are ranked in Python instead of by the database.
         """
         if key_type == ApiKeyType.x402:
             return GlobalTopUsageStats(rows=[], total=0)
@@ -2096,7 +2140,8 @@ class StatsService:
                 is_lib = key_type == ApiKeyType.liberclaw
                 call_table = ChatRequest if is_chat else InferenceCall
                 time_col = ChatRequest.created_at if is_chat else InferenceCall.used_at
-                # Chat requests carry no credits; rank them by call count instead.
+                # Chat spend is priced from the tokens after the query; the database can
+                # only rank the other types.
                 credits_expr = literal(0.0) if is_chat else func.sum(InferenceCall.credits_used)
                 conditions = [
                     ApiKey.type == key_type,
@@ -2148,9 +2193,16 @@ class StatsService:
                             LiberclawUser.created_at,
                         )
                         .order_by(credits_expr.desc(), calls_expr.desc(), ApiKey.id)
-                        .limit(limit)
                     )
+                    if not is_chat:
+                        rows_stmt = rows_stmt.limit(limit)
                     raw_rows = (await db.execute(rows_stmt)).all()
+                    chat_credits = await StatsService._chat_credits_by(db, ApiKey.key, conditions) if is_chat else {}
+                    if is_chat:
+                        raw_rows = sorted(
+                            raw_rows,
+                            key=lambda r: (-chat_credits.get(r.api_key, 0.0), -int(r.calls or 0), str(r.api_key)),
+                        )[:limit]
                     total = (
                         await db.execute(
                             select(func.count(func.distinct(ApiKey.id)))
@@ -2175,7 +2227,9 @@ class StatsService:
                                 fallback=r.user_id or r.lib_user_id,
                             ),
                             api_key_label=ApiKey.mask_key_string(r.api_key),
-                            credits_spent=round(float(r.credits or 0), 2),
+                            credits_spent=round(
+                                chat_credits.get(r.api_key, 0.0) if is_chat else float(r.credits or 0), 2
+                            ),
                             calls=int(r.calls or 0),
                             account_created_at=(r.user_created_at or r.lib_created_at).isoformat()
                             if (r.user_created_at or r.lib_created_at)
@@ -2240,8 +2294,16 @@ class StatsService:
                 # Identity-id tie-breaker (mirrors get_active_users): rows tied on both
                 # credits and calls must not reshuffle between requests.
                 ident_order = (LiberclawUser.id if is_lib else User.id).desc()
-                ident_stmt = ident_stmt.order_by(credits_expr.desc(), calls_expr.desc(), ident_order).limit(limit)
+                ident_stmt = ident_stmt.order_by(credits_expr.desc(), calls_expr.desc(), ident_order)
+                if not is_chat:
+                    ident_stmt = ident_stmt.limit(limit)
                 ident_rows = (await db.execute(ident_stmt)).all()
+                chat_credits = await StatsService._chat_credits_by(db, ApiKey.user_id, conditions) if is_chat else {}
+                if is_chat:
+                    ident_rows = sorted(
+                        ident_rows,
+                        key=lambda r: (-chat_credits.get(str(r.user_id), 0.0), -int(r.calls or 0), str(r.user_id)),
+                    )[:limit]
                 total = (await db.execute(ident_from)).scalar() or 0
                 rows = []
                 for i, r in enumerate(ident_rows):
@@ -2259,7 +2321,9 @@ class StatsService:
                             rank=i + 1,
                             user_label=label,
                             api_key_label=None,
-                            credits_spent=round(float(r.credits or 0), 2),
+                            credits_spent=round(
+                                chat_credits.get(str(r.user_id), 0.0) if is_chat else float(r.credits or 0), 2
+                            ),
                             calls=int(r.calls or 0),
                             account_created_at=r.user_created_at.isoformat() if r.user_created_at else None,
                             api_key_created_at=None,
@@ -2280,7 +2344,7 @@ class StatsService:
         no account identity, so they are not listed. The two usage sources are aggregated
         separately (per-user SUM/COUNT/MIN/MAX) and merged in Python — bounded by the
         number of distinct active users — then ranked by credits spent, calls as
-        tie-breaker.
+        tie-breaker. Chat spend is priced from the tokens (see ``_chat_credits_by``).
         """
         try:
             async with AsyncSessionLocal() as db:
@@ -2313,6 +2377,7 @@ class StatsService:
                         select(
                             ApiKey.user_id.label("user_id"),
                             func.count(ChatRequest.id).label("calls"),
+                            # Priced below from the tokens, which is where chat spend lives.
                             literal(0.0).label("credits"),
                             func.min(ChatRequest.created_at).label("first_active"),
                             func.max(ChatRequest.created_at).label("last_active"),
@@ -2329,6 +2394,16 @@ class StatsService:
                     )
                 ).all()
 
+                chat_credits = await StatsService._chat_credits_by(
+                    db,
+                    ApiKey.user_id,
+                    [
+                        ApiKey.type == ApiKeyType.chat,
+                        ChatRequest.created_at >= start_datetime,
+                        ChatRequest.created_at <= end_datetime,
+                    ],
+                )
+
                 merged: dict = {}
                 for r in [*inference_rows, *chat_rows]:
                     acc = merged.setdefault(
@@ -2341,6 +2416,8 @@ class StatsService:
                         acc["first_active"] = r.first_active
                     if r.last_active and r.last_active > acc["last_active"]:
                         acc["last_active"] = r.last_active
+                for user_id, acc in merged.items():
+                    acc["credits"] += chat_credits.get(str(user_id), 0.0)
 
                 # user_id as final tie-breaker: Postgres gives no stable order for rows tied
                 # on (credits, calls), and the two source queries may group differently —

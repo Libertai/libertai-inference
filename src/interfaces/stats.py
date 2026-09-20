@@ -530,7 +530,7 @@ class TopUsageRow(BaseModel):
 
 
 class GlobalTopUsageStats(BaseModel):
-    """Top usage consumers for a date range, ranked by credits spent (or calls for chat).
+    """Top usage consumers for a date range, ranked by credits spent.
 
     ``total`` counts rows after grouping (distinct users or keys), so the client can render
     an "N of M" footer.
