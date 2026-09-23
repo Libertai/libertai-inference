@@ -316,7 +316,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                     )
                 else:
                     logger.warning(
-                        f"x402 usage report for {usage_log.key} has no payment payload — "
+                        f"x402 usage report for {api_key.masked_key} has no payment payload — "
                         "usage metered but never settled"
                     )
 

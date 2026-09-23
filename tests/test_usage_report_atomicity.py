@@ -78,6 +78,16 @@ async def _chat_request_count(api_key_id) -> int:
     return int(count or 0)
 
 
+async def _cleanup(user_id, api_key_id):
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
+        await db.execute(delete(ApiKeyDB).where(ApiKeyDB.user_id == user_id))
+        await db.execute(delete(ChatRequest).where(ChatRequest.api_key_id == api_key_id))
+        await db.execute(delete(InferenceCall).where(InferenceCall.api_key_id == api_key_id))
+        await db.execute(delete(User).where(User.id == user_id))
+        await db.commit()
+
+
 async def test_deduction_failure_rolls_back_usage_row(monkeypatch):
     """A failure in the overflow deduction must roll back the usage row too, so the
     reporting gateway's retry registers exactly one row. Falsifiable: pre-fix the row
@@ -86,28 +96,35 @@ async def test_deduction_failure_rolls_back_usage_row(monkeypatch):
     user_id = await _seed_user_by_wallet(address, prepaid=10.0)
     api_key = await ApiKeyService.create_api_key(user_id=user_id, name="atomic", user_address=address)
 
-    original = CreditService.use_credits
-    state = {"raise": True}
+    try:
+        original = CreditService.use_credits
+        state = {"raise": True}
 
-    async def _flaky_use_credits(*args, **kwargs):
-        if state["raise"]:
-            raise RuntimeError("deduction failed")
-        return await original(*args, **kwargs)
+        async def _flaky_use_credits(*args, **kwargs):
+            if state["raise"]:
+                raise RuntimeError("deduction failed")
+            return await original(*args, **kwargs)
 
-    monkeypatch.setattr(CreditService, "use_credits", _flaky_use_credits)
+        monkeypatch.setattr(CreditService, "use_credits", _flaky_use_credits)
 
-    with pytest.raises(RuntimeError, match="deduction failed"):
-        await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=_OVERFLOW_CALL, model_name="m")
+        with pytest.raises(RuntimeError, match="deduction failed"):
+            await ApiKeyService.register_inference_call(
+                key=api_key.full_key, credits_used=_OVERFLOW_CALL, model_name="m"
+            )
 
-    assert await _inference_call_count(api_key.id) == 0  # nothing left behind
-    assert await _balance(user_id) == pytest.approx(10.0)  # no partial deduction persisted
+        assert await _inference_call_count(api_key.id) == 0  # nothing left behind
+        assert await _balance(user_id) == pytest.approx(10.0)  # no partial deduction persisted
 
-    # The gateway retries after the failed report: exactly one usage row this time.
-    state["raise"] = False
-    ok = await ApiKeyService.register_inference_call(key=api_key.full_key, credits_used=_OVERFLOW_CALL, model_name="m")
-    assert ok is True
-    assert await _inference_call_count(api_key.id) == 1
-    assert await _balance(user_id) == pytest.approx(9.0)  # overflow deducted exactly once
+        # The gateway retries after the failed report: exactly one usage row this time.
+        state["raise"] = False
+        ok = await ApiKeyService.register_inference_call(
+            key=api_key.full_key, credits_used=_OVERFLOW_CALL, model_name="m"
+        )
+        assert ok is True
+        assert await _inference_call_count(api_key.id) == 1
+        assert await _balance(user_id) == pytest.approx(9.0)  # overflow deducted exactly once
+    finally:
+        await _cleanup(user_id, api_key.id)
 
 
 async def test_chat_history_failure_rolls_back_metering(monkeypatch, async_client):
@@ -126,41 +143,36 @@ async def test_chat_history_failure_rolls_back_metering(monkeypatch, async_clien
     chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=None)
     key_id = chat_key.id
 
-    original = ChatRequestService.add_chat_request
-    state = {"raise": True}
+    try:
+        original = ChatRequestService.add_chat_request
+        state = {"raise": True}
 
-    async def _flaky_add_chat_request(*args, **kwargs):
-        if state["raise"]:
-            raise RuntimeError("chat history failed")
-        return await original(*args, **kwargs)
+        async def _flaky_add_chat_request(*args, **kwargs):
+            if state["raise"]:
+                raise RuntimeError("chat history failed")
+            return await original(*args, **kwargs)
 
-    monkeypatch.setattr(ChatRequestService, "add_chat_request", _flaky_add_chat_request)
+        monkeypatch.setattr(ChatRequestService, "add_chat_request", _flaky_add_chat_request)
 
-    usage_payload = {
-        "key": chat_key.full_key,
-        "model_name": "test-text-model",
-        "input_tokens": 100,
-        "output_tokens": 200,
-        "cached_tokens": 0,
-    }
+        usage_payload = {
+            "key": chat_key.full_key,
+            "model_name": "test-text-model",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "cached_tokens": 0,
+        }
 
-    resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
-    assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
-    assert await _inference_call_count(key_id) == 0  # metering rolled back with the history
-    assert await _chat_request_count(key_id) == 0
+        resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
+        assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
+        assert await _inference_call_count(key_id) == 0  # metering rolled back with the history
+        assert await _chat_request_count(key_id) == 0
 
-    # The gateway retries after the failure: exactly one row each.
-    state["raise"] = False
-    resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-    assert await _inference_call_count(key_id) == 1
-    assert await _chat_request_count(key_id) == 1
-
-    # Cleanup (async_client fixture has no per-test rollback).
-    async with AsyncSessionLocal() as db:
-        await db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user_id))
-        await db.execute(delete(ApiKeyDB).where(ApiKeyDB.user_id == user_id))
-        await db.execute(delete(ChatRequest).where(ChatRequest.api_key_id == key_id))
-        await db.execute(delete(InferenceCall).where(InferenceCall.api_key_id == key_id))
-        await db.execute(delete(User).where(User.id == user_id))
-        await db.commit()
+        # The gateway retries after the failure: exactly one row each.
+        state["raise"] = False
+        resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert await _inference_call_count(key_id) == 1
+        assert await _chat_request_count(key_id) == 1
+    finally:
+        # Cleanup (async_client fixture has no per-test rollback).
+        await _cleanup(user_id, key_id)

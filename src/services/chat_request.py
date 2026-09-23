@@ -32,32 +32,23 @@ class ChatRequestService:
             f"output_tokens={output_tokens}, cached_tokens={cached_tokens}, image_count={image_count}, api_key_id={api_key_id}"
         )
 
+        chat_request = ChatRequest(
+            api_key_id=api_key_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            model_name=model_name,
+            image_count=image_count,
+        )
+
         if db is not None:
-            db.add(
-                ChatRequest(
-                    api_key_id=api_key_id,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    model_name=model_name,
-                    image_count=image_count,
-                )
-            )
+            db.add(chat_request)
             await db.flush()
             return True
 
         try:
             async with AsyncSessionLocal() as own_db:
-                own_db.add(
-                    ChatRequest(
-                        api_key_id=api_key_id,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cached_tokens=cached_tokens,
-                        model_name=model_name,
-                        image_count=image_count,
-                    )
-                )
+                own_db.add(chat_request)
                 await own_db.commit()
                 return True
         except Exception as e:
