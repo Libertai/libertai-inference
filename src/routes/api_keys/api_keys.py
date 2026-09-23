@@ -190,14 +190,14 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                 if not (config.LIBERTAI_CHAT_API_KEY and usage_log.key == config.LIBERTAI_CHAT_API_KEY):
                     if isinstance(usage_log, ImageInferenceCallData):
                         credits_used = await aleph_service.calculate_price(
-                            model_id=usage_log.model_name,
-                            image_count=usage_log.image_count,
+                            model_id=usage_log.model_name, image_count=usage_log.image_count
                         )
                         success = await ApiKeyService.register_inference_call(
                             key=usage_log.key,
                             credits_used=credits_used,
                             model_name=usage_log.model_name,
                             image_count=usage_log.image_count,
+                            db=db,
                         )
                     else:
                         credits_used = await aleph_service.calculate_price(
@@ -213,6 +213,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                             input_tokens=usage_log.input_tokens,
                             output_tokens=usage_log.output_tokens,
                             cached_tokens=usage_log.cached_tokens,
+                            db=db,
                         )
                     if not success:
                         raise HTTPException(
@@ -228,6 +229,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         cached_tokens=0,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     await ChatRequestService.add_chat_request(
@@ -236,18 +238,19 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
                         model_name=usage_log.model_name,
+                        db=db,
                     )
             elif api_key.type == ApiKeyType.liberclaw:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
                     success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=credits_used,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     credits_used = await aleph_service.calculate_price(
@@ -263,6 +266,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
                 if not success:
                     raise HTTPException(
@@ -271,14 +275,14 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             elif api_key.type == ApiKeyType.x402:
                 if isinstance(usage_log, ImageInferenceCallData):
                     actual_cost = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
-                    await ApiKeyService.register_inference_call(
+                    success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=actual_cost,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     actual_cost = await aleph_service.calculate_price(
@@ -287,14 +291,22 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
                     )
-                    await ApiKeyService.register_inference_call(
+                    success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=actual_cost,
                         model_name=usage_log.model_name,
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
+                if not success:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
+                    )
+                # Commit the metered usage before settling: settlement is an external
+                # HTTP call, which must not run with the metering transaction open.
+                await db.commit()
 
                 if usage_log.payment_payload and usage_log.payment_requirements:
                     await x402_service.settle_payment(
@@ -302,12 +314,16 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         usage_log.payment_requirements,
                         actual_cost,
                     )
+                else:
+                    logger.warning(
+                        f"x402 usage report for {usage_log.key} has no payment payload — "
+                        "usage metered but never settled"
+                    )
 
             else:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
                     logger.debug(f"Calculated {credits_used} credits for image model {usage_log.model_name}")
 
@@ -316,6 +332,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         credits_used=credits_used,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     credits_used = await aleph_service.calculate_price(
@@ -333,12 +350,18 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
 
                 if not success:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
+
+            # Commit metering, chat history, and the overflow deduction as one
+            # transaction: a failure rolls back all of it, so the reporting gateway's
+            # retry registers once instead of duplicating the usage report.
+            await db.commit()
 
         return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
     except HTTPException:

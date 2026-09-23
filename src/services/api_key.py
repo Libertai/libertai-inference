@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
 
 from src.config import config
@@ -571,6 +572,7 @@ class ApiKeyService:
         output_tokens: int = 0,
         cached_tokens: int = 0,
         image_count: int = 0,
+        db: AsyncSession | None = None,
     ) -> bool:
         """
         Log usage of an API key and deduct credits from the user's balance.
@@ -585,122 +587,154 @@ class ApiKeyService:
             cached_tokens: Number of input tokens served from the prefix cache (subset of input_tokens)
             model_name: Name of the model used
             image_count: Number of images processed
+            db: Optional session to run on (flushed, caller owns the commit) so the usage
+                row and the overflow deduction share the caller's transaction. If None,
+                a dedicated session is opened and committed.
 
         Returns:
             Boolean indicating if the operation was successful
         """
         logger.debug(f"Logging usage of {credits_used} credits for API key {key}")
 
+        if db is not None:
+            return await ApiKeyService._register_inference_call_on_session(
+                db, key, credits_used, model_name, input_tokens, output_tokens, cached_tokens, image_count
+            )
+
         try:
-            async with AsyncSessionLocal() as db:
-                # Check if API key exists (even if inactive, we still want to log)
-                api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == key))).scalars().first()
-
-                if not api_key:
-                    logger.warning(f"API key {key} not found")
-                    return False
-
-                # Anchor the usage row + windows to the same instant so this call counts
-                # in the window it opens (avoids python/DB clock skew).
-                now = datetime.now()
-
-                # Chargeable keys (everything except liberclaw / x402, and the shared
-                # anonymous chat service key) with an owner accrue against fixed windows
-                # then prepaid balance. Per-user chat keys are chargeable like api/cli.
-                is_shared_free_key = bool(config.LIBERTAI_CHAT_API_KEY) and key == config.LIBERTAI_CHAT_API_KEY
-                chargeable_user_id = (
-                    api_key.user_id
-                    if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and not is_shared_free_key
-                    else None
+            async with AsyncSessionLocal() as own_db:
+                success = await ApiKeyService._register_inference_call_on_session(
+                    own_db, key, credits_used, model_name, input_tokens, output_tokens, cached_tokens, image_count
                 )
-
-                # Split this call between the tier windows and prepaid *before* recording it:
-                # only the portion that fits the remaining allowance is tier-covered (a call
-                # straddling the cap is charged just for its overflow, not in full). Coverage
-                # is bounded by the tighter remaining window, since a call is tier-covered
-                # only while both have room. The split is persisted on the row so window
-                # usage sums never count the prepaid-paid portion against the allowance.
-                tier_covered = 0.0
-                if chargeable_user_id is not None:
-                    # Open/reset this user's fixed windows so usage accrues against them.
-                    await open_windows(db, chargeable_user_id, now)
-                    # Billing split only needs the window fields — skip the cap queries.
-                    state = await get_allowance_state(db, chargeable_user_id, now, include_cap=False)
-                    remaining_5h = remaining_allowance(state.window_5h_limit, state.window_5h_used)
-                    remaining_weekly = remaining_allowance(state.weekly_limit, state.weekly_used)
-                    tier_covered = min(credits_used, remaining_5h, remaining_weekly)
-
-                # Liberclaw keys: usage overflowing the tier's rolling-window cap is paid
-                # from granted extra credits (upgrade remainders), consumed in this same
-                # transaction. The grant-paid portion is persisted on the row so window
-                # sums stay net of it; grants short of the overflow cover what they can
-                # (post-hoc billing — the call already happened).
-                liberclaw_extra_used: float | None = None
-                if api_key.type == ApiKeyType.liberclaw and api_key.liberclaw_user_id is not None:
-                    from src.models.liberclaw_user import LiberclawUser
-                    from src.services.liberclaw import LiberclawService
-
-                    lc_user = await db.get(LiberclawUser, api_key.liberclaw_user_id)
-                    if lc_user is not None:
-                        # Lock grants BEFORE reading the window sum: concurrent
-                        # overflowing calls would otherwise split against the same
-                        # stale base and under-consume. No grants -> nothing to
-                        # consume, skip the window query entirely.
-                        grants = await LiberclawService.lock_grants(db, api_key.liberclaw_user_id)
-                        if grants:
-                            tier_config = get_tier_config(lc_user.tier)
-                            cutoff = now - timedelta(days=tier_config["rolling_window_days"])
-                            window_usage = (
-                                await db.execute(
-                                    select(
-                                        sql_func.coalesce(
-                                            sql_func.sum(
-                                                InferenceCall.credits_used
-                                                - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
-                                            ),
-                                            0.0,
-                                        )
-                                    ).where(
-                                        InferenceCall.api_key_id == api_key.id,
-                                        InferenceCall.used_at >= cutoff,
-                                    )
-                                )
-                            ).scalar()
-                            remaining_cap = max(0.0, tier_config["credits_limit"] - float(window_usage or 0.0))
-                            overflow = max(0.0, credits_used - remaining_cap)
-                            if overflow > 0:
-                                consumed = LiberclawService.decrement_grants(grants, overflow)
-                                if consumed > 0:
-                                    liberclaw_extra_used = consumed
-
-                usage = InferenceCall(
-                    api_key_id=api_key.id,
-                    credits_used=credits_used,
-                    model_name=model_name,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    image_count=image_count,
-                    tier_credits_used=tier_covered,
-                    liberclaw_extra_credits_used=liberclaw_extra_used,
-                )
-                usage.used_at = now
-                db.add(usage)
-                await db.commit()
-
-                # Deduct the overflow from the user's prepaid balance (skip for liberclaw,
-                # x402 and the shared free chat key).
-                if chargeable_user_id is not None:
-                    overflow = credits_used - tier_covered
-                    if overflow > 0:
-                        # Post-hoc billing: the call already happened, so capture what the
-                        # balance can cover rather than nothing if it falls short.
-                        success = await CreditService.use_credits(chargeable_user_id, overflow, allow_partial=True)
-                        if not success:
-                            logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
-
-                return True
-
+                await own_db.commit()
+                return success
         except Exception as e:
             logger.error(f"Error logging API key usage for {key}: {e!s}", exc_info=True)
             raise
+
+    @staticmethod
+    async def _register_inference_call_on_session(
+        db: AsyncSession,
+        key: str,
+        credits_used: float,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int,
+        image_count: int,
+    ) -> bool:
+        """Billing split, usage row, and overflow deduction on one session — flushed only.
+
+        The deduction runs in the same transaction as the usage row so a failure rolls
+        back both: the reporting gateway's retry then registers once instead of
+        duplicating the usage row or leaving it behind without deducting credits.
+        """
+        # Check if API key exists (even if inactive, we still want to log)
+        api_key = (await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == key))).scalars().first()
+
+        if not api_key:
+            logger.warning(f"API key {key} not found")
+            return False
+
+        # Anchor the usage row + windows to the same instant so this call counts
+        # in the window it opens (avoids python/DB clock skew).
+        now = datetime.now()
+
+        # Chargeable keys (everything except liberclaw / x402, and the shared
+        # anonymous chat service key) with an owner accrue against fixed windows
+        # then prepaid balance. Per-user chat keys are chargeable like api/cli.
+        is_shared_free_key = bool(config.LIBERTAI_CHAT_API_KEY) and key == config.LIBERTAI_CHAT_API_KEY
+        chargeable_user_id = (
+            api_key.user_id
+            if api_key.type not in (ApiKeyType.liberclaw, ApiKeyType.x402) and not is_shared_free_key
+            else None
+        )
+
+        # Split this call between the tier windows and prepaid *before* recording it:
+        # only the portion that fits the remaining allowance is tier-covered (a call
+        # straddling the cap is charged just for its overflow, not in full). Coverage
+        # is bounded by the tighter remaining window, since a call is tier-covered
+        # only while both have room. The split is persisted on the row so window
+        # usage sums never count the prepaid-paid portion against the allowance.
+        tier_covered = 0.0
+        if chargeable_user_id is not None:
+            # Open/reset this user's fixed windows so usage accrues against them.
+            await open_windows(db, chargeable_user_id, now)
+            # Billing split only needs the window fields — skip the cap queries.
+            state = await get_allowance_state(db, chargeable_user_id, now, include_cap=False)
+            remaining_5h = remaining_allowance(state.window_5h_limit, state.window_5h_used)
+            remaining_weekly = remaining_allowance(state.weekly_limit, state.weekly_used)
+            tier_covered = min(credits_used, remaining_5h, remaining_weekly)
+
+        # Liberclaw keys: usage overflowing the tier's rolling-window cap is paid
+        # from granted extra credits (upgrade remainders), consumed in this same
+        # transaction. The grant-paid portion is persisted on the row so window
+        # sums stay net of it; grants short of the overflow cover what they can
+        # (post-hoc billing — the call already happened).
+        liberclaw_extra_used: float | None = None
+        if api_key.type == ApiKeyType.liberclaw and api_key.liberclaw_user_id is not None:
+            from src.models.liberclaw_user import LiberclawUser
+            from src.services.liberclaw import LiberclawService
+
+            lc_user = await db.get(LiberclawUser, api_key.liberclaw_user_id)
+            if lc_user is not None:
+                # Lock grants BEFORE reading the window sum: concurrent
+                # overflowing calls would otherwise split against the same
+                # stale base and under-consume. No grants -> nothing to
+                # consume, skip the window query entirely.
+                grants = await LiberclawService.lock_grants(db, api_key.liberclaw_user_id)
+                if grants:
+                    tier_config = get_tier_config(lc_user.tier)
+                    cutoff = now - timedelta(days=tier_config["rolling_window_days"])
+                    window_usage = (
+                        await db.execute(
+                            select(
+                                sql_func.coalesce(
+                                    sql_func.sum(
+                                        InferenceCall.credits_used
+                                        - sql_func.coalesce(InferenceCall.liberclaw_extra_credits_used, 0.0)
+                                    ),
+                                    0.0,
+                                )
+                            ).where(
+                                InferenceCall.api_key_id == api_key.id,
+                                InferenceCall.used_at >= cutoff,
+                            )
+                        )
+                    ).scalar()
+                    remaining_cap = max(0.0, tier_config["credits_limit"] - float(window_usage or 0.0))
+                    overflow = max(0.0, credits_used - remaining_cap)
+                    if overflow > 0:
+                        consumed = LiberclawService.decrement_grants(grants, overflow)
+                        if consumed > 0:
+                            liberclaw_extra_used = consumed
+
+        usage = InferenceCall(
+            api_key_id=api_key.id,
+            credits_used=credits_used,
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            image_count=image_count,
+            tier_credits_used=tier_covered,
+            liberclaw_extra_credits_used=liberclaw_extra_used,
+        )
+        usage.used_at = now
+        db.add(usage)
+
+        # Deduct the overflow from the user's prepaid balance in this same
+        # transaction (skip for liberclaw, x402 and the shared free chat key):
+        # usage row and deduction commit together, so a failure rolls back both
+        # and the reporting gateway's retry re-registers once.
+        if chargeable_user_id is not None:
+            overflow = credits_used - tier_covered
+            if overflow > 0:
+                # Post-hoc billing: the call already happened, so capture what the
+                # balance can cover rather than nothing if it falls short.
+                deducted = await CreditService.use_credits(chargeable_user_id, overflow, db=db, allow_partial=True)
+                if not deducted:
+                    logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
+
+        await db.flush()
+        return True
