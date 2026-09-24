@@ -176,7 +176,28 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
 
     An API key is unguessable (high-entropy secret), so possession is the authorization.
     """
+
+    async def _response() -> InferenceCallResponse:
+        """Key-usability hint after metering. The report already persisted by the time this
+        runs, and it is advisory — so a failure reading it must not 500 a committed report:
+        the gateway's retry would then insert a second usage row.
+
+        On error the key is reported as usable (invalid=None): a key that just ran out may
+        then keep being served until the next whitelist push. That is the deliberate trade-
+        off — failing closed would spuriously evict healthy keys on transient read errors,
+        which is worse for an advisory field."""
+        try:
+            return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
+        except Exception as e:
+            logger.error(f"Error checking key usability after metering: {e!s}", exc_info=True)
+            return InferenceCallResponse(invalid=None)
+
     try:
+        # Settled after the session block releases its pooled connection: settlement is
+        # an external HTTP call (blockchain confirmation can take seconds) that must
+        # not hold one.
+        x402_settlement: tuple[str, str | None, str | None, float] | None = None
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == usage_log.key))
             api_key = result.scalars().first()
@@ -184,20 +205,24 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             if not api_key:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found")
 
-            if api_key.type == ApiKeyType.chat:
+            # Attribute reads (masked_key, type) are hoisted before the commit so the
+            # route never depends on the sessionmaker's expire_on_commit=False.
+            key_type = api_key.type
+
+            if key_type == ApiKeyType.chat:
                 # The shared anonymous chat key stays free; per-user chat keys are metered
                 # (window -> prepaid) via register_inference_call, like api/cli keys.
                 if not (config.LIBERTAI_CHAT_API_KEY and usage_log.key == config.LIBERTAI_CHAT_API_KEY):
                     if isinstance(usage_log, ImageInferenceCallData):
                         credits_used = await aleph_service.calculate_price(
-                            model_id=usage_log.model_name,
-                            image_count=usage_log.image_count,
+                            model_id=usage_log.model_name, image_count=usage_log.image_count
                         )
                         success = await ApiKeyService.register_inference_call(
                             key=usage_log.key,
                             credits_used=credits_used,
                             model_name=usage_log.model_name,
                             image_count=usage_log.image_count,
+                            db=db,
                         )
                     else:
                         credits_used = await aleph_service.calculate_price(
@@ -213,6 +238,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                             input_tokens=usage_log.input_tokens,
                             output_tokens=usage_log.output_tokens,
                             cached_tokens=usage_log.cached_tokens,
+                            db=db,
                         )
                     if not success:
                         raise HTTPException(
@@ -228,6 +254,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         cached_tokens=0,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     await ChatRequestService.add_chat_request(
@@ -236,18 +263,19 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
                         model_name=usage_log.model_name,
+                        db=db,
                     )
-            elif api_key.type == ApiKeyType.liberclaw:
+            elif key_type == ApiKeyType.liberclaw:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
                     success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=credits_used,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     credits_used = await aleph_service.calculate_price(
@@ -263,22 +291,23 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
                 if not success:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
-            elif api_key.type == ApiKeyType.x402:
+            elif key_type == ApiKeyType.x402:
                 if isinstance(usage_log, ImageInferenceCallData):
                     actual_cost = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
-                    await ApiKeyService.register_inference_call(
+                    success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=actual_cost,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     actual_cost = await aleph_service.calculate_price(
@@ -287,27 +316,38 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
                     )
-                    await ApiKeyService.register_inference_call(
+                    success = await ApiKeyService.register_inference_call(
                         key=usage_log.key,
                         credits_used=actual_cost,
                         model_name=usage_log.model_name,
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
-
-                if usage_log.payment_payload and usage_log.payment_requirements:
-                    await x402_service.settle_payment(
-                        usage_log.payment_payload,
-                        usage_log.payment_requirements,
-                        actual_cost,
+                if not success:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
+                # Commit the metered usage before settling: settlement is an external
+                # HTTP call, which must not run with the metering transaction open.
+                # masked_key is read before the commit so the attribute is guaranteed
+                # loaded (AsyncSessionLocal sets expire_on_commit=False today, but
+                # this must not depend on that sessionmaker detail). The settlement
+                # itself runs after the session block releases its connection.
+                masked_key = api_key.masked_key
+                await db.commit()
+                x402_settlement = (
+                    masked_key,
+                    usage_log.payment_payload,
+                    usage_log.payment_requirements,
+                    actual_cost,
+                )
 
             else:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
-                        model_id=usage_log.model_name,
-                        image_count=usage_log.image_count,
+                        model_id=usage_log.model_name, image_count=usage_log.image_count
                     )
                     logger.debug(f"Calculated {credits_used} credits for image model {usage_log.model_name}")
 
@@ -316,6 +356,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         credits_used=credits_used,
                         model_name=usage_log.model_name,
                         image_count=usage_log.image_count,
+                        db=db,
                     )
                 else:
                     credits_used = await aleph_service.calculate_price(
@@ -333,6 +374,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         input_tokens=usage_log.input_tokens,
                         output_tokens=usage_log.output_tokens,
                         cached_tokens=usage_log.cached_tokens,
+                        db=db,
                     )
 
                 if not success:
@@ -340,7 +382,41 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
 
-        return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
+            # Commit metering, chat history, and the overflow deduction as one
+            # transaction: a failure rolls back all of it, so the reporting gateway's
+            # retry registers once instead of duplicating the usage report. x402
+            # already committed above, before its external settlement call.
+            if key_type != ApiKeyType.x402:
+                await db.commit()
+
+        if x402_settlement is not None:
+            masked_key, payment_payload, payment_requirements, actual_cost = x402_settlement
+            if payment_payload and payment_requirements:
+                settled = await x402_service.settle_payment(payment_payload, payment_requirements, actual_cost)
+                if not settled:
+                    # Correlate the failed settlement with the just-committed usage
+                    # row for operators; the cost disambiguates among concurrent
+                    # calls on the same key; settle_payment never raises.
+                    logger.warning(
+                        f"x402 settlement failed for {masked_key} (${actual_cost} actual cost) — "
+                        "usage metered but not settled"
+                    )
+            else:
+                # A partial report (only one of the two fields) is a gateway bug —
+                # name exactly which fields are missing so it stays debuggable.
+                missing_fields = ", ".join(
+                    name
+                    for name, value in (
+                        ("payment_payload", payment_payload),
+                        ("payment_requirements", payment_requirements),
+                    )
+                    if not value
+                )
+                logger.warning(
+                    f"x402 usage report for {masked_key} is missing {missing_fields} — usage metered but never settled"
+                )
+
+        return await _response()
     except HTTPException:
         raise
     except Exception as e:

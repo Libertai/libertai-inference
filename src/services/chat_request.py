@@ -1,5 +1,7 @@
 import uuid
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.models.base import AsyncSessionLocal
 from src.models.chat_request import ChatRequest
 from src.utils.logger import setup_logger
@@ -16,24 +18,42 @@ class ChatRequestService:
         cached_tokens: int,
         model_name: str,
         image_count: int = 0,
+        db: AsyncSession | None = None,
     ) -> bool:
+        """Record a chat request for the usage history.
+
+        If ``db`` is provided the row is only flushed (the caller owns the commit), so it
+        shares the caller's transaction — a failure rolls back the metering too, and the
+        reporting gateway's retry registers once instead of duplicating it. If ``db`` is
+        None, a dedicated session is opened and committed.
+
+        Deliberate asymmetry: the shared-session path has no try/except logging because
+        the exception must propagate so the caller's transaction rolls back (the caller
+        logs it) — don't swallow it here.
+        """
         logger.debug(
             f"Recording chat request: model={model_name}, input_tokens={input_tokens}, "
             f"output_tokens={output_tokens}, cached_tokens={cached_tokens}, image_count={image_count}, api_key_id={api_key_id}"
         )
 
+        chat_request = ChatRequest(
+            api_key_id=api_key_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            model_name=model_name,
+            image_count=image_count,
+        )
+
+        if db is not None:
+            db.add(chat_request)
+            await db.flush()
+            return True
+
         try:
-            async with AsyncSessionLocal() as db:
-                chat_request = ChatRequest(
-                    api_key_id=api_key_id,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    model_name=model_name,
-                    image_count=image_count,
-                )
-                db.add(chat_request)
-                await db.commit()
+            async with AsyncSessionLocal() as own_db:
+                own_db.add(chat_request)
+                await own_db.commit()
                 return True
         except Exception as e:
             logger.error(f"Error recording chat request: {e!s}", exc_info=True)
