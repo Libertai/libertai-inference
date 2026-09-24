@@ -176,6 +176,17 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
 
     An API key is unguessable (high-entropy secret), so possession is the authorization.
     """
+
+    async def _response() -> InferenceCallResponse:
+        """Key-usability hint after metering. The report already persisted by the time this
+        runs, and it is advisory — so a failure reading it must not 500 a committed report:
+        the gateway's retry would then insert a second usage row."""
+        try:
+            return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
+        except Exception as e:
+            logger.error(f"Error checking key usability after metering: {e!s}", exc_info=True)
+            return InferenceCallResponse(invalid=None)
+
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == usage_log.key))
@@ -320,6 +331,9 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         "usage metered but never settled"
                     )
 
+                # Metering is already committed; nothing left to commit — return explicitly.
+                return await _response()
+
             else:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
@@ -363,7 +377,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             # retry registers once instead of duplicating the usage report.
             await db.commit()
 
-        return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
+        return await _response()
     except HTTPException:
         raise
     except Exception as e:
