@@ -180,7 +180,12 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
     async def _response() -> InferenceCallResponse:
         """Key-usability hint after metering. The report already persisted by the time this
         runs, and it is advisory — so a failure reading it must not 500 a committed report:
-        the gateway's retry would then insert a second usage row."""
+        the gateway's retry would then insert a second usage row.
+
+        On error the key is reported as usable (invalid=None): a key that just ran out may
+        then keep being served until the next whitelist push. That is the deliberate trade-
+        off — failing closed would spuriously evict healthy keys on transient read errors,
+        which is worse for an advisory field."""
         try:
             return InferenceCallResponse(invalid=await ApiKeyService.get_invalid_key_info(usage_log.key))
         except Exception as e:
@@ -317,8 +322,9 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                     )
                 # Commit the metered usage before settling: settlement is an external
                 # HTTP call, which must not run with the metering transaction open.
-                # masked_key is read before the commit so it does not rely on the
-                # session's expire_on_commit=False staying set.
+                # masked_key is read before the commit so the attribute is guaranteed
+                # loaded (AsyncSessionLocal sets expire_on_commit=False today, but
+                # this must not depend on that sessionmaker detail).
                 masked_key = api_key.masked_key
                 await db.commit()
 

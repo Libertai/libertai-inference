@@ -368,3 +368,39 @@ async def test_route_deduction_failure_rolls_back_usage_row(monkeypatch, async_c
         assert await _balance(user_id) == pytest.approx(8.0)  # 3.0 metered minus 1.0 tier-covered
     finally:
         await _cleanup(user_id, key_id)
+
+
+async def test_x402_settlement_failure_still_meters(monkeypatch, async_client):
+    """A settle_payment that returns False (it never raises) still answers 200 with the
+    usage row committed — the failure is logged, not propagated to the gateway, whose
+    retry would duplicate the already-committed report."""
+    import src.routes.api_keys.api_keys as route_module
+
+    async def _fake_calculate_price(**_kwargs) -> float:
+        return 3.0
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
+
+    async def _failing_settle(*_args) -> bool:
+        return False
+
+    monkeypatch.setattr(route_module.x402_service, "settle_payment", _failing_settle)
+
+    user_id, api_key = await _seed_x402_key()
+
+    try:
+        resp = await async_client.post(
+            "/api-keys/admin/usage",
+            json={
+                "key": api_key.full_key,
+                "model_name": "test-text-model",
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "payment_payload": '{"x402Version": 2}',
+                "payment_requirements": '{"maxAmountRequired": 3000000}',
+            },
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert await _inference_call_count(api_key.id) == 1  # metering still committed
+    finally:
+        await _cleanup(user_id, api_key.id)
