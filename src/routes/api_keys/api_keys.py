@@ -193,6 +193,11 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             return InferenceCallResponse(invalid=None)
 
     try:
+        # Settled after the session block releases its pooled connection: settlement is
+        # an external HTTP call (blockchain confirmation can take seconds) that must
+        # not hold one.
+        x402_settlement: tuple[str, str | None, str | None, float] | None = None
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ApiKeyDB).where(ApiKeyDB.key == usage_log.key))
             api_key = result.scalars().first()
@@ -200,7 +205,11 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             if not api_key:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found")
 
-            if api_key.type == ApiKeyType.chat:
+            # Attribute reads (masked_key, type) are hoisted before the commit so the
+            # route never depends on the sessionmaker's expire_on_commit=False.
+            key_type = api_key.type
+
+            if key_type == ApiKeyType.chat:
                 # The shared anonymous chat key stays free; per-user chat keys are metered
                 # (window -> prepaid) via register_inference_call, like api/cli keys.
                 if not (config.LIBERTAI_CHAT_API_KEY and usage_log.key == config.LIBERTAI_CHAT_API_KEY):
@@ -256,7 +265,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         model_name=usage_log.model_name,
                         db=db,
                     )
-            elif api_key.type == ApiKeyType.liberclaw:
+            elif key_type == ApiKeyType.liberclaw:
                 if isinstance(usage_log, ImageInferenceCallData):
                     credits_used = await aleph_service.calculate_price(
                         model_id=usage_log.model_name, image_count=usage_log.image_count
@@ -288,7 +297,7 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail=f"API key {usage_log.key} not found"
                     )
-            elif api_key.type == ApiKeyType.x402:
+            elif key_type == ApiKeyType.x402:
                 if isinstance(usage_log, ImageInferenceCallData):
                     actual_cost = await aleph_service.calculate_price(
                         model_id=usage_log.model_name, image_count=usage_log.image_count
@@ -324,39 +333,16 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                 # HTTP call, which must not run with the metering transaction open.
                 # masked_key is read before the commit so the attribute is guaranteed
                 # loaded (AsyncSessionLocal sets expire_on_commit=False today, but
-                # this must not depend on that sessionmaker detail).
+                # this must not depend on that sessionmaker detail). The settlement
+                # itself runs after the session block releases its connection.
                 masked_key = api_key.masked_key
                 await db.commit()
-
-                if usage_log.payment_payload and usage_log.payment_requirements:
-                    settled = await x402_service.settle_payment(
-                        usage_log.payment_payload,
-                        usage_log.payment_requirements,
-                        actual_cost,
-                    )
-                    if not settled:
-                        # Correlate the failed settlement with the just-committed usage
-                        # row for operators; the cost disambiguates among concurrent
-                        # calls on the same key; settle_payment never raises.
-                        logger.warning(
-                            f"x402 settlement failed for {masked_key} (${actual_cost} actual cost) — "
-                            "usage metered but not settled"
-                        )
-                else:
-                    # A partial report (only one of the two fields) is a gateway bug —
-                    # name exactly which fields are missing so it stays debuggable.
-                    missing_fields = ", ".join(
-                        name
-                        for name, value in (
-                            ("payment_payload", usage_log.payment_payload),
-                            ("payment_requirements", usage_log.payment_requirements),
-                        )
-                        if not value
-                    )
-                    logger.warning(
-                        f"x402 usage report for {masked_key} is missing {missing_fields} — "
-                        "usage metered but never settled"
-                    )
+                x402_settlement = (
+                    masked_key,
+                    usage_log.payment_payload,
+                    usage_log.payment_requirements,
+                    actual_cost,
+                )
 
             else:
                 if isinstance(usage_log, ImageInferenceCallData):
@@ -400,8 +386,35 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
             # transaction: a failure rolls back all of it, so the reporting gateway's
             # retry registers once instead of duplicating the usage report. x402
             # already committed above, before its external settlement call.
-            if api_key.type != ApiKeyType.x402:
+            if key_type != ApiKeyType.x402:
                 await db.commit()
+
+        if x402_settlement is not None:
+            masked_key, payment_payload, payment_requirements, actual_cost = x402_settlement
+            if payment_payload and payment_requirements:
+                settled = await x402_service.settle_payment(payment_payload, payment_requirements, actual_cost)
+                if not settled:
+                    # Correlate the failed settlement with the just-committed usage
+                    # row for operators; the cost disambiguates among concurrent
+                    # calls on the same key; settle_payment never raises.
+                    logger.warning(
+                        f"x402 settlement failed for {masked_key} (${actual_cost} actual cost) — "
+                        "usage metered but not settled"
+                    )
+            else:
+                # A partial report (only one of the two fields) is a gateway bug —
+                # name exactly which fields are missing so it stays debuggable.
+                missing_fields = ", ".join(
+                    name
+                    for name, value in (
+                        ("payment_payload", payment_payload),
+                        ("payment_requirements", payment_requirements),
+                    )
+                    if not value
+                )
+                logger.warning(
+                    f"x402 usage report for {masked_key} is missing {missing_fields} — usage metered but never settled"
+                )
 
         return await _response()
     except HTTPException:
