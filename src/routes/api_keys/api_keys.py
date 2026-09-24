@@ -334,7 +334,8 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         logger.warning(f"x402 settlement failed for {masked_key} — usage metered but not settled")
                 else:
                     logger.warning(
-                        f"x402 usage report for {masked_key} has no payment payload — usage metered but never settled"
+                        f"x402 usage report for {masked_key} has no payment payload/requirements — "
+                        "usage metered but never settled"
                     )
 
                 # Metering is already committed; nothing left to commit — return explicitly.

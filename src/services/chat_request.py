@@ -26,6 +26,10 @@ class ChatRequestService:
         shares the caller's transaction — a failure rolls back the metering too, and the
         reporting gateway's retry registers once instead of duplicating it. If ``db`` is
         None, a dedicated session is opened and committed.
+
+        Deliberate asymmetry: the shared-session path has no try/except logging because
+        the exception must propagate so the caller's transaction rolls back (the caller
+        logs it) — don't swallow it here.
         """
         logger.debug(
             f"Recording chat request: model={model_name}, input_tokens={input_tokens}, "
