@@ -318,3 +318,53 @@ async def test_x402_usage_report_register_failure_returns_404(monkeypatch, async
         assert settle_calls == []  # never settle for a key that failed to meter
     finally:
         await _cleanup(user_id, api_key.id)
+
+
+async def test_route_deduction_failure_rolls_back_usage_row(monkeypatch, async_client):
+    """Route-level variant of the deduction-failure rollback: production reports go through
+    the shared-session path, so a flaky use_credits behind POST /api-keys/admin/usage must
+    roll the metering back too, and the gateway's retry registers exactly once."""
+    import src.routes.api_keys.api_keys as route_module
+
+    async def _fake_calculate_price(**_kwargs) -> float:
+        return 3.0
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
+
+    email = "usage-atomicity-route@example.com"
+    user_id = await _seed_user_by_email(email, prepaid=10.0)
+    chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=None)
+    key_id = chat_key.id
+
+    try:
+        original = CreditService.use_credits
+        state = {"raise": True}
+
+        async def _flaky_use_credits(*args, **kwargs):
+            if state["raise"]:
+                raise RuntimeError("deduction failed")
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(CreditService, "use_credits", _flaky_use_credits)
+
+        usage_payload = {
+            "key": chat_key.full_key,
+            "model_name": "test-text-model",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "cached_tokens": 0,
+        }
+
+        resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
+        assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
+        assert await _inference_call_count(key_id) == 0  # metering rolled back with the deduction
+        assert await _balance(user_id) == pytest.approx(10.0)
+
+        # The gateway retries after the failed report: exactly one row, one deduction.
+        state["raise"] = False
+        resp = await async_client.post("/api-keys/admin/usage", json=usage_payload)
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert await _inference_call_count(key_id) == 1
+        assert await _balance(user_id) == pytest.approx(8.0)  # 3.0 metered minus 1.0 tier-covered
+    finally:
+        await _cleanup(user_id, key_id)

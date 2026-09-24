@@ -596,12 +596,12 @@ class ApiKeyService:
         """
         logger.debug(f"Logging usage of {credits_used} credits for API key {key}")
 
-        if db is not None:
-            return await ApiKeyService._register_inference_call_on_session(
-                db, key, credits_used, model_name, input_tokens, output_tokens, cached_tokens, image_count
-            )
-
         try:
+            if db is not None:
+                return await ApiKeyService._register_inference_call_on_session(
+                    db, key, credits_used, model_name, input_tokens, output_tokens, cached_tokens, image_count
+                )
+
             async with AsyncSessionLocal() as own_db:
                 success = await ApiKeyService._register_inference_call_on_session(
                     own_db, key, credits_used, model_name, input_tokens, output_tokens, cached_tokens, image_count
