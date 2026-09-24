@@ -333,8 +333,18 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         # row for operators; settle_payment never raises.
                         logger.warning(f"x402 settlement failed for {masked_key} — usage metered but not settled")
                 else:
+                    # A partial report (only one of the two fields) is a gateway bug —
+                    # name exactly which fields are missing so it stays debuggable.
+                    missing_fields = ", ".join(
+                        name
+                        for name, value in (
+                            ("payment_payload", usage_log.payment_payload),
+                            ("payment_requirements", usage_log.payment_requirements),
+                        )
+                        if not value
+                    )
                     logger.warning(
-                        f"x402 usage report for {masked_key} has no payment payload/requirements — "
+                        f"x402 usage report for {masked_key} is missing {missing_fields} — "
                         "usage metered but never settled"
                     )
 
