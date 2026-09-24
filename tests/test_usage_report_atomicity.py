@@ -46,6 +46,7 @@ async def _seed_user_by_email(email: str, prepaid: float):
 
 
 async def _balance(user_id) -> float:
+    """Spendable balance, filtered like CreditService._get_balance_on_session."""
     from src.interfaces.credits import CreditTransactionStatus
 
     async with AsyncSessionLocal() as db:
@@ -53,6 +54,7 @@ async def _balance(user_id) -> float:
             await db.execute(
                 select(func.coalesce(func.sum(CreditTransaction.amount_left), 0.0)).where(
                     CreditTransaction.user_id == user_id,
+                    CreditTransaction.is_active == True,
                     CreditTransaction.status == CreditTransactionStatus.completed,
                 )
             )

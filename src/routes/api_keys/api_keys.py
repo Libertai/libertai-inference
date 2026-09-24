@@ -317,18 +317,24 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                     )
                 # Commit the metered usage before settling: settlement is an external
                 # HTTP call, which must not run with the metering transaction open.
+                # masked_key is read before the commit so it does not rely on the
+                # session's expire_on_commit=False staying set.
+                masked_key = api_key.masked_key
                 await db.commit()
 
                 if usage_log.payment_payload and usage_log.payment_requirements:
-                    await x402_service.settle_payment(
+                    settled = await x402_service.settle_payment(
                         usage_log.payment_payload,
                         usage_log.payment_requirements,
                         actual_cost,
                     )
+                    if not settled:
+                        # Correlate the failed settlement with the just-committed usage
+                        # row for operators; settle_payment never raises.
+                        logger.warning(f"x402 settlement failed for {masked_key} — usage metered but not settled")
                 else:
                     logger.warning(
-                        f"x402 usage report for {api_key.masked_key} has no payment payload — "
-                        "usage metered but never settled"
+                        f"x402 usage report for {masked_key} has no payment payload — usage metered but never settled"
                     )
 
                 # Metering is already committed; nothing left to commit — return explicitly.
