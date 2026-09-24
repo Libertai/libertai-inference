@@ -404,3 +404,41 @@ async def test_x402_settlement_failure_still_meters(monkeypatch, async_client):
         assert await _inference_call_count(api_key.id) == 1  # metering still committed
     finally:
         await _cleanup(user_id, api_key.id)
+
+
+async def test_usability_read_failure_returns_usable(monkeypatch, async_client):
+    """A committed report must never fail: if the post-metering usability read raises, the
+    route still answers 200 with invalid=None (key reported usable) — a 500 here would make
+    the gateway's retry duplicate the usage row the report already committed."""
+    import src.routes.api_keys.api_keys as route_module
+
+    async def _fake_calculate_price(**_kwargs) -> float:
+        return 3.0
+
+    monkeypatch.setattr(route_module.aleph_service, "calculate_price", _fake_calculate_price)
+
+    async def _raising_get_invalid_key_info(*_args, **_kwargs):
+        raise RuntimeError("usability read failed")
+
+    monkeypatch.setattr(route_module.ApiKeyService, "get_invalid_key_info", _raising_get_invalid_key_info)
+
+    email = "usage-atomicity-response@example.com"
+    user_id = await _seed_user_by_email(email, prepaid=10.0)
+    chat_key = await ApiKeyService.get_or_create_chat_api_key(user_id=user_id, user_address=None)
+
+    try:
+        resp = await async_client.post(
+            "/api-keys/admin/usage",
+            json={
+                "key": chat_key.full_key,
+                "model_name": "test-text-model",
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cached_tokens": 0,
+            },
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["invalid"] is None  # failed read reported as usable, not an error
+        assert await _inference_call_count(chat_key.id) == 1  # the report itself persisted
+    finally:
+        await _cleanup(user_id, chat_key.id)
