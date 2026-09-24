@@ -336,8 +336,12 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                     )
                     if not settled:
                         # Correlate the failed settlement with the just-committed usage
-                        # row for operators; settle_payment never raises.
-                        logger.warning(f"x402 settlement failed for {masked_key} — usage metered but not settled")
+                        # row for operators; the cost disambiguates among concurrent
+                        # calls on the same key; settle_payment never raises.
+                        logger.warning(
+                            f"x402 settlement failed for {masked_key} (${actual_cost} actual cost) — "
+                            "usage metered but not settled"
+                        )
                 else:
                     # A partial report (only one of the two fields) is a gateway bug —
                     # name exactly which fields are missing so it stays debuggable.
@@ -353,9 +357,6 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
                         f"x402 usage report for {masked_key} is missing {missing_fields} — "
                         "usage metered but never settled"
                     )
-
-                # Metering is already committed; nothing left to commit — return explicitly.
-                return await _response()
 
             else:
                 if isinstance(usage_log, ImageInferenceCallData):
@@ -397,8 +398,10 @@ async def register_inference_call(usage_log: InferenceCallData) -> InferenceCall
 
             # Commit metering, chat history, and the overflow deduction as one
             # transaction: a failure rolls back all of it, so the reporting gateway's
-            # retry registers once instead of duplicating the usage report.
-            await db.commit()
+            # retry registers once instead of duplicating the usage report. x402
+            # already committed above, before its external settlement call.
+            if api_key.type != ApiKeyType.x402:
+                await db.commit()
 
         return await _response()
     except HTTPException:
