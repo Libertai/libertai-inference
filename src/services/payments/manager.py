@@ -837,7 +837,10 @@ class PaymentManager:
                 )
         if owner.product == PRODUCT_LIBERCLAW:
             assert owner.liberclaw_account_id is not None  # liberclaw rows always carry it
-            await LiberclawService.update_tier_by_account_id(self.db, owner.liberclaw_account_id, tier)
+            # An admin override is a clean reset: no grandfathered cap survives it, same tier or not.
+            await LiberclawService.update_tier_by_account_id(
+                self.db, owner.liberclaw_account_id, tier, reset_override=True
+            )
         await self.db.flush()
 
     async def _live_at_provider(self, sub: PlanSubscription) -> bool:

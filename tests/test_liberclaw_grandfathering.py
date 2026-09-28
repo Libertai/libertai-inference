@@ -337,3 +337,14 @@ async def test_expiry_drops_the_override(db, monkeypatch):
     await db.refresh(lc_user)
     assert lc_user.tier == "free"
     assert lc_user.credits_limit_override is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["starter", "pro"])
+async def test_admin_override_tier_is_a_clean_reset(db, monkeypatch, tier):
+    """Same tier or not, an admin override leaves no grandfathered cap behind."""
+    mgr, owner, lc_user, _ = await _activated_starter(db, monkeypatch)
+    await mgr.override_tier(owner, tier)
+    await db.refresh(lc_user)
+    assert lc_user.tier == tier
+    assert lc_user.credits_limit_override is None

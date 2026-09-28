@@ -187,6 +187,9 @@ class LiberclawService:
     ) -> None:
         """Update tier for a Liberclaw user. Raises ValueError if tier invalid or user not found.
 
+        No route calls this since tier sync moved into PaymentManager (which goes through
+        ``update_tier_by_account_id``); kept for the bridge-resolution tests that exercise it.
+
         Resolves by ``liberclaw_account_id`` first when given (falls back to
         (user_id, user_type)), refreshing the stored email in place on an account-id
         hit — same as ``get_or_create_api_key``.
@@ -297,6 +300,8 @@ class LiberclawService:
         Used by Liberclaw to compensate the unused remainder of a plan cycle
         forfeited by a mid-cycle upgrade. Idempotent on ``external_reference``
         (webhook retries): an existing grant returns its original amount.
+        A grandfathered cap is only prorated while ``from_tier`` is still the user's
+        tier, so a caller that moves the tier first gets ``from_tier``'s list cap.
         Raises ValueError on unknown tier/user or fraction out of (0, 1].
         """
         if from_tier not in LIBERCLAW_TIERS:
@@ -371,17 +376,20 @@ class LiberclawService:
         return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference, commit=False)
 
     @staticmethod
-    async def update_tier_by_account_id(db, account_id: uuid.UUID, tier: str) -> None:
+    async def update_tier_by_account_id(db, account_id: uuid.UUID, tier: str, *, reset_override: bool = False) -> None:
         """Sync ``lc_users.tier`` for a webhook-driven effective-tier change, keyed by
         ``liberclaw_account_id``. Flush-only: the caller (PaymentManager) owns the webhook
         transaction. An unknown account is logged and skipped rather than raised — tier
         enforcement degrades, but only the invoice email lookup is allowed to fail the webhook.
+        ``reset_override`` drops a grandfathered cap even when the tier is unchanged.
         """
         lc_user = await LiberclawService.resolve_by_account_id(db, account_id)
         if lc_user is None:
             logger.error(f"update_tier_by_account_id: unknown liberclaw account {account_id}")
             return
         LiberclawService.set_tier(lc_user, tier)
+        if reset_override:
+            lc_user.credits_limit_override = None
         await db.flush()
 
     @staticmethod
