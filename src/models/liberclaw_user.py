@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, UUID, Index, String, UniqueConstraint, text
+from sqlalchemy import TIMESTAMP, UUID, Float, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -24,6 +24,10 @@ class LiberclawUser(Base):
     # LiberClaw's own users.id, set by the api-key call. Identity bridge to Invoice.liberclaw_account_id
     # (never key ownership on this row's user_id/user_type — that's the email-based identity, and emails recycle).
     liberclaw_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID, nullable=True, index=True)
+    # Grandfathered rolling-window cap, kept from before a repricing lowered this tier's.
+    # Tied to the tier it was granted on: cleared by ``LiberclawService.set_tier`` on any
+    # tier change, including the drop to free when the subscription ends. NULL = tier cap.
+    credits_limit_override: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="liberclaw_user")
     credit_grants: Mapped[list["LiberclawCreditGrant"]] = relationship(

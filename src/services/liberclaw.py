@@ -6,13 +6,14 @@ from sqlalchemy.sql import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
 from src.interfaces.liberclaw import LiberclawApiKeyResponse, LiberclawUserResponse
-from src.liberclaw_tiers import LIBERCLAW_TIERS, get_tier_config
+from src.liberclaw_tiers import LIBERCLAW_TIERS, effective_credits_limit, get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
 from src.services.api_key_pool import ApiKeyPoolService
+from src.subscription_tiers import DEFAULT_TIERS, PRODUCT_LIBERCLAW
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -217,7 +218,7 @@ class LiberclawService:
                 lc_user.liberclaw_account_id = liberclaw_account_id
             await LiberclawService._refresh_email_if_safe(db, lc_user, user_id, user_type)
 
-            lc_user.tier = tier
+            LiberclawService.set_tier(lc_user, tier)
             await db.commit()
 
     @staticmethod
@@ -239,9 +240,8 @@ class LiberclawService:
             if not lc_user:
                 raise ValueError(f"Liberclaw user not found: {user_id} ({user_type})")
 
-            tier_config = get_tier_config(lc_user.tier)
-            rolling_days = tier_config["rolling_window_days"]
-            credits_limit = tier_config["credits_limit"]
+            rolling_days = get_tier_config(lc_user.tier)["rolling_window_days"]
+            credits_limit = effective_credits_limit(lc_user)
 
             cutoff = datetime.now() - timedelta(days=rolling_days)
             usage = (
@@ -304,10 +304,6 @@ class LiberclawService:
         if not 0.0 < unused_fraction <= 1.0:
             raise ValueError(f"unused_fraction must be in (0, 1], got {unused_fraction}")
 
-        amount = round(LIBERCLAW_TIERS[from_tier]["credits_limit"] * unused_fraction, 2)
-        if amount <= 0:
-            raise ValueError("Grant amount rounds to zero")
-
         async with AsyncSessionLocal() as db:
             existing = (
                 (
@@ -336,6 +332,10 @@ class LiberclawService:
             )
             if not lc_user:
                 raise ValueError(f"Liberclaw user not found: {user_id} ({user_type})")
+
+            amount = round(LiberclawService.tier_credits_limit(lc_user, from_tier) * unused_fraction, 2)
+            if amount <= 0:
+                raise ValueError("Grant amount rounds to zero")
 
             return await LiberclawService._create_grant(db, lc_user.id, amount, external_reference)
 
@@ -381,8 +381,25 @@ class LiberclawService:
         if lc_user is None:
             logger.error(f"update_tier_by_account_id: unknown liberclaw account {account_id}")
             return
-        lc_user.tier = tier
+        LiberclawService.set_tier(lc_user, tier)
         await db.flush()
+
+    @staticmethod
+    def set_tier(lc_user: LiberclawUser, tier: str) -> None:
+        """The one write path for ``lc_user.tier``. A grandfathered cap belongs to the tier it
+        was kept on, so any tier change drops it, and so does landing on free: that is how a
+        subscription ending shows up here. A same-tier write (every renewal) keeps it."""
+        if tier != lc_user.tier or tier == DEFAULT_TIERS[PRODUCT_LIBERCLAW]:
+            lc_user.credits_limit_override = None
+        lc_user.tier = tier
+
+    @staticmethod
+    def tier_credits_limit(lc_user: LiberclawUser, tier: str) -> float:
+        """Window cap ``lc_user`` had on ``tier``, for prorating a remainder of it: their
+        grandfathered cap while ``tier`` is still their current one, else the tier's own."""
+        if lc_user.tier == tier:
+            return effective_credits_limit(lc_user)
+        return get_tier_config(tier)["credits_limit"]
 
     @staticmethod
     async def _create_grant(

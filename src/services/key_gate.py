@@ -21,7 +21,7 @@ from sqlalchemy.sql import func as sql_func
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType, InvalidKeyReason
 from src.interfaces.credits import CreditTransactionStatus
-from src.liberclaw_tiers import get_tier_config
+from src.liberclaw_tiers import effective_credits_limit, get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
@@ -274,7 +274,7 @@ async def fetch_key_aggregates(
             aggregates[key.id] = KeyAggregates(
                 tier_name=lc_user.tier,
                 liberclaw_usage=liberclaw_usage.get(key.id, 0.0),
-                liberclaw_limit=get_tier_config(lc_user.tier)["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0),
+                liberclaw_limit=effective_credits_limit(lc_user) + liberclaw_extra.get(lc_user.id, 0.0),
             )
         elif key.type in CHARGEABLE_KEY_TYPES and key.user_id is not None:
             user_id = key.user_id

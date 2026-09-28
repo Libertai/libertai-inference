@@ -1066,7 +1066,14 @@ class PaymentManager:
         fraction = round(min(remaining / period, 1.0), 4)
         if fraction <= 0:
             return
-        amount = round(LIBERCLAW_TIERS[old_sub.tier]["credits_limit"] * fraction, 2)
+        # Runs before the activation moves lc_users.tier off old_sub.tier, so a grandfathered
+        # cap is still on the row here and the remainder prorates what the owner really had.
+        lc_user = await LiberclawService.resolve_by_account_id(self.db, old_sub.liberclaw_account_id)
+        if lc_user is not None:
+            cap = LiberclawService.tier_credits_limit(lc_user, old_sub.tier)
+        else:
+            cap = LIBERCLAW_TIERS[old_sub.tier]["credits_limit"]
+        amount = round(cap * fraction, 2)
         if amount <= 0:
             return
         ref = f"upgrade_remainder:{old_sub.id}"
