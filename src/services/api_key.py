@@ -46,7 +46,7 @@ class AdminApiKeys(NamedTuple):
     valid: list[str]
     invalid: dict[str, InvalidKeyInfo]
     # key -> active tier name ("free", "go", "plus", "max" for user-owned keys;
-    # the liberclaw tier for liberclaw keys). Internal/shared keys are absent.
+    # "liberclaw:<tier>" for liberclaw keys). Internal/shared keys are absent.
     # (noqa: shared {} default is safe on a NamedTuple — never mutated at runtime)
     tiers: dict[str, str] = {}  # noqa: RUF012
 
