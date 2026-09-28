@@ -21,7 +21,7 @@ from sqlalchemy.sql import func as sql_func
 from src.config import config
 from src.interfaces.api_keys import ApiKeyType, InvalidKeyReason
 from src.interfaces.credits import CreditTransactionStatus
-from src.liberclaw_tiers import get_tier_config
+from src.liberclaw_tiers import effective_credits_limit, get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.credit_transaction import CreditTransaction
 from src.models.inference_call import InferenceCall
@@ -73,7 +73,7 @@ def _unusable(reason: InvalidKeyReason) -> KeyDecision:
 class KeyAggregates:
     """Usage inputs for one key's limit checks, all pre-fetched by ``fetch_key_aggregates``."""
 
-    # Active tier name — the entitlement tier for chargeable keys, the liberclaw tier for
+    # Active tier name — the entitlement tier for chargeable keys, "liberclaw:<tier>" for
     # liberclaw keys. None for keys that have neither.
     tier_name: str | None = None
     monthly_usage: float = 0.0  # this key, this calendar month
@@ -272,9 +272,11 @@ async def fetch_key_aggregates(
         if key.type == ApiKeyType.liberclaw and key.liberclaw_user is not None:
             lc_user = key.liberclaw_user
             aggregates[key.id] = KeyAggregates(
-                tier_name=lc_user.tier,
+                # Namespaced: the gateway gates models per liberclaw tier, and its load-shedding
+                # gate matches a bare "free" meant for LibertAI's own free tier.
+                tier_name=f"liberclaw:{lc_user.tier}",
                 liberclaw_usage=liberclaw_usage.get(key.id, 0.0),
-                liberclaw_limit=get_tier_config(lc_user.tier)["credits_limit"] + liberclaw_extra.get(lc_user.id, 0.0),
+                liberclaw_limit=effective_credits_limit(lc_user) + liberclaw_extra.get(lc_user.id, 0.0),
             )
         elif key.type in CHARGEABLE_KEY_TYPES and key.user_id is not None:
             user_id = key.user_id

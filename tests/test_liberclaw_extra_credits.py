@@ -127,7 +127,7 @@ async def test_over_cap_key_stays_valid_with_grant():
     lc, key = await _setup(usage=FREE_LIMIT + 1)
     try:
         assert key not in await _valid_keys()
-        await _grant(lc, fraction=0.5)  # +10 credits headroom
+        await _grant(lc, fraction=0.5)  # half a free cap of headroom
         assert key in await _valid_keys()
     finally:
         await _cleanup(lc.id)
@@ -152,7 +152,7 @@ async def test_key_invalid_once_grant_exhausted():
 async def test_overflow_consumes_grant_and_marks_row():
     lc, key = await _setup(usage=FREE_LIMIT)  # cap exactly exhausted
     try:
-        granted = await _grant(lc, fraction=0.5)
+        granted = await _grant(lc, fraction=1.0)  # a full free cap, enough for the 3.0 call
         assert await ApiKeyService.register_inference_call(key=key, credits_used=3.0, model_name="m")
         async with AsyncSessionLocal() as db:
             left = await LiberclawService.extra_credits_left(db, lc.id)

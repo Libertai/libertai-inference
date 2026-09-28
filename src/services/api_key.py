@@ -16,7 +16,7 @@ from src.interfaces.api_keys import (
     InvalidKeyInfo,
     invalid_key_info,
 )
-from src.liberclaw_tiers import get_tier_config
+from src.liberclaw_tiers import effective_credits_limit, get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
@@ -46,7 +46,7 @@ class AdminApiKeys(NamedTuple):
     valid: list[str]
     invalid: dict[str, InvalidKeyInfo]
     # key -> active tier name ("free", "go", "plus", "max" for user-owned keys;
-    # the liberclaw tier for liberclaw keys). Internal/shared keys are absent.
+    # "liberclaw:<tier>" for liberclaw keys). Internal/shared keys are absent.
     # (noqa: shared {} default is safe on a NamedTuple — never mutated at runtime)
     tiers: dict[str, str] = {}  # noqa: RUF012
 
@@ -684,8 +684,7 @@ class ApiKeyService:
                 # consume, skip the window query entirely.
                 grants = await LiberclawService.lock_grants(db, api_key.liberclaw_user_id)
                 if grants:
-                    tier_config = get_tier_config(lc_user.tier)
-                    cutoff = now - timedelta(days=tier_config["rolling_window_days"])
+                    cutoff = now - timedelta(days=get_tier_config(lc_user.tier)["rolling_window_days"])
                     window_usage = (
                         await db.execute(
                             select(
@@ -702,7 +701,7 @@ class ApiKeyService:
                             )
                         )
                     ).scalar()
-                    remaining_cap = max(0.0, tier_config["credits_limit"] - float(window_usage or 0.0))
+                    remaining_cap = max(0.0, effective_credits_limit(lc_user) - float(window_usage or 0.0))
                     overflow = max(0.0, credits_used - remaining_cap)
                     if overflow > 0:
                         consumed = LiberclawService.decrement_grants(grants, overflow)

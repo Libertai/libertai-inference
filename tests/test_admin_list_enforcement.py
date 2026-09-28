@@ -295,3 +295,33 @@ async def _balance(user_id) -> float:
             )
         ).scalar()
     return float(total or 0.0)
+
+
+@pytest.mark.parametrize("tier", ["free", "starter", "pro", "team"])
+async def test_liberclaw_key_tier_is_namespaced(tier):
+    """The gateway gates models on ``liberclaw:<tier>``; a bare "free" would also trip its
+    LibertAI free-tier load shedding."""
+    lc_id, key = await _setup_liberclaw(tier=tier)
+    try:
+        assert (await ApiKeyService.get_admin_all_api_keys()).tiers[key] == f"liberclaw:{tier}"
+    finally:
+        await _cleanup_liberclaw(lc_id)
+
+
+async def test_liberclaw_key_over_its_cap_still_carries_its_tier():
+    lc_id, key = await _setup_liberclaw(usage=LIBERCLAW_TIERS["free"]["credits_limit"] + 1)
+    try:
+        result = await ApiKeyService.get_admin_all_api_keys()
+        assert key in result.invalid
+        assert result.tiers[key] == "liberclaw:free"
+    finally:
+        await _cleanup_liberclaw(lc_id)
+
+
+@pytest.mark.parametrize("tier", [None, "plus"])
+async def test_user_key_tier_stays_bare(tier):
+    user_id, key = await _setup(tier=tier)
+    try:
+        assert (await ApiKeyService.get_admin_all_api_keys()).tiers[key] == (tier or "free")
+    finally:
+        await _cleanup(user_id)

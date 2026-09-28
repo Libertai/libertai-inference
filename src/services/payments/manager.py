@@ -837,7 +837,10 @@ class PaymentManager:
                 )
         if owner.product == PRODUCT_LIBERCLAW:
             assert owner.liberclaw_account_id is not None  # liberclaw rows always carry it
-            await LiberclawService.update_tier_by_account_id(self.db, owner.liberclaw_account_id, tier)
+            # An admin override is a clean reset: no grandfathered cap survives it, same tier or not.
+            await LiberclawService.update_tier_by_account_id(
+                self.db, owner.liberclaw_account_id, tier, reset_override=True
+            )
         await self.db.flush()
 
     async def _live_at_provider(self, sub: PlanSubscription) -> bool:
@@ -1066,7 +1069,14 @@ class PaymentManager:
         fraction = round(min(remaining / period, 1.0), 4)
         if fraction <= 0:
             return
-        amount = round(LIBERCLAW_TIERS[old_sub.tier]["credits_limit"] * fraction, 2)
+        # Runs before the activation moves lc_users.tier off old_sub.tier, so a grandfathered
+        # cap is still on the row here and the remainder prorates what the owner really had.
+        lc_user = await LiberclawService.resolve_by_account_id(self.db, old_sub.liberclaw_account_id)
+        if lc_user is not None:
+            cap = LiberclawService.tier_credits_limit(lc_user, old_sub.tier)
+        else:
+            cap = LIBERCLAW_TIERS[old_sub.tier]["credits_limit"]
+        amount = round(cap * fraction, 2)
         if amount <= 0:
             return
         ref = f"upgrade_remainder:{old_sub.id}"
