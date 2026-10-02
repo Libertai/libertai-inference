@@ -60,6 +60,9 @@ class EmailLoginRequest(BaseModel):
     # magic-link email points back there. Validated against an allowlist server-side; ignored
     # if missing or not allowed (falls back to FRONTEND_URL).
     redirect_base: str | None = None
+    # Same-origin path to land on after sign-in (e.g. "/claim?e=abc"), carried in the link so it
+    # survives the email opening in another tab or browser. Dropped unless it's a plain local path.
+    redirect_path: str | None = None
 
 
 class VerifyMagicLinkRequest(BaseModel):

@@ -3,6 +3,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import select
@@ -103,17 +104,31 @@ def _build_email_html(link: str, code: str) -> str:
     )
 
 
-async def send_magic_link_email(email: str, token: str, code: str, redirect_base: str | None = None) -> None:
+def safe_redirect_path(path: str | None) -> str | None:
+    """A same-origin path, or None: no scheme/host, no protocol-relative "//", no backslashes."""
+    if not path or len(path) > 512 or not path.startswith("/") or path.startswith("//"):
+        return None
+    if "\\" in path or any(c in path for c in "\r\n\t"):
+        return None
+    return path
+
+
+async def send_magic_link_email(
+    email: str, token: str, code: str, redirect_base: str | None = None, redirect_path: str | None = None
+) -> None:
     """Send the magic-link email. With no Resend key configured (dev), the transport logs it instead.
 
     `redirect_base` is the origin of the app the user signed in from (chat vs console); the link
-    points back there when it's an allowed frontend, else falls back to FRONTEND_URL."""
+    points back there when it's an allowed frontend, else falls back to FRONTEND_URL.
+    `redirect_path` rides along as `next`, for the frontend to land on after verifying."""
     try:
         link = f"{resolve_frontend_base(redirect_base)}/auth/verify?token={token}"
     except ValueError:
         # Runs as a BackgroundTask: an uncaught error would be swallowed silently. Log it instead.
         logger.error(f"FRONTEND_URL is not configured; cannot send magic-link email to {email}")
         return
+    if (path := safe_redirect_path(redirect_path)) is not None:
+        link += f"&next={quote(path, safe='')}"
     if not config.RESEND_API_KEY:
         # Log the code/link (not just the generic transport mock line) so dev login is usable.
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")

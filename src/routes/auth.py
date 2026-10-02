@@ -225,7 +225,9 @@ async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTa
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
         await db.commit()
-    background_tasks.add_task(magic_link.send_magic_link_email, request.email, token, code, request.redirect_base)
+    background_tasks.add_task(
+        magic_link.send_magic_link_email, request.email, token, code, request.redirect_base, request.redirect_path
+    )
 
 
 @router.post("/verify-magic-link")
