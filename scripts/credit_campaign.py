@@ -43,6 +43,7 @@ from src.interfaces.campaigns import AlephGrantStatus
 from src.models.base import AsyncSessionLocal
 from src.models.credit_campaign import CreditCampaign, CreditCampaignClaim, CreditCampaignWindow
 from src.services.aleph_credits import ALEPH_CREDITS_PER_USD, promo_wallet_address
+from src.services.campaign import utcnow
 
 # No 0/o/1/i/l: the code may get typed from a photo of the banner.
 CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
@@ -85,7 +86,7 @@ async def _print_funding(aleph_usd_committed: float) -> None:
     if balance is not None and balance < aleph_usd_committed:
         print(
             f"  ⚠ open/upcoming windows can claim up to ${aleph_usd_committed:,.2f} on Aleph: "
-            f"top it up from the backoffice (credit transfer, no expiry) before the event."
+            f"top it up from the backoffice (credit transfer, 12-month expiry) before the event."
         )
 
 
@@ -127,7 +128,7 @@ async def window(args) -> None:
 
 
 async def list_campaigns(_args) -> None:
-    now = datetime.utcnow()
+    now = utcnow()
     committed = 0.0
     async with AsyncSessionLocal() as db:
         campaigns = (await db.execute(select(CreditCampaign).order_by(CreditCampaign.created_at))).scalars().all()
