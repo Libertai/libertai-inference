@@ -90,6 +90,12 @@ class _Config:
     # An empty URL or secret disables push regardless of LIBERCLAW_BILLING_ENABLED (logged once).
     LIBERCLAW_API_URL: str
 
+    # Credit campaigns (event QR codes): the Aleph Cloud half is sent from this promo wallet's
+    # pre-funded credit balance, so the pool bounds what campaigns can give away on Aleph.
+    # Unset = Aleph grants are recorded and queued, and go out once it is set.
+    ALEPH_PROMO_PRIVATE_KEY: str
+    ALEPH_API_URL: str
+
     def __init__(self):
         load_dotenv()
         self.LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE = Web3.to_checksum_address(
@@ -174,6 +180,10 @@ class _Config:
         self.SUBSCRIPTION_TIER_LIMITS = os.getenv("SUBSCRIPTION_TIER_LIMITS", "")
         self.LIBERCLAW_BILLING_ENABLED = os.getenv("LIBERCLAW_BILLING_ENABLED", "False").lower() == "true"
         self.LIBERCLAW_API_URL = os.getenv("LIBERCLAW_API_URL", "")
+
+        # Credit campaigns
+        self.ALEPH_PROMO_PRIVATE_KEY = os.getenv("ALEPH_PROMO_PRIVATE_KEY", "")
+        self.ALEPH_API_URL = os.getenv("ALEPH_API_URL", "https://api2.aleph.im")
 
 
 config = _Config()

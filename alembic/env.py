@@ -12,6 +12,7 @@ from src.models.auth_code import AuthCode  # noqa
 from src.models.base import Base  # Import the Base from your models
 from src.models.blocked_email_domain import BlockedEmailDomain  # noqa
 from src.models.chat_request import ChatRequest  # noqa
+from src.models.credit_campaign import CreditCampaign, CreditCampaignClaim, CreditCampaignWindow  # noqa
 from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.entitlement_window import EntitlementWindow  # noqa
 from src.models.inference_call import InferenceCall  # noqa
