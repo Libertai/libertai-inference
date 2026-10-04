@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.plan_subscription import ACTIVE_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.services.credit import CreditService
+from src.services.entitlement import reset_windows
 from src.subscription_tiers import (
     DEFAULT_TIER,
     PAID_TIERS,
@@ -113,6 +114,7 @@ class CreditSubscriptionService:
             # Concurrent subscribe slipped past the select above; the partial
             # unique index (one live sub per user) is the source of truth.
             raise ValueError("You already have an active subscription")
+        await reset_windows(db, user.id)
         await CreditSubscriptionService._log(db, sub, "activated")
         return sub
 
@@ -155,6 +157,7 @@ class CreditSubscriptionService:
         sub.tier = new_tier
         sub.pending_tier = None
         await db.flush()
+        await reset_windows(db, user.id)
         await CreditSubscriptionService._log(db, sub, "upgraded", metadata={"prorated_charge": charge})
         return sub
 
