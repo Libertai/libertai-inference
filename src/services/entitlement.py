@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
@@ -152,6 +152,19 @@ async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | Non
             window.started_at = now
             window.expires_at = now + duration
         # else: still active (or just created) — leave it.
+    await db.flush()
+
+
+async def reset_windows(db: AsyncSession, user_id: uuid.UUID | None) -> None:
+    """Drop a user's windows so their next message opens fresh ones.
+
+    Called when a plan starts or is upgraded: usage accrued before then (on the old tier,
+    or on free while the subscription was lapsed) must not count against the new allowance.
+    Not called on a renewal of an already-active plan. Flushes; the caller controls the commit.
+    """
+    if user_id is None:
+        return
+    await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user_id))
     await db.flush()
 
 

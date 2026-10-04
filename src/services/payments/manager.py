@@ -28,6 +28,7 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.plan_subscription import ACTIVE_STATUSES, ENDED_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
+from src.services.entitlement import reset_windows
 from src.services.geo import vat_rate_for_currency
 from src.services.invoice import SERIES_LCLW, issue_invoice
 from src.services.liberclaw import LiberclawService
@@ -743,6 +744,8 @@ class PaymentManager:
             await self.db.flush()
         except IntegrityError:
             raise ValueError("User already has an active subscription")
+        if owner.product == PRODUCT_LIBERTAI:
+            await reset_windows(self.db, owner.user_id)
         return sub
 
     async def check_trial_eligibility(self, owner: Owner) -> tuple[bool, str | None]:
@@ -825,6 +828,8 @@ class PaymentManager:
         self.db.add(sub)
         await self.db.flush()
         await self._log_event(sub, "tier_overridden", metadata={"tier": tier})
+        if owner.product == PRODUCT_LIBERTAI:
+            await reset_windows(self.db, owner.user_id)
 
         if existing is not None:
             # An admin override moves no money: the row it replaces is retired but never
@@ -1206,7 +1211,12 @@ class PaymentManager:
             # Last mutation of this row, and only reached once every row it replaces is flushed
             # non-live: the one-live-subscription index is enforced per statement, so any flush
             # while two rows are live fails.
+            entitlement_starts = sub.status != "active"
             sub.status = "active"
+            # A renewal of a live plan keeps the running windows; a plan coming (back) into
+            # entitlement, upgrades included, starts on empty ones.
+            if entitlement_starts and owner.product == PRODUCT_LIBERTAI:
+                await reset_windows(self.db, owner.user_id)
             # First successful charge is "activated"; every later completed cycle is a renewal.
             await self._log_event(
                 sub,
