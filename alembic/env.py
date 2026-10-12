@@ -26,6 +26,7 @@ from src.models.oauth_connection import OAuthConnection  # noqa
 from src.models.plan_subscription import PlanSubscription  # noqa
 from src.models.plan_subscription_event import PlanSubscriptionEvent  # noqa
 from src.models.session import Session  # noqa
+from src.models.token_payment_quote import TokenPaymentQuote  # noqa
 from src.models.user import User  # noqa
 from src.models.user_billing_details import UserBillingDetails  # noqa
 from src.models.wallet_connection import WalletConnection  # noqa

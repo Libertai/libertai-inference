@@ -12,6 +12,9 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# LTAI payments are credited this multiple of their USD value.
+LTAI_PAYMENT_BOOST = 1.25
+
 
 class CreditService:
     @staticmethod
@@ -23,11 +26,13 @@ class CreditService:
         block_number: int | None = None,
         expired_at: datetime | None = None,
         status: CreditTransactionStatus = CreditTransactionStatus.completed,
+        apply_ltai_boost: bool = True,
     ) -> bool:
-        # Apply the boost for LTAI payments
+        """``apply_ltai_boost=False`` when ``amount`` is already the credit to grant (a quoted payment)."""
         amount = (
-            amount * 100 / 80
-            if provider in [CreditTransactionProvider.ltai_base, CreditTransactionProvider.ltai_solana]
+            amount * LTAI_PAYMENT_BOOST
+            if apply_ltai_boost
+            and provider in [CreditTransactionProvider.ltai_base, CreditTransactionProvider.ltai_solana]
             else amount
         )
 

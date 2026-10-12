@@ -8,3 +8,4 @@ from src.routes.credits.thirdweb import thirdweb_webhook  # noqa
 from src.routes.credits.general import update_expired_credit_transactions  # noqa
 from src.routes.credits.voucher import add_voucher_credits  # noqa
 from src.routes.credits.campaign import claim_campaign  # noqa
+from src.routes.credits.quote import create_token_payment_quote  # noqa

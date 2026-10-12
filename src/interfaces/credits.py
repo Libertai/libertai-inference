@@ -1,11 +1,11 @@
 import enum
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated
 
 from libertai_utils.chains.index import is_address_valid
 from libertai_utils.interfaces.blockchain import LibertaiChain
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_serializer, field_validator, model_validator
 
 
 class CreditTransactionProvider(str, Enum):
@@ -145,3 +145,42 @@ class GetVouchersRequest(BaseModel):
 class VoucherChangeExpireRequest(BaseModel):
     voucher_id: str
     expired_at: datetime | None
+
+
+class QuoteToken(str, Enum):
+    ltai = "ltai"
+    sol = "sol"
+
+
+class TokenPaymentQuoteRequest(BaseModel):
+    chain: LibertaiChain
+    token: QuoteToken
+    payer_address: str
+    credit_amount: float = Field(gt=0, le=100_000)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "TokenPaymentQuoteRequest":
+        if not is_address_valid(self.chain, self.payer_address):
+            raise ValueError(f"Invalid {self.chain.value} address")
+        # Whole cents only: the raw amount must not be tunable to match an arbitrary transfer.
+        self.credit_amount = round(self.credit_amount, 2)
+        if self.credit_amount <= 0:
+            raise ValueError("credit_amount must be at least 0.01")
+        return self
+
+
+class TokenPaymentQuoteResponse(BaseModel):
+    id: str
+    chain: LibertaiChain
+    token: QuoteToken
+    payer_address: str
+    credit_amount: float
+    token_price: float
+    # Smallest token unit as a decimal string: the exact amount to send for the quote to apply.
+    token_amount_raw: str
+    decimals: int
+    expires_at: datetime
+
+    @field_serializer("expires_at")
+    def _serialize_expires_at(self, value: datetime) -> str:
+        return value.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
