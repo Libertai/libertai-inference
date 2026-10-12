@@ -3,17 +3,20 @@ import base64
 import hashlib
 import json
 import struct
+from datetime import UTC, datetime
 
+from libertai_utils.interfaces.blockchain import LibertaiChain
 from solana.rpc.api import Client
 from solders.pubkey import Pubkey
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
-from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
+from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus, QuoteToken
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.services.credit import CreditService
+from src.services.token_quote import claim_quote
 from src.utils.logger import setup_logger
 from src.utils.token import get_sol_token_price, get_token_price
 
@@ -148,7 +151,12 @@ class SolanaService:
                     )
                     if tx.value:
                         await self._process_transaction(
-                            tx.value, signature_str, ltai_token_price, sol_token_price, sig_info.slot
+                            tx.value,
+                            signature_str,
+                            ltai_token_price,
+                            sol_token_price,
+                            sig_info.slot,
+                            sig_info.block_time,
                         )
                         self.last_processed_slot = sig_info.slot
                         processed_signatures.append(signature_str)
@@ -159,7 +167,13 @@ class SolanaService:
         return processed_signatures
 
     async def _process_transaction(
-        self, value, signature: str, ltai_token_price: float, sol_token_price: float, slot: int
+        self,
+        value,
+        signature: str,
+        ltai_token_price: float,
+        sol_token_price: float,
+        slot: int,
+        block_time: int | None = None,
     ) -> list[str]:
         """Process individual transaction if it contains PaymentEvent or SolPaymentEvent"""
         try:
@@ -176,14 +190,32 @@ class SolanaService:
                 logger.info(f"💰 Token Payment: {amount_after} tokens from {payment_event['user']} | Tx: {signature}")
                 amount = ltai_token_price * amount_after
                 provider = CreditTransactionProvider.ltai_solana
+                token = QuoteToken.ltai
             elif payment_event["event_type"] == "sol_payment":
                 amount_after = payment_event["amount"] / (10**9)
                 logger.info(f"💰 SOL Payment: {amount_after} SOL from {payment_event['user']} | Tx: {signature}")
                 amount = sol_token_price * amount_after
                 provider = CreditTransactionProvider.sol_solana
+                token = QuoteToken.sol
             else:
                 logger.warning(f"Unknown payment event type: {payment_event['event_type']}")
                 return []
+
+            quote = None
+            if payment_event["status"] == CreditTransactionStatus.completed and block_time is not None:
+                paid_at = datetime.fromtimestamp(block_time, UTC).replace(tzinfo=None)
+                async with AsyncSessionLocal() as db:
+                    quote = await claim_quote(
+                        db,
+                        LibertaiChain.solana,
+                        token,
+                        payment_event["user"],
+                        payment_event["amount"],
+                        paid_at,
+                        signature,
+                    )
+            if quote is not None:
+                amount = quote.credit_amount
 
             await CreditService.add_credits(
                 provider=provider,
@@ -192,6 +224,7 @@ class SolanaService:
                 external_reference=signature,
                 block_number=slot,
                 status=payment_event["status"],
+                apply_ltai_boost=quote is None,
             )
 
         except Exception as e:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from libertai_utils.chains.index import format_address
@@ -9,12 +10,13 @@ from sqlalchemy import select
 from web3 import Web3
 
 from src.config import config
-from src.interfaces.credits import CreditTransactionProvider
+from src.interfaces.credits import CreditTransactionProvider, QuoteToken
 from src.models.base import AsyncSessionLocal
 from src.models.credit_transaction import CreditTransaction
 from src.routes.credits import router
 from src.services.credit import CreditService
 from src.services.solana import SolanaService
+from src.services.token_quote import claim_quote
 from src.utils.cron import ltai_base_payments_lock, ltai_solana_payments_lock, scheduler
 from src.utils.logger import setup_logger
 from src.utils.pg_locks import LTAI_BASE_LOCK_ID, LTAI_SOLANA_LOCK_ID, single_runner
@@ -95,17 +97,27 @@ async def handle_payment_event(event) -> str:
     logger.debug(f"Processing payment event: {event}")
 
     external_reference = f"0x{event['transactionHash'].hex()}"
-    sender = event["args"]["sender"]
-    ltai_amount = event["args"]["amount"] / 10**18
+    sender = format_address(LibertaiChain.base, event["args"]["sender"])
+    raw_amount = event["args"]["amount"]
     block_number = event["blockNumber"]
 
-    token_price = await get_token_price()  # Get token/USD price
-    amount = token_price * ltai_amount  # Calculate USD value
+    block = await asyncio.to_thread(w3.eth.get_block, block_number)
+    paid_at = datetime.fromtimestamp(block["timestamp"], UTC).replace(tzinfo=None)
+    async with AsyncSessionLocal() as db:
+        quote = await claim_quote(
+            db, LibertaiChain.base, QuoteToken.ltai, sender, raw_amount, paid_at, external_reference
+        )
+
+    if quote is not None:
+        amount = quote.credit_amount
+    else:
+        amount = await get_token_price() * (raw_amount / 10**18)
     await CreditService.add_credits(
         CreditTransactionProvider.ltai_base,
-        format_address(LibertaiChain.base, sender),
+        sender,
         amount,
         external_reference,
         block_number,
+        apply_ltai_boost=quote is None,
     )
     return external_reference
