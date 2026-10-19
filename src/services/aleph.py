@@ -2,6 +2,7 @@ import time
 
 import aiohttp
 
+from src.config import config
 from src.interfaces.aleph import AlephAPIResponse, AudioPricing, EmbeddingPricing, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
@@ -12,9 +13,14 @@ class AlephService:
     __last_fetch_time: float = 0
     __cache_ttl = 300  # 5 minutes
     models_data: AlephAPIResponse | None = None
-    __api_url = (
-        "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=LTAI_PRICING"
-    )
+
+    @staticmethod
+    def _api_url() -> str:
+        """Composed per fetch instead of frozen at import, so an env override (or a test
+        mutating config) takes effect on the next fetch."""
+        return (
+            f"{config.ALEPH_API_URL}/api/v0/aggregates/{config.ALEPH_PRICING_AGGREGATE_ADDRESS}.json?keys=LTAI_PRICING"
+        )
 
     async def fetch_models_data(self) -> AlephAPIResponse:
         """Fetch models data from Aleph API"""
@@ -27,7 +33,7 @@ class AlephService:
 
         logger.debug("Fetching fresh Aleph models data")
         try:
-            async with aiohttp.ClientSession() as session, session.get(self.__api_url) as response:
+            async with aiohttp.ClientSession() as session, session.get(self._api_url()) as response:
                 response.raise_for_status()
                 data = await response.json()
                 parsed_data = AlephAPIResponse.model_validate(data)
