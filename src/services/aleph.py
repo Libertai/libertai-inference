@@ -2,6 +2,7 @@ import time
 
 import aiohttp
 
+from src.config import config
 from src.interfaces.aleph import AlephAPIResponse, AudioPricing, EmbeddingPricing, ModelInfo, TextPricing
 from src.utils.logger import setup_logger
 
@@ -13,7 +14,7 @@ class AlephService:
     __cache_ttl = 300  # 5 minutes
     models_data: AlephAPIResponse | None = None
     __api_url = (
-        "https://api2.aleph.im/api/v0/aggregates/0xe1F7220D201C64871Cefb25320a8a588393eE508.json?keys=LTAI_PRICING"
+        f"{config.ALEPH_API_URL}/api/v0/aggregates/{config.ALEPH_PRICING_AGGREGATE_ADDRESS}.json?keys=LTAI_PRICING"
     )
 
     async def fetch_models_data(self) -> AlephAPIResponse:

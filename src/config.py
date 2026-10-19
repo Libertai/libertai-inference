@@ -95,6 +95,7 @@ class _Config:
     # Unset = Aleph grants are recorded and queued, and go out once it is set.
     ALEPH_PROMO_PRIVATE_KEY: str
     ALEPH_API_URL: str
+    ALEPH_PRICING_AGGREGATE_ADDRESS: str
 
     def __init__(self):
         load_dotenv()
@@ -184,6 +185,11 @@ class _Config:
         # Credit campaigns
         self.ALEPH_PROMO_PRIVATE_KEY = os.getenv("ALEPH_PROMO_PRIVATE_KEY", "")
         self.ALEPH_API_URL = os.getenv("ALEPH_API_URL", "https://api2.aleph.im")
+        # Aggregate address holding the LTAI_PRICING models/price list (moved once
+        # already; env-overridable so the next move needs no code change).
+        self.ALEPH_PRICING_AGGREGATE_ADDRESS = os.getenv(
+            "ALEPH_PRICING_AGGREGATE_ADDRESS", "0x238224C744F4b90b4494516e074D2676ECfC6803"
+        )
 
 
 config = _Config()
