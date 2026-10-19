@@ -7,6 +7,19 @@ from solders.pubkey import Pubkey
 from web3 import Web3
 
 
+def normalize_eth_address(name: str, value: str) -> ChecksumAddress:
+    """EIP-55 checksum an address coming from config/env.
+
+    Unambiguous casing (all-lowercase or the exact checksum) is normalized to the
+    checksummed form; a mixed-case value that fails the checksum is a typo and fails
+    fast at boot instead of surfacing later as API fetch failures.
+    """
+    checksummed = Web3.to_checksum_address(value)
+    if checksummed != value and value != value.lower():
+        raise RuntimeError(f"{name} {value} is not a valid EIP-55 checksummed address")
+    return checksummed
+
+
 class _Config:
     LTAI_PAYMENT_PROCESSOR_CONTRACT_BASE: ChecksumAddress
     LTAI_PAYMENT_PROCESSOR_CONTRACT_SOLANA: Pubkey
@@ -187,8 +200,9 @@ class _Config:
         self.ALEPH_API_URL = os.getenv("ALEPH_API_URL", "https://api2.aleph.im")
         # Aggregate address holding the LTAI_PRICING models/price list (moved once
         # already; env-overridable so the next move needs no code change).
-        self.ALEPH_PRICING_AGGREGATE_ADDRESS = os.getenv(
-            "ALEPH_PRICING_AGGREGATE_ADDRESS", "0x238224C744F4b90b4494516e074D2676ECfC6803"
+        self.ALEPH_PRICING_AGGREGATE_ADDRESS = normalize_eth_address(
+            "ALEPH_PRICING_AGGREGATE_ADDRESS",
+            os.getenv("ALEPH_PRICING_AGGREGATE_ADDRESS", "0x238224C744F4b90b4494516e074D2676ECfC6803"),
         )
 
 
