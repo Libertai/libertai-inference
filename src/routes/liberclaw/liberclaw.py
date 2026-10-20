@@ -100,7 +100,10 @@ async def deactivate_api_key(request: LiberclawApiKeyRequest) -> LiberclawApiKey
 
 @router.post("/extra-credits", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
 async def grant_extra_credits(request: LiberclawExtraCreditsGrant) -> LiberclawExtraCreditsResponse:
-    """Grant extra usage credits to a Liberclaw user (idempotent on external_reference)."""
+    """Grant extra usage credits to a Liberclaw user (idempotent on external_reference).
+
+    Call before moving the user off ``from_tier``: a grandfathered cap is prorated only while
+    ``from_tier`` is still their tier."""
     try:
         amount = await LiberclawService.grant_extra_credits(
             user_id=request.user_id,
