@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, select, true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
@@ -237,29 +237,43 @@ async def window_usage_by_users(
     doesn't drain the allowance.
 
     Users with no active window are absent from the result (treated as 0 used).
+
+    The sum runs per key in a LATERAL subquery so ``(api_key_id, used_at >= started_at)``
+    is a range scan on ``ix_inference_calls_api_key_id_used_at``. As a flat join the
+    ``used_at`` bound comes from a join column the planner can't push into the index, and
+    it parallel-seq-scanned all of ``inference_calls`` on every usage report (2026-10-24).
     """
     if not user_ids:
         return {}
+    window = (
+        select(EntitlementWindow.user_id, EntitlementWindow.started_at)
+        .where(
+            EntitlementWindow.user_id.in_(user_ids),
+            EntitlementWindow.kind == kind,
+            EntitlementWindow.expires_at > now,
+        )
+        .subquery()
+    )
+    key_usage = (
+        select(sql_func.coalesce(sql_func.sum(InferenceCall.tier_credits_used), 0.0).label("used"))
+        .where(
+            InferenceCall.api_key_id == ApiKeyDB.id,
+            InferenceCall.used_at >= window.c.started_at,
+        )
+        .lateral()
+    )
     rows = (
         await db.execute(
-            select(
-                ApiKeyDB.user_id,
-                sql_func.coalesce(sql_func.sum(InferenceCall.tier_credits_used), 0.0),
-            )
-            .join(InferenceCall, InferenceCall.api_key_id == ApiKeyDB.id)
+            select(ApiKeyDB.user_id, sql_func.sum(key_usage.c.used))
+            .select_from(window)
             .join(
-                EntitlementWindow,
+                ApiKeyDB,
                 and_(
-                    EntitlementWindow.user_id == ApiKeyDB.user_id,
-                    EntitlementWindow.kind == kind,
+                    ApiKeyDB.user_id == window.c.user_id,
+                    ApiKeyDB.type.in_(CHARGEABLE_KEY_TYPES),
                 ),
             )
-            .where(
-                ApiKeyDB.user_id.in_(user_ids),
-                ApiKeyDB.type.in_(CHARGEABLE_KEY_TYPES),
-                EntitlementWindow.expires_at > now,
-                InferenceCall.used_at >= EntitlementWindow.started_at,
-            )
+            .join(key_usage, true())
             .group_by(ApiKeyDB.user_id)
         )
     ).all()
