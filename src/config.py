@@ -75,6 +75,9 @@ class _Config:
     SIGNUP_RATE_IP_LIMIT: int
     SIGNUP_RATE_NETWORK_LIMIT: int
     SIGNUP_RATE_WINDOW: timedelta
+    # Emergency circuit breaker: False refuses to create new accounts while existing users
+    # can still sign in. Flip back on once an attack subsides.
+    SIGNUPS_ENABLED: bool
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
     ENCRYPTION_KEY: str
@@ -176,6 +179,7 @@ class _Config:
         self.SIGNUP_RATE_IP_LIMIT = int(os.getenv("SIGNUP_RATE_IP_LIMIT", "5"))
         self.SIGNUP_RATE_NETWORK_LIMIT = int(os.getenv("SIGNUP_RATE_NETWORK_LIMIT", "20"))
         self.SIGNUP_RATE_WINDOW = timedelta(hours=int(os.getenv("SIGNUP_RATE_WINDOW_HOURS", "24")))
+        self.SIGNUPS_ENABLED = os.getenv("SIGNUPS_ENABLED", "True").lower() == "true"
 
         # Token encryption (Fernet)
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")

@@ -80,6 +80,19 @@ async def test_email_magic_link_verify(async_client, monkeypatch):
     assert resp.json()["access_token"]
 
 
+async def test_login_email_refuses_new_signups_when_paused(async_client, monkeypatch):
+    monkeypatch.setattr(config, "SIGNUPS_ENABLED", False)
+
+    resp = await async_client.post(
+        "/auth/login/email",
+        json={"email": "paused-signup@example.com"},
+        headers={"x-forwarded-for": "198.51.100.42"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "signups_paused"
+
+
 async def test_email_magic_link_verify_refuses_suspended_user(async_client, monkeypatch):
     monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
     email = "suspended-login@example.com"

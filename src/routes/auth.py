@@ -42,6 +42,7 @@ from src.services.disposable_email import DisposableEmailError
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
+    get_user_by_email,
     update_user_profile,
 )
 from src.utils.encryption import decrypt, encrypt
@@ -245,6 +246,14 @@ async def login_email(
     login request (the magic link is persisted before we return).
     """
     await _enforce_signup_rate_limit(http_request)
+    if not config.SIGNUPS_ENABLED:
+        async with AsyncSessionLocal() as db:
+            existing = await get_user_by_email(db, request.email)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
+            )
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
         await db.commit()
@@ -320,7 +329,10 @@ async def oauth_callback(
     frontend_base = resolve_frontend_base(oauth_redirect)
 
     async with AsyncSessionLocal() as db:
-        user, _ = await get_or_create_user_by_oauth(db, info)
+        user, created = await get_or_create_user_by_oauth(db, info)
+        if created and not config.SIGNUPS_ENABLED:
+            await db.rollback()
+            return RedirectResponse(f"{frontend_base}/auth/callback?error=signups_paused")
         try:
             pair = await _issue_token_pair(db, user)
         except HTTPException as exc:
