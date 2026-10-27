@@ -255,11 +255,12 @@ async def login_email(
     The email is dispatched in the background so send latency/failures never block the
     login request (the magic link is persisted before we return).
     """
-    await _enforce_signup_rate_limit(http_request)
-    if not config.SIGNUPS_ENABLED:
-        async with AsyncSessionLocal() as db:
-            existing = await get_user_by_email(db, request.email)
-        if existing is None:
+    async with AsyncSessionLocal() as db:
+        existing = await get_user_by_email(db, request.email)
+    if existing is None:
+        # Existing users always get their link; only new-address attempts are throttled.
+        await _enforce_signup_rate_limit(http_request)
+        if not config.SIGNUPS_ENABLED:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
