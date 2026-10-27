@@ -6,6 +6,7 @@ managed operationally. The package floor must be bumped regularly for the first 
 useful; the second is where domains no public list carries are recorded.
 """
 
+import dns.asyncresolver
 from disposable_email_domains import blocklist  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,58 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.blocked_email_domain import BlockedEmailDomain
 
 _BLOCKLIST: frozenset[str] = frozenset(blocklist)
+
+# Mail exchangers run by disposable-mail providers. A custom domain pointed at one of these
+# is a throwaway signup even though its name is not on any domain list (the current farm
+# registers a fresh .shop/.org/.com per account and points it at duckmail).
+_DISPOSABLE_MX: frozenset[str] = frozenset(
+    {
+        "duckmail.sbs",
+        "xzcoot.com",
+        "kashre.com",
+        "lucktaro.com",
+        "paxeluni.com",
+        "tanpony.com",
+        "37xiao.com",
+        "mailinator.com",
+        "guerrillamail.com",
+        "sharklasers.com",
+        "grr.la",
+        "yopmail.com",
+        "dropmail.me",
+        "mohmal.com",
+        "10minutemail.com",
+        "tempmail.plus",
+        "mail.tm",
+        "inboxkitten.com",
+        "spam4.me",
+        "getnada.com",
+        "emailondeck.com",
+        "temp-mail.org",
+        "fakeinbox.com",
+        "dispostable.com",
+        "mintemail.com",
+        "mailcatch.com",
+        "throwawaymail.com",
+        "harakirimail.com",
+        "mailsac.com",
+        "maildrop.cc",
+        "emailfake.com",
+        "generator.email",
+        "tempr.email",
+        "discard.email",
+        "trashmail.com",
+        "einrot.com",
+        "mailnesia.com",
+        "spambog.com",
+        "tempinbox.com",
+        "mt2009.com",
+        "trash2009.com",
+        "trashymail.com",
+        "tyldd.com",
+        "uggsrock.com",
+    }
+)
 
 
 class DisposableEmailError(ValueError):
@@ -45,6 +98,39 @@ def _domain_suffixes(domain: str) -> list[str]:
     """
     labels = domain.split(".")
     return [".".join(labels[i:]) for i in range(len(labels) - 1)]
+
+
+async def resolve_mx_hosts(domain: str) -> list[str]:
+    """MX hostnames for a domain, lowercased without the trailing dot.
+
+    Resolution failure (timeout, NXDOMAIN, no resolver) is not evidence of abuse: return an
+    empty list so the signup proceeds rather than turning a DNS blip into a lockout.
+    """
+    try:
+        answers = await dns.asyncresolver.resolve(domain, "MX", lifetime=2.0)
+    except Exception:
+        return []
+    hosts = []
+    for answer in answers:
+        host = str(answer.exchange).rstrip(".").lower()
+        if host:
+            hosts.append(host)
+    return hosts
+
+
+def _is_disposable_mx_host(host: str) -> bool:
+    return any(host == suffix or host.endswith(f".{suffix}") for suffix in _DISPOSABLE_MX)
+
+
+async def is_disposable_mx_email(email: str) -> bool:
+    """Whether the address's domain is served by a known disposable-mail exchanger.
+
+    Catches custom domains that rotate their name but keep using a throwaway provider's MX.
+    """
+    domain = signup_domain(email)
+    if not domain:
+        return False
+    return any(_is_disposable_mx_host(host) for host in await resolve_mx_hosts(domain))
 
 
 def is_disposable_email(email: str) -> bool:

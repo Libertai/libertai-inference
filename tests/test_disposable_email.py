@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from src.models.user import User
+from src.services import disposable_email
 from src.services.disposable_email import _BLOCKLIST, DisposableEmailError, is_disposable_email
 from src.services.users import get_or_create_user_by_email
 
@@ -57,3 +58,37 @@ def test_subdomain_of_a_package_list_domain_is_flagged():
 
 def test_lookalike_package_domain_is_not_flagged():
     assert not is_disposable_email(f"x@{DISPOSABLE}.example")
+
+
+def test_disposable_mx_host_matches_subdomains():
+    assert disposable_email._is_disposable_mx_host("mail.duckmail.sbs")
+    assert disposable_email._is_disposable_mx_host("duckmail.sbs")
+    assert not disposable_email._is_disposable_mx_host("aspmx.l.google.com")
+    assert not disposable_email._is_disposable_mx_host("duckmail.sbs.example")
+
+
+@pytest.mark.asyncio
+async def test_custom_domain_on_disposable_mx_is_blocked(monkeypatch):
+    async def fake_mx(_domain):
+        return ["mail.duckmail.sbs"]
+
+    monkeypatch.setattr(disposable_email, "resolve_mx_hosts", fake_mx)
+    assert await disposable_email.is_disposable_mx_email("new@rotating-custom.shop") is True
+
+
+@pytest.mark.asyncio
+async def test_custom_domain_on_normal_mx_is_allowed(monkeypatch):
+    async def fake_mx(_domain):
+        return ["aspmx.l.google.com"]
+
+    monkeypatch.setattr(disposable_email, "resolve_mx_hosts", fake_mx)
+    assert await disposable_email.is_disposable_mx_email("new@legit-business.shop") is False
+
+
+@pytest.mark.asyncio
+async def test_mx_lookup_failure_fails_open(monkeypatch):
+    async def fake_mx(_domain):
+        return []
+
+    monkeypatch.setattr(disposable_email, "resolve_mx_hosts", fake_mx)
+    assert await disposable_email.is_disposable_mx_email("new@legit-business.shop") is False
