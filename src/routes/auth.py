@@ -280,7 +280,13 @@ async def verify_magic_link_route(request: VerifyMagicLinkRequest, response: fas
         if email is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link")
         try:
-            user, _ = await get_or_create_user_by_email(db, email)
+            user, created = await get_or_create_user_by_email(db, email)
+            if created and not config.SIGNUPS_ENABLED:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
+                )
         except DisposableEmailError:
             logger.warning("Refused signup on a blocked email domain: %s", email)
             raise HTTPException(

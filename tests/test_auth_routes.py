@@ -85,6 +85,24 @@ async def test_refresh_rotation(async_client):
     assert reused.status_code == 401
 
 
+async def test_email_magic_link_verify_refuses_new_signups_when_paused(async_client, monkeypatch):
+    async with AsyncSessionLocal() as db:
+        _token, code = await create_magic_link(db, "paused-verify@example.com")
+        await db.commit()
+    monkeypatch.setattr(config, "SIGNUPS_ENABLED", False)
+
+    resp = await async_client.post(
+        "/auth/verify-magic-link", json={"email": "paused-verify@example.com", "code": code}
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "signups_paused"
+    async with AsyncSessionLocal() as db:
+        assert (
+            await db.execute(select(User).where(User.email == "paused-verify@example.com"))
+        ).scalars().first() is None
+
+
 async def test_email_magic_link_verify(async_client, monkeypatch):
     monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
     async with AsyncSessionLocal() as db:
