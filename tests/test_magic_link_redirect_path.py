@@ -34,9 +34,10 @@ async def _sent_link(monkeypatch, redirect_path):
     async def fake_send(to, subject, html):
         sent["html"] = html
 
+    monkeypatch.setattr(config, "SMTP_HOST", "")
     monkeypatch.setattr(config, "RESEND_API_KEY", "test")
     monkeypatch.setattr(config, "FRONTEND_URL", "https://console.libertai.io")
-    monkeypatch.setattr(magic_link, "send_email", fake_send)
+    monkeypatch.setattr(magic_link, "send_login_email", fake_send)
     await magic_link.send_magic_link_email("a@example.com", "tok", "123456", None, redirect_path)
     return sent["html"]
 

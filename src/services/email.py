@@ -1,4 +1,12 @@
-"""Shared email transport (Resend). With no API key configured (dev), sends are logged and reported OK."""
+"""Email transports: Proton SMTP for sign-in links, Resend for lifecycle mail.
+
+With neither configured (dev), sends are logged and reported OK.
+"""
+
+import asyncio
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import httpx
 
@@ -30,6 +38,23 @@ async def close_client() -> None:
     if _client is not None:
         await _client.aclose()
         _client = None
+
+
+def _send_smtp(to: str, subject: str, html: str, headers: dict[str, str] | None, sender: str) -> None:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to
+    for name, value in (headers or {}).items():
+        msg[name] = value
+    msg.attach(MIMEText(html, "html"))
+
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as server:
+        if config.SMTP_USE_TLS:
+            server.starttls()
+        if config.SMTP_USER and config.SMTP_PASSWORD:
+            server.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        server.sendmail(sender, [to], msg.as_string())
 
 
 async def send_email(
@@ -70,3 +95,21 @@ async def send_email(
 
     logger.info(f"Email sent to {to} ({subject!r})")
     return True
+
+
+async def send_login_email(to: str, subject: str, html: str) -> bool:
+    """Send a sign-in email through the Proton SMTP account.
+
+    Falls back to Resend when SMTP is not configured, so deployments mid-migration still deliver.
+    True on success (or in dev mock mode), False on transport failure.
+    """
+    if not config.SMTP_HOST:
+        return await send_email(to, subject, html)
+
+    try:
+        await asyncio.to_thread(_send_smtp, to, subject, html, None, config.SMTP_FROM)
+        logger.info(f"Login email sent to {to} ({subject!r})")
+        return True
+    except Exception as e:
+        logger.error(f"SMTP send failed for {to}: {e}")
+        return False

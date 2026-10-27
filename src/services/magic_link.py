@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import config
 from src.models.magic_link import MagicLink
-from src.services.email import send_email
+from src.services.email import send_login_email
 from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
 
@@ -129,8 +129,8 @@ async def send_magic_link_email(
         return
     if (path := safe_redirect_path(redirect_path)) is not None:
         link += f"&next={quote(path, safe='')}"
-    if not config.RESEND_API_KEY:
+    if not config.SMTP_HOST and not config.RESEND_API_KEY:
         # Log the code/link (not just the generic transport mock line) so dev login is usable.
         logger.warning(f"[magic-link mock] to={email} code={code} link={link}")
         return
-    await send_email(email, "Your LibertAI sign-in link", _build_email_html(link, code))
+    await send_login_email(email, "Your LibertAI sign-in link", _build_email_html(link, code))
