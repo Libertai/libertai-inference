@@ -92,6 +92,7 @@ import src.models.oauth_connection
 import src.models.plan_subscription
 import src.models.plan_subscription_event
 import src.models.session
+import src.models.signup_rate_limit
 import src.models.token_payment_quote
 import src.models.user
 import src.models.wallet_connection  # noqa: F401

@@ -34,7 +34,7 @@ from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
 from src.models.session import Session
 from src.models.user import User
-from src.services import magic_link, oauth
+from src.services import magic_link, oauth, signup_rate_limit
 from src.services.auth import create_access_token, get_current_user, get_optional_user
 from src.services.auth_tokens import REFRESH, create_refresh_token, decode_token
 from src.services.auth_tokens import create_access_token as create_user_access_token
@@ -215,13 +215,36 @@ async def update_me(request: UpdateProfileRequest, user: User = Depends(get_curr
 # --- Email magic link ---
 
 
+async def _enforce_signup_rate_limit(http_request: fastapi.Request) -> None:
+    """Reject a sign-in attempt when this IP or its network is over the daily allowance.
+
+    Keyed on the source address, so rotating custom email domains do not bypass it.
+    """
+    ip = signup_rate_limit.client_ip(http_request)
+    if ip is None:
+        return
+    async with AsyncSessionLocal() as db:
+        state = await signup_rate_limit.consume(db, ip)
+    if state.allowed:
+        return
+    retry_after = signup_rate_limit.retry_after_seconds(state)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={"code": "rate_limited", "message": "Too many sign-in attempts. Try again later."},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 @router.post("/login/email", status_code=status.HTTP_204_NO_CONTENT)
-async def login_email(request: EmailLoginRequest, background_tasks: BackgroundTasks) -> None:
+async def login_email(
+    http_request: fastapi.Request, request: EmailLoginRequest, background_tasks: BackgroundTasks
+) -> None:
     """Send a magic-link email (token + 6-digit code).
 
     The email is dispatched in the background so send latency/failures never block the
     login request (the magic link is persisted before we return).
     """
+    await _enforce_signup_rate_limit(http_request)
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
         await db.commit()

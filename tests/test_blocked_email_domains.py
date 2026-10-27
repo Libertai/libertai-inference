@@ -138,3 +138,18 @@ async def test_account_predating_the_block_still_resolves(db):
     same, created_again = await get_or_create_user_by_email(db, "early@blocked-fixture.test")
     assert created_again is False
     assert same.id == user.id
+
+
+async def test_subdomain_of_a_listed_domain_is_blocked(db):
+    """Disposable providers hand out random subdomains; a blocked parent must cover them."""
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    assert await is_blocked_signup_domain(db, "someone@2y.blocked-fixture.test") is True
+
+
+async def test_lookalike_domain_is_not_blocked(db):
+    db.add(BlockedEmailDomain(domain="blocked-fixture.test"))
+    await db.flush()
+
+    assert await is_blocked_signup_domain(db, "someone@blocked-fixture.test.example") is False

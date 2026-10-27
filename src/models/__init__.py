@@ -19,6 +19,7 @@ from src.models.oauth_connection import OAuthConnection
 from src.models.plan_subscription import PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.session import Session
+from src.models.signup_rate_limit import SignupRateLimit
 from src.models.token_payment_quote import TokenPaymentQuote
 from src.models.user import User
 from src.models.user_billing_details import UserBillingDetails
@@ -46,6 +47,7 @@ __all__ = [
     "PlanSubscription",
     "PlanSubscriptionEvent",
     "Session",
+    "SignupRateLimit",
     "TokenPaymentQuote",
     "User",
     "UserBillingDetails",

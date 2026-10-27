@@ -49,3 +49,11 @@ async def test_signup_on_regular_domain_still_works(db):
     user, created = await get_or_create_user_by_email(db, f"{uuid.uuid4().hex}@gmail.com")
     assert created
     assert user.id is not None
+
+
+def test_subdomain_of_a_package_list_domain_is_flagged():
+    assert is_disposable_email(f"x@2y.{DISPOSABLE}")
+
+
+def test_lookalike_package_domain_is_not_flagged():
+    assert not is_disposable_email(f"x@{DISPOSABLE}.example")

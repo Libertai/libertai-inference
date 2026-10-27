@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import timedelta
 
 from dotenv import load_dotenv
 from eth_typing import ChecksumAddress
@@ -69,6 +70,11 @@ class _Config:
     EMAIL_FROM: str
     # Lifecycle emails invite a reply, so they come from a monitored mailbox.
     EMAIL_FROM_LIFECYCLE: str
+    # Signup abuse control: attempts allowed per source IP and per /24 (IPv4) or /64 (IPv6)
+    # within one rolling window. Applies to email login requests and magic-link verification.
+    SIGNUP_RATE_IP_LIMIT: int
+    SIGNUP_RATE_NETWORK_LIMIT: int
+    SIGNUP_RATE_WINDOW: timedelta
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
     ENCRYPTION_KEY: str
@@ -167,6 +173,9 @@ class _Config:
         self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
         self.EMAIL_FROM = os.getenv("EMAIL_FROM", "LibertAI <noreply@libertai.io>")
         self.EMAIL_FROM_LIFECYCLE = os.getenv("EMAIL_FROM_LIFECYCLE", "LibertAI <support@libertai.io>")
+        self.SIGNUP_RATE_IP_LIMIT = int(os.getenv("SIGNUP_RATE_IP_LIMIT", "5"))
+        self.SIGNUP_RATE_NETWORK_LIMIT = int(os.getenv("SIGNUP_RATE_NETWORK_LIMIT", "20"))
+        self.SIGNUP_RATE_WINDOW = timedelta(hours=int(os.getenv("SIGNUP_RATE_WINDOW_HOURS", "24")))
 
         # Token encryption (Fernet)
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")

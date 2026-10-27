@@ -36,20 +36,41 @@ def signup_domain(email: str) -> str | None:
         return domain
 
 
+def _domain_suffixes(domain: str) -> list[str]:
+    """The domain plus every parent label suffix that still has a dot.
+
+    ``a.b.example.com`` yields ``a.b.example.com``, ``b.example.com``, ``example.com`` —
+    never the bare TLD. Disposable providers hand out random subdomains (``2y.xzcoot.com``),
+    so a blocked parent must cover its children too.
+    """
+    labels = domain.split(".")
+    return [".".join(labels[i:]) for i in range(len(labels) - 1)]
+
+
 def is_disposable_email(email: str) -> bool:
-    """Whether the email's domain is on the static package list."""
-    return signup_domain(email) in _BLOCKLIST
+    """Whether the email's domain, or any parent of it, is on the static package list."""
+    domain = signup_domain(email)
+    if not domain:
+        return False
+    return any(suffix in _BLOCKLIST for suffix in _domain_suffixes(domain))
 
 
 async def is_blocked_signup_domain(db: AsyncSession, email: str) -> bool:
-    """Whether account creation on this address must be refused, by either source."""
+    """Whether account creation on this address must be refused, by either source.
+
+    Matching is suffix-aware: blocking ``example.com`` also blocks ``x.example.com``.
+    """
     domain = signup_domain(email)
     if not domain:
         return False
     if is_disposable_email(email):
         return True
     row = (
-        (await db.execute(select(BlockedEmailDomain.domain).where(BlockedEmailDomain.domain == domain)))
+        (
+            await db.execute(
+                select(BlockedEmailDomain.domain).where(BlockedEmailDomain.domain.in_(_domain_suffixes(domain)))
+            )
+        )
         .scalars()
         .first()
     )
