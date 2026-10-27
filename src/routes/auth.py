@@ -43,6 +43,7 @@ from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
     get_user_by_email,
+    get_user_by_wallet,
     update_user_profile,
 )
 from src.utils.encryption import decrypt, encrypt
@@ -155,6 +156,15 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signature",
         )
+
+    if not config.SIGNUPS_ENABLED:
+        async with AsyncSessionLocal() as db:
+            existing = await get_user_by_wallet(db, request.address)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
+            )
 
     # Create access token
     access_token = create_access_token(address=request.address, chain=request.chain)

@@ -23,6 +23,14 @@ def infer_chain(address: str) -> str:
     return "base" if address.startswith("0x") else "solana"
 
 
+async def get_user_by_wallet(db: AsyncSession, address: str) -> User | None:
+    """Look up the user behind a wallet address without creating one."""
+    wallet = (await db.execute(select(WalletConnection).where(WalletConnection.address == address))).scalars().first()
+    if wallet is not None:
+        return await db.get(User, wallet.user_id)
+    return (await db.execute(select(User).where(User.address == address))).scalars().first()
+
+
 async def get_or_create_user_by_wallet(db: AsyncSession, address: str, chain: str | None = None) -> User:
     """Resolve a wallet address to its user, creating the user + wallet link if needed.
 

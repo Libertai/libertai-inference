@@ -46,6 +46,22 @@ async def _token_pair(email: str) -> tuple[User, dict]:
     return user, pair.model_dump()
 
 
+async def test_wallet_login_refuses_new_accounts_when_paused(async_client, monkeypatch):
+    monkeypatch.setattr(config, "SIGNUPS_ENABLED", False)
+    account = Account.create()
+    message = (await async_client.post("/auth/message", json={"chain": "base", "address": account.address})).json()[
+        "message"
+    ]
+
+    response = await async_client.post(
+        "/auth/login",
+        json={"chain": "base", "address": account.address, "signature": _sign(account, message)},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "signups_paused"
+
+
 async def test_wallet_login_flow_and_protected_route(async_client):
     account = Account.create()
 
