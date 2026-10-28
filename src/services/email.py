@@ -5,6 +5,7 @@ With neither configured (dev), sends are logged and reported OK.
 
 import asyncio
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -49,9 +50,12 @@ def _send_smtp(to: str, subject: str, html: str, headers: dict[str, str] | None,
         msg[name] = value
     msg.attach(MIMEText(html, "html"))
 
+    # `starttls()` with no context builds one from ssl._create_stdlib_context(): CERT_NONE and
+    # check_hostname=False, so any certificate is accepted. This channel carries magic-link tokens
+    # and the SMTP password, so the context is mandatory and not configurable. Dev does not reach
+    # here -- magic_link falls back to logging the link when SMTP_HOST and RESEND_API_KEY are unset.
     with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as server:
-        if config.SMTP_USE_TLS:
-            server.starttls()
+        server.starttls(context=ssl.create_default_context())
         if config.SMTP_USER and config.SMTP_PASSWORD:
             server.login(config.SMTP_USER, config.SMTP_PASSWORD)
         server.sendmail(sender, [to], msg.as_string())
