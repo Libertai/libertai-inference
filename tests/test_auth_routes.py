@@ -9,6 +9,7 @@ from sqlalchemy import select
 from src.config import config
 from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
+from src.models.magic_link import MagicLink
 from src.models.session import Session
 from src.models.user import User
 from src.services.disposable_email import _BLOCKLIST
@@ -83,6 +84,28 @@ async def test_refresh_rotation(async_client):
     # The old refresh token is now rejected.
     reused = await async_client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]})
     assert reused.status_code == 401
+
+
+async def test_login_email_refuses_disposable_mx_before_sending(async_client, monkeypatch):
+    from src.services import disposable_email
+
+    async def fake_mx(_domain):
+        return ["smtp.215.im"]
+
+    monkeypatch.setattr(disposable_email, "resolve_mx_hosts", fake_mx)
+
+    resp = await async_client.post(
+        "/auth/login/email",
+        json={"email": "fresh@custom-free-subdomain.shop"},
+        headers={"x-forwarded-for": "198.51.100.77"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "domain_not_accepted"
+    async with AsyncSessionLocal() as db:
+        assert (
+            await db.execute(select(MagicLink).where(MagicLink.email == "fresh@custom-free-subdomain.shop"))
+        ).scalars().first() is None
 
 
 async def test_email_magic_link_verify_refuses_new_signups_when_paused(async_client, monkeypatch):

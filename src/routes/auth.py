@@ -38,7 +38,7 @@ from src.services import magic_link, oauth, signup_rate_limit
 from src.services.auth import create_access_token, get_current_user, get_optional_user
 from src.services.auth_tokens import REFRESH, create_refresh_token, decode_token
 from src.services.auth_tokens import create_access_token as create_user_access_token
-from src.services.disposable_email import DisposableEmailError
+from src.services.disposable_email import DisposableEmailError, is_blocked_signup_domain, is_disposable_mx_email
 from src.services.users import (
     get_or_create_user_by_email,
     get_or_create_user_by_oauth,
@@ -264,6 +264,16 @@ async def login_email(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
+            )
+        async with AsyncSessionLocal() as db:
+            blocked = await is_blocked_signup_domain(db, request.email) or await is_disposable_mx_email(request.email)
+        if blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "domain_not_accepted",
+                    "message": "This email domain is not accepted. Use a different address.",
+                },
             )
     async with AsyncSessionLocal() as db:
         token, code = await magic_link.create_magic_link(db, request.email)
