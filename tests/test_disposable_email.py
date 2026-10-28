@@ -63,6 +63,7 @@ def test_lookalike_package_domain_is_not_flagged():
 def test_disposable_mx_host_matches_subdomains():
     assert disposable_email._is_disposable_mx_host("mail.duckmail.sbs")
     assert disposable_email._is_disposable_mx_host("duckmail.sbs")
+    assert disposable_email._is_disposable_mx_host("smtp.215.im")
     assert not disposable_email._is_disposable_mx_host("aspmx.l.google.com")
     assert not disposable_email._is_disposable_mx_host("duckmail.sbs.example")
 

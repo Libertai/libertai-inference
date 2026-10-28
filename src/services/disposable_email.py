@@ -21,6 +21,7 @@ _BLOCKLIST: frozenset[str] = frozenset(blocklist)
 _DISPOSABLE_MX: frozenset[str] = frozenset(
     {
         "duckmail.sbs",
+        "215.im",
         "xzcoot.com",
         "kashre.com",
         "lucktaro.com",
