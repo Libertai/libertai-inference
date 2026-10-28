@@ -65,7 +65,6 @@ class _Config:
     SMTP_USER: str
     SMTP_PASSWORD: str
     SMTP_FROM: str
-    SMTP_USE_TLS: bool
     RESEND_API_KEY: str
     EMAIL_FROM: str
     # Lifecycle emails invite a reply, so they come from a monitored mailbox.
@@ -172,7 +171,6 @@ class _Config:
         self.SMTP_USER = os.getenv("SMTP_USER", "")
         self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
         self.SMTP_FROM = os.getenv("SMTP_FROM", "LibertAI <hello@libertai.io>")
-        self.SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
         self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
         self.EMAIL_FROM = os.getenv("EMAIL_FROM", "LibertAI <noreply@libertai.io>")
         self.EMAIL_FROM_LIFECYCLE = os.getenv("EMAIL_FROM_LIFECYCLE", "LibertAI <support@libertai.io>")
