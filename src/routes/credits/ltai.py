@@ -118,6 +118,5 @@ async def handle_payment_event(event) -> str:
         amount,
         external_reference,
         block_number,
-        apply_ltai_boost=quote is None,
     )
     return external_reference

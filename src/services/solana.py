@@ -224,7 +224,6 @@ class SolanaService:
                 external_reference=signature,
                 block_number=slot,
                 status=payment_event["status"],
-                apply_ltai_boost=quote is None,
             )
 
         except Exception as e:

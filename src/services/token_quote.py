@@ -14,7 +14,6 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.token_payment_quote import TokenPaymentQuote
 from src.models.user import User
 from src.models.wallet_connection import WalletConnection
-from src.services.credit import LTAI_PAYMENT_BOOST
 from src.utils.logger import setup_logger
 from src.utils.token import get_sol_token_price, get_token_price
 
@@ -29,14 +28,12 @@ CLOCK_SKEW = timedelta(minutes=1)
 class _QuotableToken:
     decimals: int
     get_price: Callable[[], Awaitable[float]]
-    # Credits granted per USD paid.
-    boost: float
 
 
 QUOTABLE_TOKENS: dict[tuple[LibertaiChain, QuoteToken], _QuotableToken] = {
-    (LibertaiChain.base, QuoteToken.ltai): _QuotableToken(18, get_token_price, LTAI_PAYMENT_BOOST),
-    (LibertaiChain.solana, QuoteToken.ltai): _QuotableToken(9, get_token_price, LTAI_PAYMENT_BOOST),
-    (LibertaiChain.solana, QuoteToken.sol): _QuotableToken(9, get_sol_token_price, 1.0),
+    (LibertaiChain.base, QuoteToken.ltai): _QuotableToken(18, get_token_price),
+    (LibertaiChain.solana, QuoteToken.ltai): _QuotableToken(9, get_token_price),
+    (LibertaiChain.solana, QuoteToken.sol): _QuotableToken(9, get_sol_token_price),
 }
 
 
@@ -47,7 +44,7 @@ def utcnow() -> datetime:
 
 def raw_token_amount(credit_amount: float, price: float, spec: _QuotableToken) -> Decimal:
     """Smallest-unit amount worth ``credit_amount`` credits at ``price``, rounded up."""
-    tokens = Decimal(str(credit_amount)) / Decimal(str(spec.boost)) / Decimal(str(price))
+    tokens = Decimal(str(credit_amount)) / Decimal(str(price))
     return (tokens * (Decimal(10) ** spec.decimals)).to_integral_value(rounding=ROUND_CEILING)
 
 

@@ -34,9 +34,7 @@ def _stub_prices(monkeypatch):
         return PRICE
 
     for key, spec in list(token_quote.QUOTABLE_TOKENS.items()):
-        monkeypatch.setitem(
-            token_quote.QUOTABLE_TOKENS, key, token_quote._QuotableToken(spec.decimals, price, spec.boost)
-        )
+        monkeypatch.setitem(token_quote.QUOTABLE_TOKENS, key, token_quote._QuotableToken(spec.decimals, price))
 
 
 def _evm() -> str:
@@ -76,14 +74,14 @@ async def _claim(payer: str, raw: int, paid_at, ref: str) -> TokenPaymentQuote |
         return await token_quote.claim_quote(db, LibertaiChain.base, QuoteToken.ltai, payer, raw, paid_at, ref)
 
 
-async def test_raw_amount_accounts_for_ltai_boost():
-    # 100 credits / 1.25 boost = $80 of LTAI at $0.5 = 160 LTAI
+async def test_raw_amount_is_credit_value_at_token_price():
+    # 100 credits = $100 of LTAI at $0.5 = 200 LTAI
     quote = await _quote(_evm())
-    assert quote.token_amount_raw == Decimal(160 * 10**18)
+    assert quote.token_amount_raw == Decimal(200 * 10**18)
     assert quote.expires_at - quote.created_at == token_quote.QUOTE_TTL
 
 
-async def test_sol_quote_has_no_boost():
+async def test_sol_quote_amount():
     quote = await _quote("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T", token=QuoteToken.sol)
     assert quote.token_amount_raw == Decimal(200 * 10**9)
 
@@ -165,12 +163,10 @@ async def test_already_credited_payment_does_not_consume_quote():
         assert (await db.get(TokenPaymentQuote, quote.id)).consumed_at is None
 
 
-async def test_add_credits_without_boost_credits_exact_amount():
+async def test_add_credits_ltai_credits_exact_amount():
     payer = _evm()
     ref = _ref()
-    assert await CreditService.add_credits(
-        CreditTransactionProvider.ltai_base, payer, 100.0, ref, block_number=1, apply_ltai_boost=False
-    )
+    assert await CreditService.add_credits(CreditTransactionProvider.ltai_base, payer, 100.0, ref, block_number=1)
     async with AsyncSessionLocal() as db:
         tx = (
             await db.execute(select(CreditTransaction).where(CreditTransaction.external_reference == ref))
@@ -191,7 +187,7 @@ async def test_quote_route(async_client):
     res = await async_client.post("/credits/quotes", json=body, headers=auth)
     assert res.status_code == 200
     data = res.json()
-    assert data["token_amount_raw"] == str(160 * 10**18)
+    assert data["token_amount_raw"] == str(200 * 10**18)
     assert data["decimals"] == 18
     assert data["payer_address"] == payer.lower()
     assert data["expires_at"].endswith("Z")

@@ -24,7 +24,7 @@ class TokenPaymentQuote(Base):
     token: Mapped[str] = mapped_column(String, nullable=False)  # QuoteToken value
     # Same format as the watchers' format_address output, so lookups are exact matches.
     payer_address: Mapped[str] = mapped_column(String, nullable=False)
-    # Credits granted on match, LTAI boost included.
+    # Credits granted on match.
     credit_amount: Mapped[float] = mapped_column(Float, nullable=False)
     token_price: Mapped[float] = mapped_column(Float, nullable=False)
     # Smallest token unit, as emitted by the payment event.
