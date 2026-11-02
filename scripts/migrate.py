@@ -20,7 +20,12 @@ load_dotenv()
 
 def main() -> None:
     url = os.path.expandvars(os.environ["DATABASE_URL"])
-    with psycopg.connect(url) as conn:
+    # autocommit: pg_advisory_lock is session-scoped, so the lock survives the commit.
+    # Without it this connection sits "idle in transaction" for the whole upgrade and
+    # holds a snapshot, which is exactly what CREATE INDEX CONCURRENTLY waits for —
+    # d4e5f6a7b8c9 deadlocks here forever on a fresh database, with the index build
+    # waiting on a transaction that only ends when this script does.
+    with psycopg.connect(url, autocommit=True) as conn:
         conn.execute("SELECT pg_advisory_lock(%s)", (MIGRATIONS_LOCK_ID,))
         try:
             command.upgrade(Config("alembic.ini"), "head")
