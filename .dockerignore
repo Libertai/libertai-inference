@@ -1,0 +1,33 @@
+# VCS / editors
+.git
+.gitignore
+.idea/
+.claude/
+.superpowers/
+
+# Local virtualenvs and Python caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Not part of the runtime image: never referenced by src/, scripts/ or alembic/
+contracts/
+tests/
+docs/
+
+# Node tooling used only by local scripts, not by the container
+scripts/node_modules/
+
+# Secrets and local artifacts must never be baked into the image
+.env
+.env.*
+debug.log
+dump_*.sql
+*.dump
