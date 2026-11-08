@@ -26,6 +26,27 @@ from src.utils.email_canonical import CANONICAL_EMAIL_SQL, canonical_email, cano
         ("a.b+tag@example.com", "a.b@example.com"),
         ("ab+tag@yandex.com", "ab@yandex.com"),
         ("ab+1@outlook.com", "ab@outlook.com"),
+        # Yandex treats dots and hyphens as aliases, and its country domains as one mailbox.
+        ("alice-the-girl@yandex.com", "alicethegirl@yandex.com"),
+        ("alice.the.girl@yandex.ru", "alicethegirl@yandex.com"),
+        ("alice+1@yandex.ru", "alice@yandex.com"),
+        ("alice+1@ya.ru", "alice@yandex.com"),
+        ("alice+1@yandex.ru.", "alice@yandex.com"),
+        # Legacy iCloud accounts share the local part across icloud.com, me.com and mac.com.
+        ("alice+1@icloud.com", "alice@icloud.com"),
+        ("alice+1@me.com", "alice@icloud.com"),
+        ("alice+1@mac.com", "alice@icloud.com"),
+        # Proton domains are chosen at signup, not aliases of each other.
+        ("alice+1@protonmail.com", "alice@protonmail.com"),
+        ("alice+1@proton.me", "alice@proton.me"),
+        # Outlook/Hotmail are separate accounts unless the user explicitly aliases them.
+        ("alice+1@outlook.com", "alice@outlook.com"),
+        ("alice+1@hotmail.com", "alice@hotmail.com"),
+        # Fastmail subdomain addressing (anything@alias.domain) is not guessed from the name.
+        ("anything@alice.fastmail.fm", "anything@alice.fastmail.fm"),
+        # A trailing dot is the same FQDN.
+        ("alice+1@example.com.", "alice@example.com"),
+        ("alice+1@example.com...", "alice@example.com"),
         ("A.B@Example.com", "a.b@example.com"),
         ("not-an-address", "not-an-address"),
         # Folding an address with two @ would collide it onto the first domain's mailbox.
@@ -45,6 +66,16 @@ def test_canonical_form(address, expected):
         "A.B@GoogleMail.com",
         "  a.b@gmail.com  ",
         "a.b+tag@example.com",
+        "alice-the-girl@yandex.com",
+        "alice.the.girl@yandex.ru",
+        "alice+1@yandex.ru",
+        "alice+1@ya.ru",
+        "alice+1@yandex.ru.",
+        "alice+1@icloud.com",
+        "alice+1@me.com",
+        "alice+1@mac.com",
+        "alice+1@protonmail.com",
+        "alice+1@example.com.",
         "not-an-address",
         "@gmail.com",
     ],
@@ -94,6 +125,76 @@ async def test_googlemail_folds_to_gmail(db):
     same, created = await get_or_create_user_by_email(db, f"{local}@googlemail.com")
     assert not created
     assert same.id == user.id
+
+
+async def test_plus_variant_on_a_custom_domain_resolves_to_the_same_account(db):
+    local = uuid.uuid4().hex
+    user, _ = await get_or_create_user_by_email(db, f"{local}@example.com")
+    await db.flush()
+
+    same, created = await get_or_create_user_by_email(db, f"{local}+1@example.com")
+    assert not created
+    assert same.id == user.id
+
+
+async def test_plus_variant_on_a_custom_domain_is_rejected_by_the_database(db):
+    local = uuid.uuid4().hex
+    db.add(User(email=f"{local}@example.com"))
+    await db.flush()
+
+    db.add(User(email=f"{local}+1@example.com"))
+    with pytest.raises(IntegrityError):
+        await db.flush()
+
+
+async def test_yandex_domain_alias_resolves_to_the_same_account(db):
+    local = uuid.uuid4().hex
+    user, _ = await get_or_create_user_by_email(db, f"{local}@yandex.com")
+
+    same, created = await get_or_create_user_by_email(db, f"{local}+1@yandex.ru")
+    assert not created
+    assert same.id == user.id
+
+
+async def test_yandex_dot_and_hyphen_variants_resolve_to_the_same_account(db):
+    local = f"alice{uuid.uuid4().hex[:8]}"
+    user, _ = await get_or_create_user_by_email(db, f"{local}@yandex.com")
+
+    dotted, created = await get_or_create_user_by_email(db, f"{local[:5]}.{local[5:]}@yandex.ru")
+    assert not created
+    assert dotted.id == user.id
+
+    hyphened, created = await get_or_create_user_by_email(db, f"{local[:5]}-{local[5:]}@ya.ru")
+    assert not created
+    assert hyphened.id == user.id
+
+
+async def test_legacy_icloud_domain_alias_resolves_to_the_same_account(db):
+    local = uuid.uuid4().hex
+    user, _ = await get_or_create_user_by_email(db, f"{local}@icloud.com")
+
+    same, created = await get_or_create_user_by_email(db, f"{local}+1@me.com")
+    assert not created
+    assert same.id == user.id
+
+
+async def test_trailing_dot_domain_resolves_to_the_same_account(db):
+    local = uuid.uuid4().hex
+    user, _ = await get_or_create_user_by_email(db, f"{local}@example.com")
+
+    same, created = await get_or_create_user_by_email(db, f"{local}+1@example.com.")
+    assert not created
+    assert same.id == user.id
+
+
+async def test_provider_alias_variant_is_rejected_by_the_database(db):
+    local = uuid.uuid4().hex
+    db.add(User(email=f"{local}@yandex.com"))
+    await db.flush()
+
+    db.add(User(email=f"{local}+1@yandex.ru"))
+    with pytest.raises(IntegrityError):
+        await db.flush()
 
 
 async def test_dots_stay_significant_on_other_domains(db):
