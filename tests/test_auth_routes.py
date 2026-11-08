@@ -23,14 +23,16 @@ def _sign(account, message: str) -> str:
     return sig if sig.startswith("0x") else f"0x{sig}"
 
 
-async def _wallet_login(async_client, account) -> dict:
+async def _wallet_login(async_client, account, ip: str | None = None) -> dict:
     """Wallet login: static message, signature, cookie JWT keyed on the address."""
     message = (await async_client.post("/auth/message", json={"chain": "base", "address": account.address})).json()[
         "message"
     ]
+    headers = {"x-forwarded-for": ip} if ip is not None else None
     response = await async_client.post(
         "/auth/login",
         json={"chain": "base", "address": account.address, "signature": _sign(account, message)},
+        headers=headers,
     )
     assert response.status_code == 200
     return response.json()
@@ -61,6 +63,28 @@ async def test_wallet_login_refuses_new_accounts_when_paused(async_client, monke
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "signups_paused"
+
+
+async def test_wallet_signup_is_rate_limited(async_client, monkeypatch):
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 2)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    ip = "198.18.1.210"
+
+    await _wallet_login(async_client, Account.create(), ip)
+    await _wallet_login(async_client, Account.create(), ip)
+
+    account = Account.create()
+    message = (await async_client.post("/auth/message", json={"chain": "base", "address": account.address})).json()[
+        "message"
+    ]
+    response = await async_client.post(
+        "/auth/login",
+        json={"chain": "base", "address": account.address, "signature": _sign(account, message)},
+        headers={"x-forwarded-for": ip},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "rate_limited"
 
 
 async def test_wallet_login_flow_and_protected_route(async_client):
@@ -332,3 +356,58 @@ async def test_logout_revokes_session_from_cookie(async_client):
     # Session revoked → the refresh token is dead.
     refreshed = await async_client.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]})
     assert refreshed.status_code == 401
+
+
+async def test_oauth_signup_is_rate_limited(async_client, monkeypatch):
+    from src.services import oauth
+    from src.services.oauth import OAuthUserInfo
+
+    async def fake_exchange(_provider, _code, _redirect_uri):
+        return OAuthUserInfo(
+            provider="github",
+            provider_id="rate-limited-oauth",
+            email="rate-limited-oauth@example.com",
+            name=None,
+            avatar_url=None,
+        )
+
+    monkeypatch.setattr(oauth, "exchange_code_for_user_info", fake_exchange)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 0)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+
+    response = await async_client.get(
+        "/auth/oauth/github/callback?provider=github&code=c&state=s",
+        cookies={"oauth_state": "s"},
+        headers={"x-forwarded-for": "198.18.1.211"},
+    )
+
+    assert response.status_code in (302, 307)
+    assert "error=rate_limited" in response.headers["location"]
+    async with AsyncSessionLocal() as db:
+        assert (
+            await db.execute(select(User).where(User.email == "rate-limited-oauth@example.com"))
+        ).scalars().first() is None
+
+
+async def test_oauth_signup_refuses_disposable_domain(async_client, monkeypatch):
+    from src.services import oauth
+    from src.services.oauth import OAuthUserInfo
+
+    email = f"throwaway-oauth@{next(iter(_BLOCKLIST))}"
+
+    async def fake_exchange(_provider, _code, _redirect_uri):
+        return OAuthUserInfo(
+            provider="github", provider_id="disposable-oauth", email=email, name=None, avatar_url=None
+        )
+
+    monkeypatch.setattr(oauth, "exchange_code_for_user_info", fake_exchange)
+
+    response = await async_client.get(
+        "/auth/oauth/github/callback?provider=github&code=c&state=s",
+        cookies={"oauth_state": "s"},
+    )
+
+    assert response.status_code in (302, 307)
+    assert "error=domain_not_accepted" in response.headers["location"]
+    async with AsyncSessionLocal() as db:
+        assert (await db.execute(select(User).where(User.email == email))).scalars().first() is None

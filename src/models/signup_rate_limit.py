@@ -8,12 +8,13 @@ from src.models.base import Base
 
 
 class SignupRateLimit(Base):
-    """Fixed-window counter for email sign-in/sign-up attempts, per IP and per network.
+    """Fixed-window counter for new-account creation, per IP and per network.
 
     Email-domain blocklists cannot catch attackers who rotate custom domains. This counts
-    attempts by the source IP and its /24 (IPv4) or /64 (IPv6), so bulk account creation is
-    throttled regardless of the address used. One row per ``(scope, value)``; the window
-    opens on the first attempt and resets in place once it expires.
+    attempts by the source IP and its /24 (IPv4) or /64 (IPv6) across email, wallet and
+    OAuth, so bulk account creation is throttled regardless of the address or method used.
+    One row per ``(scope, value)``; the window opens on the first attempt and resets in place
+    once it expires.
     """
 
     __tablename__ = "signup_rate_limits"

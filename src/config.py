@@ -70,7 +70,7 @@ class _Config:
     # Lifecycle emails invite a reply, so they come from a monitored mailbox.
     EMAIL_FROM_LIFECYCLE: str
     # Signup abuse control: attempts allowed per source IP and per /24 (IPv4) or /64 (IPv6)
-    # within one rolling window. Applies to email login requests and magic-link verification.
+    # within one rolling window. Applies to every new-account path: email, wallet and OAuth.
     SIGNUP_RATE_IP_LIMIT: int
     SIGNUP_RATE_NETWORK_LIMIT: int
     SIGNUP_RATE_WINDOW: timedelta

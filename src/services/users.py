@@ -124,6 +124,14 @@ async def get_or_create_user_by_oauth(db: AsyncSession, info: "OAuthUserInfo") -
 
     created = False
     if user is None:
+        # OAuth signups used to skip the disposable gate entirely: a provider account can
+        # carry any address, including a custom domain pointed at a throwaway MX.
+        if info.email and (
+            signup_domain(info.email) == ""
+            or await is_blocked_signup_domain(db, info.email)
+            or await is_disposable_mx_email(info.email)
+        ):
+            raise DisposableEmailError(info.email)
         user = User(
             email=info.email.strip().lower() if info.email else None,
             display_name=info.name,

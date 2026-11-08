@@ -149,7 +149,9 @@ async def get_auth_message(request: AuthMessageRequest) -> AuthMessageResponse:
 
 
 @router.post("/login")
-async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Response) -> AuthLoginResponse:
+async def login_with_wallet(
+    request: AuthLoginRequest, http_request: fastapi.Request, response: fastapi.Response
+) -> AuthLoginResponse:
     """Authenticate with a wallet signature."""
     if not is_signature_valid(request.chain, auth_message(request.address), request.signature, request.address):
         raise HTTPException(
@@ -157,14 +159,17 @@ async def login_with_wallet(request: AuthLoginRequest, response: fastapi.Respons
             detail="Invalid signature",
         )
 
-    if not config.SIGNUPS_ENABLED:
-        async with AsyncSessionLocal() as db:
-            existing = await get_user_by_wallet(db, request.address)
-        if existing is None:
+    async with AsyncSessionLocal() as db:
+        existing = await get_user_by_wallet(db, request.address)
+    if existing is None:
+        if not config.SIGNUPS_ENABLED:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
             )
+        # A fresh wallet is a fresh account: without this, a script can mint unlimited
+        # free-tier accounts by signing with throwaway keys.
+        await _enforce_signup_rate_limit(http_request)
 
     # Create access token
     access_token = create_access_token(address=request.address, chain=request.chain)
@@ -340,6 +345,7 @@ async def oauth_callback(
     provider: str,
     code: str,
     state: str,
+    http_request: fastapi.Request,
     oauth_state: str = Cookie(default=None),
     oauth_redirect: str = Cookie(default=None),
 ) -> RedirectResponse:
@@ -356,10 +362,28 @@ async def oauth_callback(
     frontend_base = resolve_frontend_base(oauth_redirect)
 
     async with AsyncSessionLocal() as db:
-        user, created = await get_or_create_user_by_oauth(db, info)
+        try:
+            user, created = await get_or_create_user_by_oauth(db, info)
+        except DisposableEmailError:
+            logger.warning("Refused OAuth signup on a blocked email domain: %s", info.email)
+            response = RedirectResponse(f"{frontend_base}/auth/callback?error=domain_not_accepted")
+            response.delete_cookie("oauth_state")
+            response.delete_cookie("oauth_redirect")
+            return response
         if created and not config.SIGNUPS_ENABLED:
             await db.rollback()
             return RedirectResponse(f"{frontend_base}/auth/callback?error=signups_paused")
+        if created:
+            # OAuth is an account-creation path too; the per-IP/network cap must span all
+            # three methods or a farm just switches to GitHub/wallet.
+            try:
+                await _enforce_signup_rate_limit(http_request)
+            except HTTPException:
+                await db.rollback()
+                response = RedirectResponse(f"{frontend_base}/auth/callback?error=rate_limited")
+                response.delete_cookie("oauth_state")
+                response.delete_cookie("oauth_redirect")
+                return response
         try:
             pair = await _issue_token_pair(db, user)
         except HTTPException as exc:

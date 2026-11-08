@@ -1,9 +1,10 @@
-"""Per-IP and per-network fixed-window limiter for email sign-in/sign-up.
+"""Per-IP and per-network fixed-window limiter for new-account creation.
 
-Domain blocklists lose to custom-domain rotation, so this bounds attempts by source address
-instead. Each request consumes one slot in a daily per-IP window and one in its network's
-window (IPv4 /24, IPv6 /64); either can reject. The row is locked while it is updated, so
-concurrent requests from the same IP or network serialise.
+Domain blocklists lose to custom-domain rotation, so this bounds new accounts by source
+address instead. Every path that can create an account (email magic link, wallet, OAuth)
+consumes one slot in a daily per-IP window and one in its network's window (IPv4 /24, IPv6
+/64); either can reject. The row is locked while it is updated, so concurrent requests from
+the same IP or network serialise.
 """
 
 import ipaddress
