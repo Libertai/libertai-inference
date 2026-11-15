@@ -8,13 +8,13 @@ from src.models.base import Base
 
 
 class SignupRateLimit(Base):
-    """Fixed-window counter for new-account creation, per IP and per network.
+    """Fixed-window counter shared by signup and magic-link limits.
 
-    Email-domain blocklists cannot catch attackers who rotate custom domains. This counts
-    attempts by the source IP and its /24 (IPv4) or /64 (IPv6) across email, wallet and
-    OAuth, so bulk account creation is throttled regardless of the address or method used.
-    One row per ``(scope, value)``; the window opens on the first attempt and resets in place
-    once it expires.
+    Signup scopes count new-account attempts by source IP/network across email, wallet and
+    OAuth. Magic-link scopes count sends by global day, source IP, canonical recipient and a
+    short cooldown, so one mailbox cannot generate unlimited emails through aliases. One row
+    per ``(scope, value)``; the window opens on the first attempt and resets in place once it
+    expires.
     """
 
     __tablename__ = "signup_rate_limits"

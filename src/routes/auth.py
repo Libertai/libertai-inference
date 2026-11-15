@@ -46,6 +46,7 @@ from src.services.users import (
     get_user_by_wallet,
     update_user_profile,
 )
+from src.utils.email_canonical import canonical_email
 from src.utils.encryption import decrypt, encrypt
 from src.utils.frontend import resolve_frontend_base
 from src.utils.logger import setup_logger
@@ -251,6 +252,64 @@ async def _enforce_signup_rate_limit(http_request: fastapi.Request) -> None:
     )
 
 
+async def _consume_magic_link_limit(http_request: fastapi.Request, email: str) -> bool:
+    """Apply the magic-link send limits. False means drop the request silently.
+
+    Existing addresses previously bypassed every limiter, so one mailbox could generate
+    unlimited emails through ``+`` aliases. These limits cover every recipient, existing or
+    new: a global daily budget, a per-IP hourly cap, a per-canonical-recipient daily cap, and
+    a short cooldown between sends to the same mailbox.
+    """
+    now = datetime.now()
+    canonical = canonical_email(email)
+    async with AsyncSessionLocal() as db:
+        state = await signup_rate_limit.consume_limit(
+            db,
+            "magic_global",
+            now.date().isoformat(),
+            config.MAGIC_LINK_GLOBAL_DAILY_LIMIT,
+            timedelta(days=1),
+            now,
+        )
+        if not state.allowed:
+            logger.warning("Magic link dropped: global daily budget exhausted")
+            return False
+
+        ip = signup_rate_limit.client_ip(http_request)
+        if ip is not None:
+            state = await signup_rate_limit.consume_limit(
+                db, "magic_ip", ip, config.MAGIC_LINK_IP_HOURLY_LIMIT, timedelta(hours=1), now
+            )
+            if not state.allowed:
+                logger.warning("Magic link dropped: per-IP hourly limit")
+                return False
+
+        state = await signup_rate_limit.consume_limit(
+            db,
+            "magic_email",
+            canonical,
+            config.MAGIC_LINK_EMAIL_DAILY_LIMIT,
+            timedelta(days=1),
+            now,
+        )
+        if not state.allowed:
+            logger.warning("Magic link dropped: recipient daily limit")
+            return False
+
+        state = await signup_rate_limit.consume_limit(
+            db,
+            "magic_cooldown",
+            canonical,
+            1,
+            timedelta(seconds=config.MAGIC_LINK_COOLDOWN_SECONDS),
+            now,
+        )
+        if not state.allowed:
+            logger.info("Magic link dropped: cooldown")
+            return False
+    return True
+
+
 @router.post("/login/email", status_code=status.HTTP_204_NO_CONTENT)
 async def login_email(
     http_request: fastapi.Request, request: EmailLoginRequest, background_tasks: BackgroundTasks
@@ -260,8 +319,17 @@ async def login_email(
     The email is dispatched in the background so send latency/failures never block the
     login request (the magic link is persisted before we return).
     """
+    email = request.email.strip().lower()
+
+    # A plus alias is a subaddress, not a separate mailbox. Refuse to send through it: the
+    # owner can use the base address, while an attacker can no longer generate one email per
+    # random alias on an inbox they already control.
+    if config.MAGIC_LINK_BLOCK_PLUS_ALIASES and "+" in email.partition("@")[0]:
+        logger.info("Magic link refused for a plus alias")
+        return
+
     async with AsyncSessionLocal() as db:
-        existing = await get_user_by_email(db, request.email)
+        existing = await get_user_by_email(db, email)
     if existing is None:
         # Existing users always get their link; only new-address attempts are throttled.
         await _enforce_signup_rate_limit(http_request)
@@ -271,7 +339,7 @@ async def login_email(
                 detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
             )
         async with AsyncSessionLocal() as db:
-            blocked = await is_blocked_signup_domain(db, request.email) or await is_disposable_mx_email(request.email)
+            blocked = await is_blocked_signup_domain(db, email) or await is_disposable_mx_email(email)
         if blocked:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -280,11 +348,15 @@ async def login_email(
                     "message": "This email domain is not accepted. Use a different address.",
                 },
             )
+
+    if not await _consume_magic_link_limit(http_request, email):
+        return
+
     async with AsyncSessionLocal() as db:
-        token, code = await magic_link.create_magic_link(db, request.email)
+        token, code = await magic_link.create_magic_link(db, email)
         await db.commit()
     background_tasks.add_task(
-        magic_link.send_magic_link_email, request.email, token, code, request.redirect_base, request.redirect_path
+        magic_link.send_magic_link_email, email, token, code, request.redirect_base, request.redirect_path
     )
 
 

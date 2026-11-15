@@ -1,16 +1,18 @@
 import hashlib
+import uuid
 from datetime import datetime, timedelta
 
 from cryptography.fernet import Fernet
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from src.config import config
 from src.models.auth_code import AuthCode
 from src.models.base import AsyncSessionLocal
 from src.models.magic_link import MagicLink
 from src.models.session import Session
+from src.models.signup_rate_limit import SignupRateLimit
 from src.models.user import User
 from src.services.disposable_email import _BLOCKLIST
 from src.services.magic_link import create_magic_link
@@ -411,3 +413,125 @@ async def test_oauth_signup_refuses_disposable_domain(async_client, monkeypatch)
     assert "error=domain_not_accepted" in response.headers["location"]
     async with AsyncSessionLocal() as db:
         assert (await db.execute(select(User).where(User.email == email))).scalars().first() is None
+
+
+async def _magic_link_count(emails: list[str]) -> int:
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(MagicLink).where(MagicLink.email.in_(emails)))).scalars().all()
+    return len(rows)
+
+
+async def test_login_email_refuses_plus_alias(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", True)
+    email = f"plus-{uuid.uuid4().hex}+tag@example.com"
+
+    resp = await async_client.post(
+        "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.1"}
+    )
+
+    assert resp.status_code == 204
+    assert await _magic_link_count([email]) == 0
+
+
+async def test_login_email_cooldown_suppresses_second_send(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 60)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1000)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 100)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    email = f"cooldown-{uuid.uuid4().hex}@example.com"
+
+    for _ in range(2):
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.2"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count([email]) == 1
+
+
+async def test_login_email_recipient_daily_limit(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 2)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1000)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 100)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    email = f"daily-{uuid.uuid4().hex}@example.com"
+
+    for _ in range(3):
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.3"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count([email]) == 2
+
+
+async def test_login_email_ip_hourly_limit(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 2)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1000)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 100)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    emails = [f"ip-{uuid.uuid4().hex}@example.com" for _ in range(3)]
+
+    for email in emails:
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.4"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count(emails) == 2
+
+
+async def test_login_email_global_daily_limit(async_client, monkeypatch):
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(SignupRateLimit).where(SignupRateLimit.scope == "magic_global"))
+        await db.commit()
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 100)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    emails = [f"global-{uuid.uuid4().hex}@example.com" for _ in range(2)]
+
+    for email in emails:
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.5"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count(emails) == 1
+
+
+async def test_login_email_limits_existing_address_aliases(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 1)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1000)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 100)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    base = f"existing-{uuid.uuid4().hex}@example.com"
+    alias1 = base.replace("@", "+1@")
+    alias2 = base.replace("@", "+2@")
+
+    async with AsyncSessionLocal() as db:
+        await get_or_create_user_by_email(db, base)
+        await db.commit()
+
+    for email in (alias1, alias2):
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.6"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count([alias1, alias2]) == 1

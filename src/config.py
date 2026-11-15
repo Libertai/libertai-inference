@@ -77,6 +77,13 @@ class _Config:
     # Emergency circuit breaker: False refuses to create new accounts while existing users
     # can still sign in. Flip back on once an attack subsides.
     SIGNUPS_ENABLED: bool
+    # Magic-link send controls. Existing addresses used to bypass every limiter, so one
+    # mailbox could generate unlimited emails through +aliases; these bound that path.
+    MAGIC_LINK_BLOCK_PLUS_ALIASES: bool
+    MAGIC_LINK_COOLDOWN_SECONDS: int
+    MAGIC_LINK_EMAIL_DAILY_LIMIT: int
+    MAGIC_LINK_IP_HOURLY_LIMIT: int
+    MAGIC_LINK_GLOBAL_DAILY_LIMIT: int
 
     # Token encryption (Fernet); _PREVIOUS enables key rotation
     ENCRYPTION_KEY: str
@@ -178,6 +185,11 @@ class _Config:
         self.SIGNUP_RATE_NETWORK_LIMIT = int(os.getenv("SIGNUP_RATE_NETWORK_LIMIT", "20"))
         self.SIGNUP_RATE_WINDOW = timedelta(hours=int(os.getenv("SIGNUP_RATE_WINDOW_HOURS", "24")))
         self.SIGNUPS_ENABLED = os.getenv("SIGNUPS_ENABLED", "True").lower() == "true"
+        self.MAGIC_LINK_BLOCK_PLUS_ALIASES = os.getenv("MAGIC_LINK_BLOCK_PLUS_ALIASES", "False").lower() == "true"
+        self.MAGIC_LINK_COOLDOWN_SECONDS = int(os.getenv("MAGIC_LINK_COOLDOWN_SECONDS", "60"))
+        self.MAGIC_LINK_EMAIL_DAILY_LIMIT = int(os.getenv("MAGIC_LINK_EMAIL_DAILY_LIMIT", "5"))
+        self.MAGIC_LINK_IP_HOURLY_LIMIT = int(os.getenv("MAGIC_LINK_IP_HOURLY_LIMIT", "20"))
+        self.MAGIC_LINK_GLOBAL_DAILY_LIMIT = int(os.getenv("MAGIC_LINK_GLOBAL_DAILY_LIMIT", "1000"))
 
         # Token encryption (Fernet)
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
