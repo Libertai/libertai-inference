@@ -32,7 +32,9 @@ def _serializer() -> URLSafeTimedSerializer:
 async def create_magic_link(db: AsyncSession, email: str) -> tuple[str, str]:
     """Create a magic link for an email, returning (token, code) to be emailed. Flushes, no commit."""
     email = email.strip().lower()
-    token = _serializer().dumps(email)
+    # The signed payload carries a nonce: two requests for the same address inside the same
+    # second would otherwise produce the identical token and collide on token_hash.
+    token = _serializer().dumps({"email": email, "nonce": secrets.token_urlsafe(8)})
     code = f"{secrets.randbelow(1_000_000):06d}"
     db.add(
         MagicLink(

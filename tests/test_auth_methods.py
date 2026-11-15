@@ -13,6 +13,17 @@ async def test_magic_link_verify_by_token(db, monkeypatch):
     assert await verify_magic_link(db, token=token) is None
 
 
+async def test_magic_link_tokens_are_unique_per_request(db, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
+
+    first, _ = await create_magic_link(db, "same@example.com")
+    second, _ = await create_magic_link(db, "same@example.com")
+
+    assert first != second
+    assert await verify_magic_link(db, token=first) == "same@example.com"
+    assert await verify_magic_link(db, token=second) == "same@example.com"
+
+
 async def test_magic_link_verify_by_code_and_attempts(db, monkeypatch):
     monkeypatch.setattr(config, "MAGIC_LINK_SECRET", "test-secret")
     _token, code = await create_magic_link(db, "code@example.com")
