@@ -1,7 +1,7 @@
 """Window debt: overflow left uncharged by a monthly cap, carried into entitlement windows.
 
 Revision ID: e8f1a3c5d7b9
-Revises: b2e6c8f0a4d7
+Revises: e8f9a0b1c2d3
 Create Date: 2026-11-19
 """
 
@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "e8f1a3c5d7b9"
-down_revision = "b2e6c8f0a4d7"
+down_revision = "e8f9a0b1c2d3"
 branch_labels = None
 depends_on = None
 
