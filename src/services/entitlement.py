@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, select, true
+from sqlalchemy import and_, delete, select, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
@@ -135,6 +135,8 @@ async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | Non
     concurrent billing splits for the same user.
     """
     now = now or datetime.now()
+    windows: list[EntitlementWindow] = []
+    any_fresh = False
     for kind, duration in WINDOW_DURATIONS.items():
         await db.execute(
             pg_insert(EntitlementWindow)
@@ -151,8 +153,38 @@ async def open_windows(db: AsyncSession, user_id: uuid.UUID, now: datetime | Non
         if window.expires_at <= now:
             window.started_at = now
             window.expires_at = now + duration
+            window.debt_credits = 0.0
         # else: still active (or just created) — leave it.
+        any_fresh = any_fresh or window.started_at == now
+        windows.append(window)
+    if any_fresh:
+        await _apply_window_debt(db, user_id, windows)
     await db.flush()
+
+
+async def _apply_window_debt(db: AsyncSession, user_id: uuid.UUID, windows: list[EntitlementWindow]) -> None:
+    """Move as much of the user's window debt as both windows have room for into them.
+
+    The same amount lands in every window, like a tier-covered call. Debt beyond the room
+    stays on the user for the next fresh window. Caller holds the windows' row locks.
+    """
+    debt = await db.scalar(select(User.window_debt_credits).where(User.id == user_id).with_for_update())
+    if not debt or debt <= CREDIT_EPSILON:
+        return
+    active_tier, _ = await get_active_plan(db, user_id)
+    tier = get_tier(active_tier)
+    limits = {WINDOW_5H: tier.window_5h_credits, WINDOW_WEEKLY: tier.weekly_credits}
+    moved = debt
+    for window in windows:
+        used = await _usage_since(db, user_id, window.started_at) + window.debt_credits
+        moved = min(moved, remaining_allowance(limits[window.kind], used))
+    if moved <= 0:
+        return
+    for window in windows:
+        window.debt_credits += moved
+    await db.execute(
+        update(User).where(User.id == user_id).values(window_debt_credits=User.window_debt_credits - moved)
+    )
 
 
 async def reset_windows(db: AsyncSession, user_id: uuid.UUID | None) -> None:
@@ -161,9 +193,23 @@ async def reset_windows(db: AsyncSession, user_id: uuid.UUID | None) -> None:
     Called when a plan starts or is upgraded: usage accrued before then (on the old tier,
     or on free while the subscription was lapsed) must not count against the new allowance.
     Not called on a renewal of an already-active plan. Flushes; the caller controls the commit.
+
+    Debt in the active 5h window goes back to the user so the new windows absorb it. Weekly
+    debt is not returned: it duplicates debt that earlier 5h windows already absorbed.
     """
     if user_id is None:
         return
+    unabsorbed = await db.scalar(
+        select(EntitlementWindow.debt_credits).where(
+            EntitlementWindow.user_id == user_id,
+            EntitlementWindow.kind == WINDOW_5H,
+            EntitlementWindow.expires_at > datetime.now(),
+        )
+    )
+    if unabsorbed:
+        await db.execute(
+            update(User).where(User.id == user_id).values(window_debt_credits=User.window_debt_credits + unabsorbed)
+        )
     await db.execute(delete(EntitlementWindow).where(EntitlementWindow.user_id == user_id))
     await db.flush()
 
@@ -246,7 +292,7 @@ async def window_usage_by_users(
     if not user_ids:
         return {}
     window = (
-        select(EntitlementWindow.user_id, EntitlementWindow.started_at)
+        select(EntitlementWindow.user_id, EntitlementWindow.started_at, EntitlementWindow.debt_credits)
         .where(
             EntitlementWindow.user_id.in_(user_ids),
             EntitlementWindow.kind == kind,
@@ -264,7 +310,7 @@ async def window_usage_by_users(
     )
     rows = (
         await db.execute(
-            select(ApiKeyDB.user_id, sql_func.sum(key_usage.c.used))
+            select(ApiKeyDB.user_id, sql_func.sum(key_usage.c.used), window.c.debt_credits)
             .select_from(window)
             .join(
                 ApiKeyDB,
@@ -274,10 +320,10 @@ async def window_usage_by_users(
                 ),
             )
             .join(key_usage, true())
-            .group_by(ApiKeyDB.user_id)
+            .group_by(ApiKeyDB.user_id, window.c.debt_credits)
         )
     ).all()
-    return {row[0]: float(row[1]) for row in rows}
+    return {row[0]: float(row[1]) + float(row[2]) for row in rows}
 
 
 async def month_overflow_by_users(db: AsyncSession, user_ids: set[uuid.UUID], now: datetime) -> dict[uuid.UUID, float]:
@@ -311,6 +357,33 @@ async def month_overflow_by_users(db: AsyncSession, user_ids: set[uuid.UUID], no
     return {row[0]: float(row[1]) for row in rows}
 
 
+async def monthly_charge_room(
+    db: AsyncSession, user_id: uuid.UUID, api_key: ApiKeyDB, tier_covered: float, now: datetime
+) -> float | None:
+    """Most overflow a call may still charge this month under the user's extra-credit cap
+    and the key's ``monthly_limit`` (None = neither is set).
+
+    Must run before the call's own usage row is added, or it counts against itself.
+    """
+    rooms: list[float] = []
+    cap = await db.scalar(select(User.monthly_extra_credit_cap).where(User.id == user_id))
+    if cap is not None:
+        month_overflow = (await month_overflow_by_users(db, {user_id}, now)).get(user_id, 0.0)
+        rooms.append(cap - month_overflow)
+    if api_key.monthly_limit is not None:
+        first_day, next_month = current_month_bounds(now)
+        key_usage = await db.scalar(
+            select(sql_func.coalesce(sql_func.sum(InferenceCall.credits_used), 0.0)).where(
+                InferenceCall.api_key_id == api_key.id,
+                InferenceCall.used_at >= first_day,
+                InferenceCall.used_at < next_month,
+            )
+        )
+        # The key limit counts all usage, so the tier-covered part of this call uses room too.
+        rooms.append(api_key.monthly_limit - float(key_usage or 0.0) - tier_covered)
+    return max(0.0, min(rooms)) if rooms else None
+
+
 async def active_tiers_by_users(db: AsyncSession, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
     """Batched active-subscription tier per user (absent => free)."""
     if not user_ids:
@@ -338,8 +411,12 @@ async def get_allowance_state(
 
     window_5h = await _active_window(db, user_id, WINDOW_5H, now)
     window_weekly = await _active_window(db, user_id, WINDOW_WEEKLY, now)
-    usage_5h = await _usage_since(db, user_id, window_5h.started_at) if window_5h else 0.0
-    usage_weekly = await _usage_since(db, user_id, window_weekly.started_at) if window_weekly else 0.0
+    usage_5h = await _usage_since(db, user_id, window_5h.started_at) + window_5h.debt_credits if window_5h else 0.0
+    usage_weekly = (
+        await _usage_since(db, user_id, window_weekly.started_at) + window_weekly.debt_credits
+        if window_weekly
+        else 0.0
+    )
     prepaid = await _prepaid_balance(db, user_id)
 
     cap: float | None = None

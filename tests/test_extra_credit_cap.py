@@ -20,13 +20,18 @@ from src.models.credit_transaction import CreditTransaction
 from src.models.entitlement_window import EntitlementWindow
 from src.models.inference_call import InferenceCall
 from src.models.user import User
+from src.services.api_key import ApiKeyService
 from src.services.entitlement import (
     WINDOW_5H,
     WINDOW_WEEKLY,
+    _prepaid_balance,
     current_month_bounds,
     effective_prepaid,
     get_allowance_state,
     month_overflow_by_users,
+    open_windows,
+    reset_windows,
+    window_usage_by_users,
 )
 from src.services.users import update_user_profile
 
@@ -329,3 +334,97 @@ def test_subscription_response_carries_cap_fields():
     resp = SubscriptionResponse(tier="free", has_subscription=False)
     assert resp.monthly_extra_credit_cap is None
     assert resp.extra_credits_used_this_month == 0.0
+
+
+async def _bill(key_id, credits_used, *, key_limit=None):
+    """Register one call on ``key_id`` and return the user's prepaid balance afterwards."""
+    async with AsyncSessionLocal() as db:
+        key = await db.get(ApiKeyDB, key_id)
+        key.monthly_limit = key_limit
+        await db.commit()
+        key_str, user_id = key.key, key.user_id
+    await ApiKeyService.register_inference_call(key_str, credits_used, "m")
+    async with AsyncSessionLocal() as db:
+        return await _prepaid_balance(db, user_id)
+
+
+@pytest.mark.parametrize(
+    ("cap", "prior_overflow", "key_limit", "expected_balance"),
+    [
+        (None, 0.0, None, 47.0),  # uncapped -> full 3.0 overflow charged
+        (0.0, 0.0, None, 50.0),  # zero cap -> nothing charged
+        (2.0, 1.5, None, 49.5),  # 0.5 cap room left
+        (2.0, 2.5, None, 50.0),  # already over cap
+        (None, 0.0, 11.0, 49.0),  # key limit 11 - 10 seeded tier usage = 1 room
+        (2.0, 0.0, 11.0, 49.0),  # tighter of the two binds
+    ],
+)
+async def test_billing_clamps_overflow_to_monthly_room(cap, prior_overflow, key_limit, expected_balance):
+    now = datetime.now()
+    overflow_calls = [(prior_overflow, 0.0, now - timedelta(minutes=5))] if prior_overflow else []
+    user_id, key_id = await _setup(prepaid=50.0, cap=cap, exhaust_windows=True, overflow_calls=overflow_calls)
+    try:
+        balance = await _bill(key_id, 3.0, key_limit=key_limit)
+        assert balance == pytest.approx(expected_balance)
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, user_id)
+            # Uncharged overflow is carried as window debt, not forgiven.
+            assert user.window_debt_credits == pytest.approx(3.0 - (50.0 - expected_balance))
+            # The usage row keeps the full cost so the gate keeps seeing the cap as reached.
+            overflow = (await month_overflow_by_users(db, {user_id}, datetime.now())).get(user_id, 0.0)
+        assert overflow == pytest.approx(prior_overflow + 3.0)
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_window_debt_moves_into_fresh_windows_up_to_their_room():
+    # Free tier in tests: 1 credit per 5h window, 4 per week.
+    user_id, _ = await _setup()
+    try:
+        async with AsyncSessionLocal() as db:
+            (await db.get(User, user_id)).window_debt_credits = 2.5
+            await db.commit()
+
+        now = datetime.now()
+        async with AsyncSessionLocal() as db:
+            await open_windows(db, user_id, now)
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            assert (await db.get(User, user_id)).window_debt_credits == pytest.approx(1.5)
+            state = await get_allowance_state(db, user_id, now)
+            assert state.window_5h_used == pytest.approx(1.0)
+            assert state.weekly_used == pytest.approx(1.0)
+            assert (await window_usage_by_users(db, {user_id}, WINDOW_5H, now))[user_id] == pytest.approx(1.0)
+            # An active window takes no more debt.
+            await open_windows(db, user_id, now + timedelta(minutes=1))
+            await db.commit()
+            assert (await db.get(User, user_id)).window_debt_credits == pytest.approx(1.5)
+
+        # Next 5h window: its debt resets, the weekly one keeps accumulating.
+        later = now + timedelta(hours=5, minutes=1)
+        async with AsyncSessionLocal() as db:
+            await open_windows(db, user_id, later)
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            assert (await db.get(User, user_id)).window_debt_credits == pytest.approx(0.5)
+            state = await get_allowance_state(db, user_id, later)
+            assert state.window_5h_used == pytest.approx(1.0)
+            assert state.weekly_used == pytest.approx(2.0)
+    finally:
+        await _cleanup(user_id)
+
+
+async def test_reset_windows_returns_active_5h_debt_to_user():
+    user_id, _ = await _setup()
+    try:
+        async with AsyncSessionLocal() as db:
+            (await db.get(User, user_id)).window_debt_credits = 2.5
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            await open_windows(db, user_id)  # moves 1.0 into the windows, 1.5 left
+            await reset_windows(db, user_id)
+            await db.commit()
+        async with AsyncSessionLocal() as db:
+            assert (await db.get(User, user_id)).window_debt_credits == pytest.approx(2.5)
+    finally:
+        await _cleanup(user_id)
