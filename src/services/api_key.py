@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func as sql_func
@@ -20,10 +20,12 @@ from src.liberclaw_tiers import get_tier_config
 from src.models.api_key import ApiKey as ApiKeyDB
 from src.models.base import AsyncSessionLocal
 from src.models.inference_call import InferenceCall
+from src.models.user import User
 from src.services.api_key_pool import ApiKeyPoolService
 from src.services.credit import CreditService
 from src.services.entitlement import (
     get_allowance_state,
+    monthly_charge_room,
     open_windows,
     remaining_allowance,
 )
@@ -709,6 +711,24 @@ class ApiKeyService:
                         if consumed > 0:
                             liberclaw_extra_used = consumed
 
+        # Monthly caps clamp the charge here because the gate only blocks once a cap is already
+        # reached. Read before the usage row is added (autoflush would count it).
+        overflow = credits_used - tier_covered
+        charge = 0.0
+        if chargeable_user_id is not None and overflow > 0:
+            room = await monthly_charge_room(db, chargeable_user_id, api_key, tier_covered, now)
+            charge = overflow if room is None else min(overflow, room)
+            if charge < overflow:
+                logger.warning(
+                    f"Monthly limit reached: charging {charge} of {overflow} overflow credits, "
+                    f"{overflow - charge} carried to the next window, for user {chargeable_user_id}, key {api_key.id}"
+                )
+                await db.execute(
+                    update(User)
+                    .where(User.id == chargeable_user_id)
+                    .values(window_debt_credits=User.window_debt_credits + (overflow - charge))
+                )
+
         usage = InferenceCall(
             api_key_id=api_key.id,
             credits_used=credits_used,
@@ -727,14 +747,12 @@ class ApiKeyService:
         # transaction (skip for liberclaw, x402 and the shared free chat key):
         # usage row and deduction commit together, so a failure rolls back both
         # and the reporting gateway's retry re-registers once.
-        if chargeable_user_id is not None:
-            overflow = credits_used - tier_covered
-            if overflow > 0:
-                # Post-hoc billing: the call already happened, so capture what the
-                # balance can cover rather than nothing if it falls short.
-                deducted = await CreditService.use_credits(chargeable_user_id, overflow, db=db, allow_partial=True)
-                if not deducted:
-                    logger.warning(f"Failed to fully deduct {overflow} credits for API key {key}")
+        if chargeable_user_id is not None and charge > 0:
+            # Post-hoc billing: the call already happened, so capture what the
+            # balance can cover rather than nothing if it falls short.
+            deducted = await CreditService.use_credits(chargeable_user_id, charge, db=db, allow_partial=True)
+            if not deducted:
+                logger.warning(f"Failed to fully deduct {charge} credits for API key {key}")
 
         await db.flush()
         return True

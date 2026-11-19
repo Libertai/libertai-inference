@@ -34,6 +34,9 @@ class User(Base):
     is_libertai_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Monthly cap (USD credits) on overflow spend beyond entitlement windows. NULL = unlimited.
     monthly_extra_credit_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Overflow left uncharged by a monthly cap or key limit; counted as usage in the user's
+    # next fresh entitlement window(s) instead of being charged to prepaid.
+    window_debt_credits: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     # Transactional emails (payment failed, cancellation confirm) ignore this flag.
     lifecycle_emails_opt_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

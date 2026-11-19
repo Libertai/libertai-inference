@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, UUID, ForeignKey, String, UniqueConstraint
+from sqlalchemy import TIMESTAMP, UUID, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
@@ -24,6 +24,9 @@ class EntitlementWindow(Base):
     kind: Mapped[str] = mapped_column(String, nullable=False)  # "5h" | "weekly"
     started_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
+    # User window debt moved into this window; counts as usage on top of its inference calls.
+    # Zeroed whenever the window resets.
+    debt_credits: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
 
     __table_args__ = (UniqueConstraint("user_id", "kind", name="uq_entitlement_window_user_kind"),)
 
