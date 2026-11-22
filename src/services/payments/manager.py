@@ -70,7 +70,7 @@ AGENT_VERIFICATION_AMOUNT_CENTS = 100
 AGENT_VERIFICATION_AMOUNT = 1.00
 AGENT_VERIFICATION_CURRENCY = "USD"
 AGENT_VERIFICATION_EXT_REF_PREFIX = "agent-verification:"
-AGENT_VERIFICATION_PENDING_REUSE = timedelta(minutes=30)
+AGENT_VERIFICATION_PENDING_TTL = timedelta(minutes=30)
 
 
 class CycleNotStarted(Exception):
@@ -362,7 +362,7 @@ class PaymentManager:
                     LiberclawAgentVerification.amount_cents == AGENT_VERIFICATION_AMOUNT_CENTS,
                     LiberclawAgentVerification.currency == AGENT_VERIFICATION_CURRENCY,
                     LiberclawAgentVerification.checkout_url.is_not(None),
-                    LiberclawAgentVerification.created_at > now - AGENT_VERIFICATION_PENDING_REUSE,
+                    LiberclawAgentVerification.created_at > now - AGENT_VERIFICATION_PENDING_TTL,
                 )
                 .order_by(LiberclawAgentVerification.created_at.desc())
                 .limit(1)
@@ -399,6 +399,31 @@ class PaymentManager:
         await self.db.flush()
         return result
 
+    async def expire_stale_agent_verifications(self) -> int:
+        """Mark abandoned pending verification orders failed after the TTL.
+
+        A later completion event for the same order still verifies the account
+        and grants the credit; this only stops a stale checkout from being
+        reused and keeps the status endpoint honest.
+        """
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - AGENT_VERIFICATION_PENDING_TTL
+        rows = (
+            (
+                await self.db.execute(
+                    select(LiberclawAgentVerification).where(
+                        LiberclawAgentVerification.status == "pending",
+                        LiberclawAgentVerification.created_at < cutoff,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            row.status = "failed"
+        await self.db.flush()
+        return len(rows)
+
     async def _settle_agent_verification(self, event: PaymentEvent) -> bool:
         """Settle a verification order. Returns True when the order is one of ours."""
         if not event.order_id:
@@ -413,7 +438,7 @@ class PaymentManager:
         if row is None:
             return False
 
-        if event.type == PaymentEventType.order_failed:
+        if event.type in (PaymentEventType.order_failed, PaymentEventType.order_cancelled):
             if row.status == "pending":
                 row.status = "failed"
             await self.db.flush()
@@ -534,7 +559,7 @@ class PaymentManager:
                 )
             else:
                 logger.info(f"Top-up {tx.external_reference} already completed, skipping")
-        elif event.type == PaymentEventType.order_failed:
+        elif event.type in (PaymentEventType.order_failed, PaymentEventType.order_cancelled):
             if tx.status == CreditTransactionStatus.completed:
                 # Out-of-order delivery: a declined attempt on an order that has since been
                 # paid. Applying it would confiscate credits the user paid for and may have
@@ -1271,6 +1296,7 @@ class PaymentManager:
         if event.type in (
             PaymentEventType.order_completed,
             PaymentEventType.order_failed,
+            PaymentEventType.order_cancelled,
         ):
             if await self._settle_agent_verification(event):
                 return

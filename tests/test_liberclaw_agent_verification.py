@@ -1,6 +1,7 @@
 """$1 LiberClaw agent-verification orders: checkout reuse and webhook settlement."""
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
@@ -171,6 +172,50 @@ async def test_failed_order_marks_failed_without_grant(db):
     ).scalar_one()
     assert row.status == "failed"
     assert await _grants(db, account_id) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_order_marks_failed_without_grant(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    await _pending_row(db, account_id, "order-1")
+    mgr = PaymentManager(FakeProvider(), db)
+
+    await mgr.handle_event(_event("order-1", PaymentEventType.order_cancelled))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "failed"
+    assert await _grants(db, account_id) == []
+
+
+@pytest.mark.asyncio
+async def test_expiry_marks_old_pending_failed_and_keeps_recent(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    old = await _pending_row(db, account_id, "order-old")
+    await _pending_row(db, account_id, "order-new")
+    old.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=31)
+    await db.flush()
+    mgr = PaymentManager(FakeProvider(), db)
+
+    expired = await mgr.expire_stale_agent_verifications()
+
+    assert expired == 1
+    rows = {
+        row.provider_order_id: row.status
+        for row in (
+            await db.execute(
+                select(LiberclawAgentVerification).where(LiberclawAgentVerification.liberclaw_account_id == account_id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+    assert rows == {"order-old": "failed", "order-new": "pending"}
 
 
 @pytest.mark.asyncio

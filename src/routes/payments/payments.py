@@ -102,6 +102,21 @@ async def expire_subscriptions() -> int:
     return count
 
 
+@scheduler.scheduled_job("interval", minutes=10)
+async def expire_stale_agent_verifications() -> int:
+    """Fail abandoned pending LiberClaw verification orders after the checkout TTL."""
+    async with AsyncSessionLocal() as db:
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        try:
+            count = await manager.expire_stale_agent_verifications()
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.error("expire_stale_agent_verifications failed", exc_info=True)
+            return 0
+    return count
+
+
 @scheduler.scheduled_job("interval", hours=1)
 async def renew_credit_subscriptions() -> int:
     async with AsyncSessionLocal() as db:

@@ -23,6 +23,7 @@ class PaymentEventType(str, Enum):
     """Normalized inbound event, mapped from each provider's own vocabulary."""
 
     order_completed = "order_completed"
+    order_cancelled = "order_cancelled"
     order_failed = "order_failed"
     subscription_initiated = "subscription_initiated"
     subscription_cancelled = "subscription_cancelled"
