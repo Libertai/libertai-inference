@@ -130,3 +130,21 @@ class LiberclawAdminExtendRequest(LiberclawAccountRequest):
 
 class LiberclawExtendResponse(BaseModel):
     new_period_end: str
+
+
+class LiberclawAgentVerificationCheckoutRequest(LiberclawAccountRequest):
+    email: EmailStr
+    redirect_url: str
+
+
+class LiberclawAgentVerificationCheckoutResponse(BaseModel):
+    # None when a paid verification already exists (already_verified=True).
+    url: str | None
+    already_verified: bool = False
+
+
+class LiberclawAgentVerificationStatusResponse(BaseModel):
+    verified: bool
+    status: str | None = None
+    order_id: str | None = None
+    paid_at: datetime | None = None

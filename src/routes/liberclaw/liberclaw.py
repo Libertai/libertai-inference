@@ -18,6 +18,9 @@ from src.interfaces.liberclaw import (
     LiberclawAccountRequest,
     LiberclawAdminExtendRequest,
     LiberclawAdminGrantTrialRequest,
+    LiberclawAgentVerificationCheckoutRequest,
+    LiberclawAgentVerificationCheckoutResponse,
+    LiberclawAgentVerificationStatusResponse,
     LiberclawApiKeyDeactivateResponse,
     LiberclawApiKeyRequest,
     LiberclawApiKeyResponse,
@@ -38,6 +41,7 @@ from src.interfaces.liberclaw import (
 )
 from src.models.base import AsyncSessionLocal
 from src.models.invoice import Invoice
+from src.models.liberclaw_agent_verification import LiberclawAgentVerification
 from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import PlanSubscription
@@ -130,6 +134,49 @@ async def grant_extra_credits(request: LiberclawExtraCreditsGrant) -> LiberclawE
     except Exception as e:
         logger.error(f"Error in grant_extra_credits: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/agent-verification/checkout", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def start_agent_verification_checkout(
+    body: LiberclawAgentVerificationCheckoutRequest,
+) -> LiberclawAgentVerificationCheckoutResponse:
+    """Open (or reuse) the fixed $1 order that verifies a free LiberClaw account."""
+    async with AsyncSessionLocal() as db:
+        await _upsert_bridge(db, body.liberclaw_account_id, body.email)
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        try:
+            result = await manager.start_agent_verification(body.liberclaw_account_id, body.email, body.redirect_url)
+        except (ValueError, UnsupportedCapability) as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except (RuntimeError, httpx.HTTPError) as e:
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
+        await db.commit()
+    if result is None:
+        return LiberclawAgentVerificationCheckoutResponse(url=None, already_verified=True)
+    return LiberclawAgentVerificationCheckoutResponse(url=result.checkout_url)
+
+
+@router.get("/agent-verification", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def get_agent_verification(liberclaw_account_id: uuid.UUID) -> LiberclawAgentVerificationStatusResponse:
+    """Latest verification order for a LiberClaw account (paid -> verified)."""
+    async with AsyncSessionLocal() as db:
+        row = (
+            await db.execute(
+                select(LiberclawAgentVerification)
+                .where(LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id)
+                .order_by(LiberclawAgentVerification.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return LiberclawAgentVerificationStatusResponse(verified=False)
+    return LiberclawAgentVerificationStatusResponse(
+        verified=row.status == "paid",
+        status=row.status,
+        order_id=row.provider_order_id,
+        paid_at=row.paid_at,
+    )
 
 
 @router.get("/user", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore

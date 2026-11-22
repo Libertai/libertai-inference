@@ -25,6 +25,7 @@ from src.config import config
 from src.interfaces.credits import CreditTransactionProvider, CreditTransactionStatus
 from src.liberclaw_tiers import LIBERCLAW_TIERS
 from src.models.credit_transaction import CreditTransaction
+from src.models.liberclaw_agent_verification import LiberclawAgentVerification
 from src.models.plan_subscription import ACTIVE_STATUSES, ENDED_STATUSES, UNPAID_CHECKOUT_STATUSES, PlanSubscription
 from src.models.plan_subscription_event import PlanSubscriptionEvent
 from src.models.user import User
@@ -62,6 +63,15 @@ logger = setup_logger(__name__)
 # the pending row created at checkout time can be completed on confirmation.
 TOPUP_EXT_REF_PREFIX = "topup:"
 
+# Free-tier agent verification: a fixed $1 order, credited back to the LiberClaw
+# account as an extra-credit grant. The amount is server-side so a caller can
+# never choose a cheaper verification.
+AGENT_VERIFICATION_AMOUNT_CENTS = 100
+AGENT_VERIFICATION_AMOUNT = 1.00
+AGENT_VERIFICATION_CURRENCY = "USD"
+AGENT_VERIFICATION_EXT_REF_PREFIX = "agent-verification:"
+AGENT_VERIFICATION_PENDING_REUSE = timedelta(minutes=30)
+
 
 class CycleNotStarted(Exception):
     """A first payment completed before the provider opened the subscription's cycle.
@@ -98,6 +108,15 @@ def _naive_utc(value: str) -> datetime:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
+
+
+def _payment_fingerprint(order: dict) -> str | None:
+    """Card fingerprint from the first payment on the order that carries one."""
+    for payment in order.get("payments") or []:
+        fingerprint = (payment.get("payment_method") or {}).get("fingerprint")
+        if fingerprint:
+            return str(fingerprint)
+    return None
 
 
 def order_invoice_fields(order: dict, order_id: str) -> tuple[int, str, int | None, datetime]:
@@ -308,6 +327,163 @@ class PaymentManager:
             )
             await self.db.flush()
         return result
+
+    async def start_agent_verification(
+        self, liberclaw_account_id: uuid.UUID, email: str, redirect_url: str
+    ) -> CheckoutResult | None:
+        """Open (or reuse) the fixed $1 order that verifies a free LiberClaw account.
+
+        Returns None when the account is already verified; the caller reports that
+        instead of selling a second check.
+        """
+        if not self.provider.supports(PaymentCapability.topup):
+            raise UnsupportedCapability(f"{self.provider.id} does not support top-ups")
+
+        paid = (
+            await self.db.execute(
+                select(LiberclawAgentVerification.id)
+                .where(
+                    LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id,
+                    LiberclawAgentVerification.status == "paid",
+                )
+                .limit(1)
+            )
+        ).first()
+        if paid is not None:
+            return None
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        pending = (
+            await self.db.execute(
+                select(LiberclawAgentVerification)
+                .where(
+                    LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id,
+                    LiberclawAgentVerification.status == "pending",
+                    LiberclawAgentVerification.amount_cents == AGENT_VERIFICATION_AMOUNT_CENTS,
+                    LiberclawAgentVerification.currency == AGENT_VERIFICATION_CURRENCY,
+                    LiberclawAgentVerification.checkout_url.is_not(None),
+                    LiberclawAgentVerification.created_at > now - AGENT_VERIFICATION_PENDING_REUSE,
+                )
+                .order_by(LiberclawAgentVerification.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if pending is not None:
+            return CheckoutResult(
+                checkout_url=pending.checkout_url or "",
+                order_id=pending.provider_order_id,
+            )
+
+        result = await self.provider.create_topup(
+            amount=AGENT_VERIFICATION_AMOUNT,
+            currency=AGENT_VERIFICATION_CURRENCY,
+            redirect_url=redirect_url,
+            user_email=email,
+            metadata={"ext_ref": f"{AGENT_VERIFICATION_EXT_REF_PREFIX}{liberclaw_account_id}"},
+            vat_rate=0.0,
+            item_name="LiberClaw agent verification",
+        )
+        if result.order_id is None:
+            raise RuntimeError("Payment provider returned no order id for verification checkout")
+        self.db.add(
+            LiberclawAgentVerification(
+                liberclaw_account_id=liberclaw_account_id,
+                provider=self.provider.id,
+                provider_order_id=result.order_id,
+                checkout_url=result.checkout_url,
+                amount_cents=AGENT_VERIFICATION_AMOUNT_CENTS,
+                currency=AGENT_VERIFICATION_CURRENCY,
+                status="pending",
+            )
+        )
+        await self.db.flush()
+        return result
+
+    async def _settle_agent_verification(self, event: PaymentEvent) -> bool:
+        """Settle a verification order. Returns True when the order is one of ours."""
+        if not event.order_id:
+            return False
+        row = (
+            await self.db.execute(
+                select(LiberclawAgentVerification)
+                .where(LiberclawAgentVerification.provider_order_id == event.order_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return False
+
+        if event.type == PaymentEventType.order_failed:
+            if row.status == "pending":
+                row.status = "failed"
+            await self.db.flush()
+            return True
+        if event.type != PaymentEventType.order_completed:
+            return True
+        if row.status == "conflict":
+            return True
+        if row.status == "paid" and row.credited_at is not None:
+            return True
+
+        order = await self._get_order(event.order_id)
+        amount = int(order.get("amount", -1))
+        currency = str(order.get("currency", "")).upper()
+        if amount != row.amount_cents or currency != row.currency.upper():
+            row.status = "failed"
+            await self.db.flush()
+            logger.error(
+                f"Verification order {event.order_id} does not match the recorded charge "
+                f"({amount} {currency} != {row.amount_cents} {row.currency})"
+            )
+            return True
+
+        fingerprint = _payment_fingerprint(order)
+        if fingerprint:
+            other = (
+                await self.db.execute(
+                    select(LiberclawAgentVerification)
+                    .where(
+                        LiberclawAgentVerification.payment_method_fingerprint == fingerprint,
+                        LiberclawAgentVerification.id != row.id,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if other is not None and other.liberclaw_account_id != row.liberclaw_account_id:
+                row.status = "conflict"
+                await self.db.flush()
+                logger.error(
+                    f"Verification order {event.order_id}: instrument already verified "
+                    f"account {other.liberclaw_account_id}"
+                )
+                return True
+            if other is not None:
+                # Same account paid twice; keep the fingerprint on one row only (unique).
+                fingerprint = None
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if row.paid_at is None:
+            row.paid_at = now
+        row.status = "paid"
+        if fingerprint:
+            row.payment_method_fingerprint = fingerprint
+        try:
+            granted = await LiberclawService.grant_extra_credits_by_account_id(
+                self.db,
+                row.liberclaw_account_id,
+                AGENT_VERIFICATION_AMOUNT,
+                f"{AGENT_VERIFICATION_EXT_REF_PREFIX}{event.order_id}",
+            )
+        except ValueError:
+            logger.error(f"Verification {event.order_id}: no LiberClaw bridge for account {row.liberclaw_account_id}")
+        else:
+            row.credited_at = now
+            logger.info(
+                f"Agent verification {event.order_id} paid for account "
+                f"{row.liberclaw_account_id}; credited ${granted:g}"
+            )
+        await self.db.flush()
+        return True
 
     async def _settle_topup(self, event: PaymentEvent) -> bool:
         """Complete/fail a pending top-up. Returns True if this event was a top-up."""
@@ -1091,12 +1267,15 @@ class PaymentManager:
 
     # ------------------------------------------------------------------ webhook dispatch
     async def handle_event(self, event: PaymentEvent) -> None:
-        # Top-ups settle first (local pending row keyed by order id).
+        # Verification orders and top-ups settle first (local rows keyed by order id).
         if event.type in (
             PaymentEventType.order_completed,
             PaymentEventType.order_failed,
-        ) and await self._settle_topup(event):
-            return
+        ):
+            if await self._settle_agent_verification(event):
+                return
+            if await self._settle_topup(event):
+                return
 
         sub = await self._resolve_subscription(event, lock=False)
         if not sub:

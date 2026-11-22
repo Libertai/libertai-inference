@@ -83,6 +83,7 @@ import src.models.credit_campaign
 import src.models.credit_transaction
 import src.models.entitlement_window
 import src.models.inference_call
+import src.models.liberclaw_agent_verification
 import src.models.liberclaw_billing_details
 import src.models.liberclaw_credit_grant
 import src.models.liberclaw_user
