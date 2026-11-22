@@ -214,6 +214,33 @@ async def test_topup_failure_voids_pending(db):
 
 
 @pytest.mark.asyncio
+async def test_topup_cancelled_voids_pending(db):
+    user = await _make_user(db)
+    mgr = PaymentManager(FakeProvider(), db)
+    await mgr.start_topup(user, redirect_url="http://x", usd_credits=5.0, charge_amount=5.0, charge_currency="USD")
+
+    await mgr.handle_event(
+        PaymentEvent(
+            provider="fake",
+            type=PaymentEventType.order_cancelled,
+            provider_event_id="ORDER_CANCELLED:ord_1",
+            order_id="ord_1",
+        )
+    )
+    tx = (
+        await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.external_reference == _topup_external_ref("fake", "ord_1")
+            )
+        )
+    ).scalar_one()
+    assert tx.status == CreditTransactionStatus.error
+    assert tx.is_active is False
+    assert tx.amount_left == 0.0
+    assert await _balance(db, user.id) == 0.0
+
+
+@pytest.mark.asyncio
 async def test_topup_declined_then_captured_on_retry_credits_in_full(db):
     """Several declines on one order, then a success: the retry must credit the full amount.
 

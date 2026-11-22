@@ -410,10 +410,15 @@ class PaymentManager:
         rows = (
             (
                 await self.db.execute(
-                    select(LiberclawAgentVerification).where(
+                    select(LiberclawAgentVerification)
+                    .where(
                         LiberclawAgentVerification.status == "pending",
                         LiberclawAgentVerification.created_at < cutoff,
                     )
+                    # Lock the rows the flush below overwrites: a completion webhook that
+                    # commits `paid` while we wait on the lock makes the locked re-check
+                    # (READ COMMITTED) re-evaluate the predicate and skip the row.
+                    .with_for_update()
                 )
             )
             .scalars()
@@ -475,6 +480,9 @@ class PaymentManager:
                 )
             ).scalar_one_or_none()
             if other is not None and other.liberclaw_account_id != row.liberclaw_account_id:
+                # Intentional: the $1 stays charged as the anti-sybil cost. The card
+                # already verified another account, so this account gets neither the
+                # credit grant nor verification, and there is no refund path.
                 row.status = "conflict"
                 await self.db.flush()
                 logger.error(
@@ -492,6 +500,8 @@ class PaymentManager:
         row.status = "paid"
         if fingerprint:
             row.payment_method_fingerprint = fingerprint
+        # No invoice for the $1: it is a verification deposit credited back as usage
+        # credits below, not a purchase — unlike top-ups, which must invoice.
         try:
             granted = await LiberclawService.grant_extra_credits_by_account_id(
                 self.db,

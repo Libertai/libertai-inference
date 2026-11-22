@@ -49,6 +49,8 @@ async def get_agent_verification_status(
     if latest is None:
         return LiberclawAgentVerificationStatusResponse(verified=False)
     return LiberclawAgentVerificationStatusResponse(
+        # Not a constant: READ COMMITTED gives each statement a fresh snapshot, so a
+        # webhook can commit a paid row between the two queries.
         verified=latest.status == "paid",
         status=latest.status,
         order_id=latest.provider_order_id,

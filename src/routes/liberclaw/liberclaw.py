@@ -140,7 +140,12 @@ async def grant_extra_credits(request: LiberclawExtraCreditsGrant) -> LiberclawE
 async def start_agent_verification_checkout(
     body: LiberclawAgentVerificationCheckoutRequest,
 ) -> LiberclawAgentVerificationCheckoutResponse:
-    """Open (or reuse) the fixed $1 order that verifies a free LiberClaw account."""
+    """Open (or reuse) the fixed $1 order that verifies a free LiberClaw account.
+
+    Deliberately not behind ``require_billing_enabled``: verification is not a
+    subscription, and its settlement runs before the LiberClaw cutover gate in
+    ``handle_event``, so an order taken while the billing flag is off still settles.
+    """
     async with AsyncSessionLocal() as db:
         await _upsert_bridge(db, body.liberclaw_account_id, body.email)
         manager = PaymentManager(payment_registry.get("revolut"), db)
