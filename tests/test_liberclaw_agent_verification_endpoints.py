@@ -100,6 +100,27 @@ async def test_checkout_bridge_conflict_is_409_before_provider_call(async_client
 
 
 @pytest.mark.asyncio
+async def test_status_reports_unverified_without_an_order(async_client):
+    account_id = uuid.uuid4()
+    await _seed_account(account_id)
+    try:
+        resp = await async_client.get(
+            "/liberclaw/agent-verification",
+            headers=HEADERS,
+            params={"liberclaw_account_id": str(account_id)},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            "verified": False,
+            "status": None,
+            "order_id": None,
+            "paid_at": None,
+        }
+    finally:
+        await _cleanup(account_id)
+
+
+@pytest.mark.asyncio
 async def test_status_reports_paid_verification(async_client):
     account_id = uuid.uuid4()
     await _seed_account(account_id, status="paid")
