@@ -41,7 +41,6 @@ from src.interfaces.liberclaw import (
 )
 from src.models.base import AsyncSessionLocal
 from src.models.invoice import Invoice
-from src.models.liberclaw_agent_verification import LiberclawAgentVerification
 from src.models.liberclaw_billing_details import LiberclawBillingDetails
 from src.models.liberclaw_user import LiberclawUser
 from src.models.plan_subscription import PlanSubscription
@@ -50,6 +49,7 @@ from src.services.auth import verify_liberclaw_token
 from src.services.invoice import SERIES_LCLW
 from src.services.invoice_pdf import get_or_render_pdf
 from src.services.liberclaw import LiberclawService
+from src.services.liberclaw_agent_verification import get_agent_verification_status
 from src.services.liberclaw_invoices import account_is_known
 from src.services.payments.base import CheckoutResult, UnsupportedCapability
 from src.services.payments.manager import PaymentManager, ProviderCancelFailed, SupersedeFailed
@@ -159,24 +159,9 @@ async def start_agent_verification_checkout(
 
 @router.get("/agent-verification", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
 async def get_agent_verification(liberclaw_account_id: uuid.UUID) -> LiberclawAgentVerificationStatusResponse:
-    """Latest verification order for a LiberClaw account (paid -> verified)."""
+    """Report any paid verification, falling back to the latest order for detail."""
     async with AsyncSessionLocal() as db:
-        row = (
-            await db.execute(
-                select(LiberclawAgentVerification)
-                .where(LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id)
-                .order_by(LiberclawAgentVerification.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-    if row is None:
-        return LiberclawAgentVerificationStatusResponse(verified=False)
-    return LiberclawAgentVerificationStatusResponse(
-        verified=row.status == "paid",
-        status=row.status,
-        order_id=row.provider_order_id,
-        paid_at=row.paid_at,
-    )
+        return await get_agent_verification_status(db, liberclaw_account_id)
 
 
 @router.get("/user", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore

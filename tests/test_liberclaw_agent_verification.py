@@ -279,3 +279,135 @@ async def test_unknown_order_is_ignored(db):
     await mgr.handle_event(_event("foreign-order"))
 
     assert provider.topups == []
+
+
+@pytest.mark.asyncio
+async def test_status_reports_older_paid_order_shadowed_by_newer_pending(db):
+    from src.services.liberclaw_agent_verification import get_agent_verification_status
+
+    account_id = uuid.uuid4()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    paid = LiberclawAgentVerification(
+        liberclaw_account_id=account_id,
+        provider="fake",
+        provider_order_id=f"paid-{account_id.hex}",
+        amount_cents=100,
+        currency="USD",
+        status="paid",
+    )
+    newer = LiberclawAgentVerification(
+        liberclaw_account_id=account_id,
+        provider="fake",
+        provider_order_id=f"newer-{account_id.hex}",
+        amount_cents=100,
+        currency="USD",
+        status="pending",
+    )
+    db.add_all([paid, newer])
+    await db.flush()
+    paid.created_at = now - timedelta(minutes=45)
+    paid.paid_at = now - timedelta(minutes=40)
+    newer.created_at = now - timedelta(minutes=1)
+    await db.flush()
+
+    response = await get_agent_verification_status(db, account_id)
+
+    assert response.verified is True
+    assert response.status == "paid"
+    assert response.order_id == f"paid-{account_id.hex}"
+
+
+@pytest.mark.asyncio
+async def test_status_falls_back_to_the_latest_pending_order(db):
+    from src.services.liberclaw_agent_verification import get_agent_verification_status
+
+    account_id = uuid.uuid4()
+    await _pending_row(db, account_id, f"pending-{account_id.hex}")
+
+    response = await get_agent_verification_status(db, account_id)
+
+    assert response.verified is False
+    assert response.status == "pending"
+    assert response.order_id == f"pending-{account_id.hex}"
+
+
+@pytest.mark.asyncio
+async def test_currency_mismatch_is_not_accepted(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    await _pending_row(db, account_id, "order-1")
+    provider = FakeProvider()
+    provider.orders["order-1"] = _completed_order(currency="EUR")
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "failed"
+    assert await _grants(db, account_id) == []
+
+
+@pytest.mark.asyncio
+async def test_same_account_second_payment_keeps_one_fingerprint(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=account_id,
+            provider="fake",
+            provider_order_id="order-1",
+            amount_cents=100,
+            currency="USD",
+            status="paid",
+            payment_method_fingerprint="same-card",
+        )
+    )
+    await _pending_row(db, account_id, "order-2")
+    provider = FakeProvider()
+    provider.orders["order-2"] = _completed_order(fingerprint="same-card")
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-2"))
+
+    second = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-2")
+        )
+    ).scalar_one()
+    assert second.status == "paid"
+    assert second.payment_method_fingerprint is None
+    assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_paid_uncredited_redelivery_grants_credit(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    paid = LiberclawAgentVerification(
+        liberclaw_account_id=account_id,
+        provider="fake",
+        provider_order_id="order-1",
+        amount_cents=100,
+        currency="USD",
+        status="paid",
+    )
+    paid.paid_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.add(paid)
+    provider = FakeProvider()
+    provider.orders["order-1"] = _completed_order()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"
+    assert row.credited_at is not None
+    assert len(await _grants(db, account_id)) == 1
