@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
+from src.config import config
 from src.models.liberclaw_agent_verification import LiberclawAgentVerification
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant
 from src.models.liberclaw_user import LiberclawUser
@@ -54,6 +55,17 @@ def _completed_order(fingerprint: str | None = None, amount: int = 100, currency
     if fingerprint:
         order["payments"] = [{"payment_method": {"fingerprint": fingerprint}}]
     return order
+
+
+def _order_with_attempts(*attempts: tuple[str, str]) -> dict:
+    """Order payload with (state, fingerprint) payment attempts in delivery order."""
+    return {
+        "amount": 100,
+        "currency": "USD",
+        "payments": [
+            {"state": state, "payment_method": {"fingerprint": fingerprint}} for state, fingerprint in attempts
+        ],
+    }
 
 
 async def _grants(db, account_id: uuid.UUID) -> list[LiberclawCreditGrant]:
@@ -410,4 +422,106 @@ async def test_paid_uncredited_redelivery_grants_credit(db):
     ).scalar_one()
     assert row.status == "paid"
     assert row.credited_at is not None
+    assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_comes_from_the_capturing_payment(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    await _pending_row(db, account_id, "order-1")
+    provider = FakeProvider()
+    provider.orders["order-1"] = _order_with_attempts(("declined", "fp-declined"), ("completed", "fp-paid"))
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"
+    assert row.payment_method_fingerprint == "fp-paid"
+
+
+@pytest.mark.asyncio
+async def test_declined_card_does_not_falsely_conflict_with_a_bound_card(db):
+    """A declined attempt must not bind its card: only the card that captured counts."""
+    other_account = uuid.uuid4()
+    account_id = uuid.uuid4()
+    await _lc_account(db, other_account)
+    await _lc_account(db, account_id)
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=other_account,
+            provider="fake",
+            provider_order_id="other-order",
+            amount_cents=100,
+            currency="USD",
+            status="paid",
+            payment_method_fingerprint="fp-declined",
+        )
+    )
+    await _pending_row(db, account_id, "order-1")
+    provider = FakeProvider()
+    provider.orders["order-1"] = _order_with_attempts(("declined", "fp-declined"), ("completed", "fp-paid"))
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"
+    assert row.payment_method_fingerprint == "fp-paid"
+    assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_completion_after_expiry_still_verifies_and_grants(db):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    row = await _pending_row(db, account_id, "order-late")
+    row.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=31)
+    await db.flush()
+    provider = FakeProvider()
+    provider.orders["order-late"] = _completed_order()
+    mgr = PaymentManager(provider, db)
+
+    assert await mgr.expire_stale_agent_verifications() == 1
+    assert row.status == "failed"
+    await mgr.handle_event(_event("order-late"))
+
+    refreshed = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-late")
+        )
+    ).scalar_one()
+    assert refreshed.status == "paid"
+    assert refreshed.credited_at is not None
+    assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_settles_verification_while_billing_flag_is_off(db, monkeypatch):
+    """Verification is not a subscription: the cutover flag must not block its settlement."""
+    monkeypatch.setattr(config, "LIBERCLAW_BILLING_ENABLED", False)
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    await _pending_row(db, account_id, "order-1")
+    provider = FakeProvider()
+    provider.orders["order-1"] = _completed_order()
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"
     assert len(await _grants(db, account_id)) == 1

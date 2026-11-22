@@ -12,6 +12,7 @@ the ``plan_subscriptions`` row and is read directly by the entitlement service.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
@@ -55,7 +56,7 @@ from src.subscription_tiers import (
     paid_tiers,
 )
 from src.utils.logger import setup_logger
-from src.utils.pg_locks import USER_SUBSCRIPTION_LOCK_CLASS
+from src.utils.pg_locks import USER_SUBSCRIPTION_LOCK_CLASS, VERIFICATION_FINGERPRINT_LOCK_CLASS
 
 logger = setup_logger(__name__)
 
@@ -67,7 +68,7 @@ TOPUP_EXT_REF_PREFIX = "topup:"
 # account as an extra-credit grant. The amount is server-side so a caller can
 # never choose a cheaper verification.
 AGENT_VERIFICATION_AMOUNT_CENTS = 100
-AGENT_VERIFICATION_AMOUNT = 1.00
+AGENT_VERIFICATION_AMOUNT = AGENT_VERIFICATION_AMOUNT_CENTS / 100
 AGENT_VERIFICATION_CURRENCY = "USD"
 AGENT_VERIFICATION_EXT_REF_PREFIX = "agent-verification:"
 AGENT_VERIFICATION_PENDING_TTL = timedelta(minutes=30)
@@ -111,12 +112,25 @@ def _naive_utc(value: str) -> datetime:
 
 
 def _payment_fingerprint(order: dict) -> str | None:
-    """Card fingerprint from the first payment on the order that carries one."""
+    """Card fingerprint from the payment that captured, else the first one recorded.
+
+    An order's ``payments`` list keeps every attempt, including declined ones, and a
+    declined attempt still carries the card's fingerprint. Binding the first attempt
+    would blame the wrong card when a decline precedes the payment that paid, so the
+    completed payment wins; the fallback keeps older payloads working when no payment
+    is marked completed.
+    """
+    fallback = None
     for payment in order.get("payments") or []:
         fingerprint = (payment.get("payment_method") or {}).get("fingerprint")
-        if fingerprint:
-            return str(fingerprint)
-    return None
+        if not fingerprint:
+            continue
+        fingerprint = str(fingerprint)
+        if payment.get("state") == "completed":
+            return fingerprint
+        if fallback is None:
+            fallback = fingerprint
+    return fallback
 
 
 def order_invoice_fields(order: dict, order_id: str) -> tuple[int, str, int | None, datetime]:
@@ -208,6 +222,14 @@ def _lock_key(owning_id: uuid.UUID) -> int:
     Two owning ids sharing an objid merely serialize against each other.
     """
     return int.from_bytes(owning_id.bytes[:4], "big", signed=True)
+
+
+def _fingerprint_lock_key(fingerprint: str) -> int:
+    """Signed 32-bit objid for ``VERIFICATION_FINGERPRINT_LOCK_CLASS``.
+
+    Collisions merely serialize unrelated fingerprints against each other.
+    """
+    return int.from_bytes(hashlib.sha256(fingerprint.encode()).digest()[:4], "big", signed=True)
 
 
 class PaymentManager:
@@ -469,6 +491,15 @@ class PaymentManager:
 
         fingerprint = _payment_fingerprint(order)
         if fingerprint:
+            # Serialize same-card claims across orders: this transaction cannot see
+            # another's uncommitted fingerprint row, so without the lock both would pass
+            # the check below and the unique index would turn the race into a 500 that
+            # only self-heals on provider redelivery.
+            await self.db.execute(
+                select(
+                    func.pg_advisory_xact_lock(VERIFICATION_FINGERPRINT_LOCK_CLASS, _fingerprint_lock_key(fingerprint))
+                )
+            )
             other = (
                 await self.db.execute(
                     select(LiberclawAgentVerification)

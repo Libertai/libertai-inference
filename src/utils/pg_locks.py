@@ -32,6 +32,11 @@ INVOICE_NUMBER_LOCK_CLASS = 911006
 # replicas from draining the same tier_push_pending markers concurrently.
 LCLW_TIER_PUSH_DRAIN_LOCK_ID = 911007
 
+# Classid for card-fingerprint claims on agent-verification orders; objid is derived
+# from the fingerprint. Serializes same-card settlements across orders, whose
+# check-then-set would otherwise rely on the unique index to fail one of them.
+VERIFICATION_FINGERPRINT_LOCK_CLASS = 911008
+
 T = TypeVar("T")
 
 
