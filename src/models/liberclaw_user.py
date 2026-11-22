@@ -24,6 +24,8 @@ class LiberclawUser(Base):
     # LiberClaw's own users.id, set by the api-key call. Identity bridge to Invoice.liberclaw_account_id
     # (never key ownership on this row's user_id/user_type — that's the email-based identity, and emails recycle).
     liberclaw_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID, nullable=True, index=True)
+    # Mirrors LiberClaw's own users.suspended_at, written only by the suspended-accounts sync.
+    suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
     api_keys: Mapped[list["ApiKey"]] = relationship("ApiKey", back_populates="liberclaw_user")
     credit_grants: Mapped[list["LiberclawCreditGrant"]] = relationship(

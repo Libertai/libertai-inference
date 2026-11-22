@@ -125,6 +125,18 @@ def _row_user_label(
     return f"{display_name} ({contact})" if display_name else contact
 
 
+def _liberclaw_key_live():
+    """Predicate on ``ApiKey``: false only for a key whose liberclaw identity is suspended.
+
+    A subquery rather than a join, so it composes with statements that already join
+    ``LiberclawUser``.
+    """
+    return or_(
+        ApiKey.liberclaw_user_id.is_(None),
+        ApiKey.liberclaw_user_id.not_in(select(LiberclawUser.id).where(LiberclawUser.suspended_at.isnot(None))),
+    )
+
+
 def _live_keys(stmt):
     """Restrict a statement already joined to ``ApiKey`` to keys owned by a live account.
 
@@ -132,13 +144,11 @@ def _live_keys(stmt):
     credits are excluded from every global statistic. The join is an OUTER join and the
     predicate admits ``user_id IS NULL`` because that column is nullable: liberclaw keys hang
     off ``liberclaw_user_id`` and legacy keys off nothing. An inner join, or a bare
-    ``suspended_at IS NULL``, silently drops both from the totals.
-
-    ``liberclaw_users`` carries no suspension column, so liberclaw traffic cannot be filtered
-    here; that side is cut by deactivating the key instead.
+    ``suspended_at IS NULL``, silently drops both from the totals. Liberclaw identities are
+    filtered on their own ``liberclaw_users.suspended_at``.
     """
     return stmt.outerjoin(User, ApiKey.user_id == User.id).where(
-        or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None))
+        or_(ApiKey.user_id.is_(None), User.suspended_at.is_(None)), _liberclaw_key_live()
     )
 
 
@@ -2149,7 +2159,7 @@ class StatsService:
                     time_col <= end_datetime,
                 ]
                 if is_lib:
-                    conditions.append(ApiKey.liberclaw_user_id.isnot(None))
+                    conditions.extend([ApiKey.liberclaw_user_id.isnot(None), _liberclaw_key_live()])
                 else:
                     conditions.append(ApiKey.user_id.isnot(None))
 
