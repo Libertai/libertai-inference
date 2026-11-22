@@ -48,8 +48,9 @@ class _Config:
     LIBERTAI_CHAT_API_KEY: str
     LIBERTAI_CHAT_API_BASE_URL: str
 
-    THIRDWEB_SECRET_KEY: str
-    THIRDWEB_VAULT_ACCESS_TOKEN: str
+    CDP_API_KEY_ID: str
+    CDP_API_KEY_SECRET: str
+    X402_MIN_PRICE: float
 
     # OAuth (apps registered under the LibertAI org / Google Cloud project)
     GOOGLE_CLIENT_ID: str
@@ -162,8 +163,11 @@ class _Config:
 
         self.LIBERTAI_CHAT_API_KEY = os.getenv("LIBERTAI_CHAT_API_KEY")
         self.LIBERTAI_CHAT_API_BASE_URL = os.getenv("LIBERTAI_CHAT_API_BASE_URL")
-        self.THIRDWEB_SECRET_KEY = os.getenv("THIRDWEB_SECRET_KEY", "")
-        self.THIRDWEB_VAULT_ACCESS_TOKEN = os.getenv("THIRDWEB_VAULT_ACCESS_TOKEN", "")
+        self.CDP_API_KEY_ID = os.getenv("CDP_API_KEY_ID", "")
+        self.CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET", "")
+        # USD floor for any x402 upto settlement; must match libertai-api's X402_MIN_PRICE,
+        # which floors the maximum the payer authorizes.
+        self.X402_MIN_PRICE = float(os.getenv("X402_MIN_PRICE", "") or 0.005)
 
         # OAuth
         self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
