@@ -26,6 +26,8 @@ from src.interfaces.liberclaw import (
     LiberclawExtendResponse,
     LiberclawExtraCreditsGrant,
     LiberclawExtraCreditsResponse,
+    LiberclawSuspendedAccountsRequest,
+    LiberclawSuspendedAccountsResponse,
     LiberclawTierRequest,
     LiberclawTrialEligibilityResponse,
     LiberclawTrialRequest,
@@ -95,6 +97,19 @@ async def deactivate_api_key(request: LiberclawApiKeyRequest) -> LiberclawApiKey
         return LiberclawApiKeyDeactivateResponse(deactivated=deactivated)
     except Exception as e:
         logger.error(f"Error in deactivate_api_key: {e!s}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.put("/suspended-accounts", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def sync_suspended_accounts(request: LiberclawSuspendedAccountsRequest) -> LiberclawSuspendedAccountsResponse:
+    """Replace the set of suspended LiberClaw accounts; global statistics exclude their usage."""
+    try:
+        suspended, unsuspended = await LiberclawService.sync_suspended_accounts(
+            [(a.account_id, a.user_id, a.user_type) for a in request.accounts]
+        )
+        return LiberclawSuspendedAccountsResponse(suspended=suspended, unsuspended=unsuspended)
+    except Exception as e:
+        logger.error(f"Error in sync_suspended_accounts: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

@@ -21,6 +21,24 @@ class LiberclawApiKeyDeactivateResponse(BaseModel):
     deactivated: bool
 
 
+class LiberclawSuspendedAccount(BaseModel):
+    # LiberClaw's users.id, and the identity the api-key call uses. Both are sent because
+    # many rows carry no liberclaw_account_id; a row matches on either.
+    account_id: uuid.UUID
+    user_id: str
+    user_type: str
+
+
+class LiberclawSuspendedAccountsRequest(BaseModel):
+    # The complete set of suspended LiberClaw accounts: every account not listed is live.
+    accounts: list[LiberclawSuspendedAccount]
+
+
+class LiberclawSuspendedAccountsResponse(BaseModel):
+    suspended: int
+    unsuspended: int
+
+
 class LiberclawExtraCreditsGrant(BaseModel):
     user_id: str
     user_type: str

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import false, not_, or_, select, tuple_, update
 from sqlalchemy.sql import func as sql_func
 
 from src.interfaces.api_keys import ApiKeyType
@@ -179,6 +179,38 @@ class LiberclawService:
             key.is_active = False
             await db.commit()
             return True
+
+    @staticmethod
+    async def sync_suspended_accounts(accounts: list[tuple[uuid.UUID, str, str]]) -> tuple[int, int]:
+        """Make ``liberclaw_users.suspended_at`` match the complete set of suspended accounts.
+
+        ``accounts`` is ``(account_id, user_id, user_type)`` per suspended account; a row matches
+        on its ``liberclaw_account_id`` or on its ``(user_type, user_id)`` identity. Returns
+        ``(newly_suspended, unsuspended)``. Already-suspended rows keep their timestamp.
+        """
+        account_ids = [a[0] for a in accounts]
+        identities = [(a[2], a[1]) for a in accounts]
+        listed = (
+            or_(
+                LiberclawUser.liberclaw_account_id.in_(account_ids),
+                tuple_(LiberclawUser.user_type, LiberclawUser.user_id).in_(identities),
+            )
+            if accounts
+            else false()
+        )
+        async with AsyncSessionLocal() as db:
+            suspended = await db.execute(
+                update(LiberclawUser)
+                .where(listed, LiberclawUser.suspended_at.is_(None))
+                .values(suspended_at=sql_func.now())
+            )
+            unsuspended = await db.execute(
+                update(LiberclawUser)
+                .where(LiberclawUser.suspended_at.isnot(None), not_(listed))
+                .values(suspended_at=None)
+            )
+            await db.commit()
+            return suspended.rowcount, unsuspended.rowcount
 
     @staticmethod
     async def update_tier(
