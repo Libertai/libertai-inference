@@ -1,15 +1,18 @@
+import base64
 import json
+import math
 
-import aiohttp
+import httpx
 
 from src.config import config
 from src.interfaces.aleph import AudioPricing, EmbeddingPricing, TextPricing
 from src.services.aleph import aleph_service
+from src.utils.cdp_auth import CDP_HOST, cdp_auth_headers
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-THIRDWEB_X402_BASE = "https://api.thirdweb.com/v1/payments/x402"
+FACILITATOR_ROUTE = "/platform/v2/x402"
 
 
 class X402Service:
@@ -66,53 +69,47 @@ class X402Service:
         return prices
 
     @staticmethod
-    async def settle_payment(payment_payload: str, payment_requirements: str, actual_amount: float) -> bool:
-        """Settle x402 payment via thirdweb facilitator.
+    def settlement_requirements(payment_requirements: dict, actual_amount: float) -> dict:
+        """Requirements to settle with: upto charges the actual cost, floored at
+        X402_MIN_PRICE and capped at the authorized maximum; exact charges what was signed."""
+        if payment_requirements.get("scheme") != "upto":
+            return payment_requirements
+        authorized = int(payment_requirements["amount"])
+        charged = math.ceil(round(max(actual_amount, config.X402_MIN_PRICE) * 1_000_000, 6))
+        return {**payment_requirements, "amount": str(min(charged, authorized))}
 
-        For upto scheme, overrides maxAmountRequired in paymentRequirements with
-        the actual usage cost so thirdweb only settles what was consumed.
+    @staticmethod
+    async def settle_payment(payment_payload: str, payment_requirements: str, actual_amount: float) -> bool:
+        """Settle a standard x402 v2 payment through the CDP facilitator.
+
+        payment_payload is the client's base64 PAYMENT-SIGNATURE header, payment_requirements
+        the JSON requirements it signed (its `accepted`), both relayed by the model server.
         """
         try:
-            parsed_payload = json.loads(payment_payload) if isinstance(payment_payload, str) else payment_payload
-            parsed_requirements = (
-                json.loads(payment_requirements) if isinstance(payment_requirements, str) else payment_requirements
-            )
-
-            x402_version = parsed_payload.get("x402Version", 2)
-
-            # Override maxAmountRequired with actual cost (USD → micro-USDC)
-            actual_amount_micro = str(int(actual_amount * 1_000_000))
-            parsed_requirements["maxAmountRequired"] = actual_amount_micro
-
-            headers = {
-                "Content-Type": "application/json",
-                "x-secret-key": config.THIRDWEB_SECRET_KEY,
-            }
-            if config.THIRDWEB_VAULT_ACCESS_TOKEN:
-                headers["x-vault-access-token"] = config.THIRDWEB_VAULT_ACCESS_TOKEN
-
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{THIRDWEB_X402_BASE}/settle",
-                    json={
-                        "x402Version": x402_version,
-                        "paymentPayload": parsed_payload,
-                        "paymentRequirements": parsed_requirements,
-                        "waitUntil": "confirmed",
-                    },
+            payload = json.loads(base64.b64decode(payment_payload))
+            requirements = X402Service.settlement_requirements(json.loads(payment_requirements), actual_amount)
+            path = f"{FACILITATOR_ROUTE}/settle"
+            headers = cdp_auth_headers(config.CDP_API_KEY_ID, config.CDP_API_KEY_SECRET, "POST", path)
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"https://{CDP_HOST}{path}",
+                    json={"x402Version": 2, "paymentPayload": payload, "paymentRequirements": requirements},
                     headers=headers,
-                ) as response,
-            ):
-                if response.status == 200:
-                    logger.info(f"x402 payment settled (actual: {actual_amount_micro} micro-USDC)")
-                    return True
-                else:
-                    error_text = await response.text()
-                    logger.error(f"x402 settlement failed: {response.status} - {error_text}")
-                    return False
+                )
+            if response.status_code == 200 and response.json().get("success"):
+                logger.info(f"x402 payment settled ({requirements['amount']} USDC atomic units)")
+                return True
+            # Served but unpaid, e.g. the payer moved funds after /verify: one stable,
+            # greppable line per occurrence to spot abusive payers.
+            authorization = payload.get("payload", {})
+            authorization = authorization.get("authorization") or authorization.get("permit2Authorization") or {}
+            logger.error(
+                f"x402 settlement failed: payer={authorization.get('from')} scheme={requirements.get('scheme')} "
+                f"amount={requirements.get('amount')} status={response.status_code} response={response.text}"
+            )
+            return False
         except Exception as e:
-            logger.error(f"x402 settlement exception: {e}")
+            logger.error(f"x402 settlement exception: {e}", exc_info=True)
             return False
 
 
