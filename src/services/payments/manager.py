@@ -117,20 +117,25 @@ def _payment_fingerprint(order: dict) -> str | None:
     An order's ``payments`` list keeps every attempt, including declined ones, and a
     declined attempt still carries the card's fingerprint. Binding the first attempt
     would blame the wrong card when a decline precedes the payment that paid, so the
-    completed payment wins; the fallback keeps older payloads working when no payment
-    is marked completed.
+    completed payment wins. If a payment completed without a fingerprint (Revolut Pay,
+    bank), nothing is bound: falling back to a declined card's fingerprint would let a
+    card that never paid block its real owner later. The fallback is only for payloads
+    that carry no completed payment at all.
     """
     fallback = None
+    saw_completed = False
     for payment in order.get("payments") or []:
+        completed = payment.get("state") == "completed"
+        saw_completed = saw_completed or completed
         fingerprint = (payment.get("payment_method") or {}).get("fingerprint")
         if not fingerprint:
             continue
         fingerprint = str(fingerprint)
-        if payment.get("state") == "completed":
+        if completed:
             return fingerprint
         if fallback is None:
             fallback = fingerprint
-    return fallback
+    return None if saw_completed else fallback
 
 
 def order_invoice_fields(order: dict, order_id: str) -> tuple[int, str, int | None, datetime]:
@@ -366,6 +371,7 @@ class PaymentManager:
                 select(LiberclawAgentVerification.id)
                 .where(
                     LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id,
+                    LiberclawAgentVerification.provider == self.provider.id,
                     LiberclawAgentVerification.status == "paid",
                 )
                 .limit(1)
@@ -386,6 +392,7 @@ class PaymentManager:
                 select(LiberclawAgentVerification)
                 .where(
                     LiberclawAgentVerification.liberclaw_account_id == liberclaw_account_id,
+                    LiberclawAgentVerification.provider == self.provider.id,
                     LiberclawAgentVerification.status == "pending",
                     LiberclawAgentVerification.amount_cents == AGENT_VERIFICATION_AMOUNT_CENTS,
                     LiberclawAgentVerification.currency == AGENT_VERIFICATION_CURRENCY,

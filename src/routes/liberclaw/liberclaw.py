@@ -151,7 +151,7 @@ async def start_agent_verification_checkout(
         manager = PaymentManager(payment_registry.get("revolut"), db)
         try:
             result = await manager.start_agent_verification(body.liberclaw_account_id, body.email, body.redirect_url)
-        except (ValueError, UnsupportedCapability) as e:
+        except UnsupportedCapability as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except (RuntimeError, httpx.HTTPError) as e:
             logger.error(f"Payment provider API error: {e}")

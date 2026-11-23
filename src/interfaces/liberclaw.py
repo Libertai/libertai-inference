@@ -154,6 +154,6 @@ class LiberclawAgentVerificationStatusResponse(BaseModel):
     """
 
     verified: bool
-    status: str | None = None
+    status: str | None = Field(default=None, pattern="^(pending|paid|failed|conflict)$")
     order_id: str | None = None
     paid_at: datetime | None = None

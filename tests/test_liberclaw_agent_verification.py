@@ -608,3 +608,45 @@ async def test_conflicted_account_can_retry_and_verify_with_a_new_card(db):
     assert rows[result.order_id].status == "paid"
     assert rows[result.order_id].payment_method_fingerprint == "fp-new"
     assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_payment_without_fingerprint_binds_nothing(db):
+    """A bank/Revolut-Pay completion must not inherit a declined card's fingerprint."""
+    other_account = uuid.uuid4()
+    account_id = uuid.uuid4()
+    await _lc_account(db, other_account)
+    await _lc_account(db, account_id)
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=other_account,
+            provider="fake",
+            provider_order_id="other-order",
+            amount_cents=100,
+            currency="USD",
+            status="paid",
+            payment_method_fingerprint="fp-declined",
+        )
+    )
+    await _pending_row(db, account_id, "order-1")
+    provider = FakeProvider()
+    provider.orders["order-1"] = {
+        "amount": 100,
+        "currency": "USD",
+        "payments": [
+            {"state": "declined", "payment_method": {"fingerprint": "fp-declined"}},
+            {"state": "completed"},
+        ],
+    }
+    mgr = PaymentManager(provider, db)
+
+    await mgr.handle_event(_event("order-1"))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"
+    assert row.payment_method_fingerprint is None
+    assert len(await _grants(db, account_id)) == 1
