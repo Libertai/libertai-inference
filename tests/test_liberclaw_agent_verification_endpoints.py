@@ -2,8 +2,9 @@
 
 import uuid
 
+import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 
 from src.config import config
 from src.models.base import AsyncSessionLocal
@@ -135,5 +136,65 @@ async def test_status_reports_paid_verification(async_client):
         assert body["verified"] is True
         assert body["status"] == "paid"
         assert body["order_id"] == f"ord-{account_id.hex}"
+    finally:
+        await _cleanup(account_id)
+
+
+@pytest.mark.asyncio
+async def test_checkout_creates_order_and_returns_url(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+    account_id = uuid.uuid4()
+    email = await _seed_account(account_id)
+    try:
+        resp = await async_client.post(
+            "/liberclaw/agent-verification/checkout",
+            headers=HEADERS,
+            json=_checkout_body(account_id, email),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"url": "http://pay/topup", "already_verified": False}
+        assert fake.topups == [(1.0, "USD")]
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(LiberclawAgentVerification).where(
+                        LiberclawAgentVerification.liberclaw_account_id == account_id
+                    )
+                )
+            ).scalar_one()
+            assert row.status == "pending"
+            assert row.amount_cents == 100
+            assert row.currency == "USD"
+            assert row.checkout_url == "http://pay/topup"
+    finally:
+        await _cleanup(account_id)
+
+
+@pytest.mark.asyncio
+async def test_checkout_provider_failure_returns_502_and_no_pending_row(async_client, monkeypatch):
+    fake = _install_fake_provider(monkeypatch)
+
+    async def _boom(**kwargs):
+        raise httpx.HTTPError("provider down")
+
+    monkeypatch.setattr(fake, "create_topup", _boom)
+    account_id = uuid.uuid4()
+    email = await _seed_account(account_id)
+    try:
+        resp = await async_client.post(
+            "/liberclaw/agent-verification/checkout",
+            headers=HEADERS,
+            json=_checkout_body(account_id, email),
+        )
+        assert resp.status_code == 502
+        async with AsyncSessionLocal() as db:
+            count = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(LiberclawAgentVerification)
+                    .where(LiberclawAgentVerification.liberclaw_account_id == account_id)
+                )
+            ).scalar_one()
+            assert count == 0
     finally:
         await _cleanup(account_id)

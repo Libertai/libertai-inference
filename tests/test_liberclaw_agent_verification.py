@@ -525,3 +525,31 @@ async def test_settles_verification_while_billing_flag_is_off(db, monkeypatch):
     ).scalar_one()
     assert row.status == "paid"
     assert len(await _grants(db, account_id)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", [PaymentEventType.order_failed, PaymentEventType.order_cancelled])
+async def test_late_failure_does_not_clobber_a_paid_row(db, event_type):
+    account_id = uuid.uuid4()
+    await _lc_account(db, account_id)
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=account_id,
+            provider="fake",
+            provider_order_id="order-1",
+            amount_cents=100,
+            currency="USD",
+            status="paid",
+        )
+    )
+    await db.flush()
+    mgr = PaymentManager(FakeProvider(), db)
+
+    await mgr.handle_event(_event("order-1", event_type))
+
+    row = (
+        await db.execute(
+            select(LiberclawAgentVerification).where(LiberclawAgentVerification.provider_order_id == "order-1")
+        )
+    ).scalar_one()
+    assert row.status == "paid"

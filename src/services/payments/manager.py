@@ -391,8 +391,10 @@ class PaymentManager:
             )
         ).scalar_one_or_none()
         if pending is not None:
+            if pending.checkout_url is None:  # pragma: no cover — the reuse query filters this
+                raise RuntimeError(f"Verification order {pending.provider_order_id} has no checkout URL")
             return CheckoutResult(
-                checkout_url=pending.checkout_url or "",
+                checkout_url=pending.checkout_url,
                 order_id=pending.provider_order_id,
             )
 
@@ -455,6 +457,8 @@ class PaymentManager:
         """Settle a verification order. Returns True when the order is one of ours."""
         if not event.order_id:
             return False
+        # Order ids are provider-scoped and only one fiat provider is registered, so the
+        # lookup skips the provider; constrain it if a second provider is ever added.
         row = (
             await self.db.execute(
                 select(LiberclawAgentVerification)
