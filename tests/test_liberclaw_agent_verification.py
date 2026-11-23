@@ -553,3 +553,58 @@ async def test_late_failure_does_not_clobber_a_paid_row(db, event_type):
         )
     ).scalar_one()
     assert row.status == "paid"
+
+
+@pytest.mark.asyncio
+async def test_conflicted_account_can_retry_and_verify_with_a_new_card(db):
+    """A conflict is not paid, so checkout re-opens and a different card verifies."""
+    other_account = uuid.uuid4()
+    account_id = uuid.uuid4()
+    await _lc_account(db, other_account)
+    await _lc_account(db, account_id)
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=other_account,
+            provider="fake",
+            provider_order_id="other-order",
+            amount_cents=100,
+            currency="USD",
+            status="paid",
+            payment_method_fingerprint="fp-taken",
+        )
+    )
+    db.add(
+        LiberclawAgentVerification(
+            liberclaw_account_id=account_id,
+            provider="fake",
+            provider_order_id="conflicted-order",
+            amount_cents=100,
+            currency="USD",
+            status="conflict",
+        )
+    )
+    await db.flush()
+    provider = FakeProvider()
+    mgr = PaymentManager(provider, db)
+
+    result = await mgr.start_agent_verification(account_id, "a@example.com", "https://app.example/return")
+
+    assert result is not None
+    assert provider.topups == [(1.0, "USD")]
+    provider.orders[result.order_id] = _completed_order(fingerprint="fp-new")
+    await mgr.handle_event(_event(result.order_id))
+
+    rows = {
+        row.provider_order_id: row
+        for row in (
+            await db.execute(
+                select(LiberclawAgentVerification).where(LiberclawAgentVerification.liberclaw_account_id == account_id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+    assert rows["conflicted-order"].status == "conflict"
+    assert rows[result.order_id].status == "paid"
+    assert rows[result.order_id].payment_method_fingerprint == "fp-new"
+    assert len(await _grants(db, account_id)) == 1

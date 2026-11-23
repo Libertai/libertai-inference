@@ -374,10 +374,13 @@ class PaymentManager:
         if paid is not None:
             return None
 
-        # Two concurrent checkouts can both miss this reuse query and open two orders.
-        # Benign (the unused order expires at the TTL, and paying both credits twice) and
+        # Reuse any pending order, regardless of age: the expiry job is the single
+        # status flipper, so a row stays reusable until the job fails it. Keying reuse
+        # off the TTL instead would briefly leave two payable orders per account
+        # (stale-past-TTL but not yet failed, plus the freshly opened one).
+        # Two concurrent checkouts can still both miss this query and open two orders;
+        # benign (the unused order expires at the TTL, and paying both credits twice) and
         # consistent with start_topup; serialize per account if that ever matters.
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
         pending = (
             await self.db.execute(
                 select(LiberclawAgentVerification)
@@ -387,7 +390,6 @@ class PaymentManager:
                     LiberclawAgentVerification.amount_cents == AGENT_VERIFICATION_AMOUNT_CENTS,
                     LiberclawAgentVerification.currency == AGENT_VERIFICATION_CURRENCY,
                     LiberclawAgentVerification.checkout_url.is_not(None),
-                    LiberclawAgentVerification.created_at > now - AGENT_VERIFICATION_PENDING_TTL,
                 )
                 .order_by(LiberclawAgentVerification.created_at.desc())
                 .limit(1)

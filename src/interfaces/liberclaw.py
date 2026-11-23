@@ -148,7 +148,9 @@ class LiberclawAgentVerificationStatusResponse(BaseModel):
 
     ``status`` is one of ``pending`` | ``paid`` | ``failed`` | ``conflict``. ``paid``
     means verified. ``conflict`` means the card already verified another account — the
-    $1 is kept as the anti-sybil cost, so it deserves its own user-facing message.
+    $1 is kept as the anti-sybil cost, so the consumer should prompt for a different
+    instrument rather than retrying the same card. ``paid_at`` is local settlement time
+    (when the webhook was processed), not the provider's completion timestamp.
     """
 
     verified: bool
