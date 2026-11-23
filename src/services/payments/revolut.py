@@ -39,6 +39,7 @@ TOPUP_EXT_REF_PREFIX = "topup:"
 # Map Revolut's event vocabulary onto the normalized types.
 _EVENT_MAP: dict[str, PaymentEventType] = {
     "ORDER_COMPLETED": PaymentEventType.order_completed,
+    "ORDER_CANCELLED": PaymentEventType.order_cancelled,
     "ORDER_PAYMENT_FAILED": PaymentEventType.order_failed,
     "ORDER_PAYMENT_DECLINED": PaymentEventType.order_failed,
     "ORDER_FAILED": PaymentEventType.order_failed,

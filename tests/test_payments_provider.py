@@ -53,6 +53,14 @@ def test_revolut_webhook_valid_signature_parses_event():
     assert event.provider_event_id == "ORDER_COMPLETED:ord_123"
 
 
+def test_revolut_webhook_maps_order_cancelled():
+    body = json.dumps({"event": "ORDER_CANCELLED", "order_id": "ord_cancel"}).encode()
+    ts = str(int(time.time() * 1000))
+    event = _provider().parse_webhook(_sign(body, ts), body)
+    assert event.type == PaymentEventType.order_cancelled
+    assert event.order_id == "ord_cancel"
+
+
 def test_revolut_webhook_tampered_body_fails():
     body = json.dumps({"event": "ORDER_COMPLETED", "order_id": "ord_123"}).encode()
     ts = str(int(time.time() * 1000))

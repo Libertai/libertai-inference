@@ -18,6 +18,9 @@ from src.interfaces.liberclaw import (
     LiberclawAccountRequest,
     LiberclawAdminExtendRequest,
     LiberclawAdminGrantTrialRequest,
+    LiberclawAgentVerificationCheckoutRequest,
+    LiberclawAgentVerificationCheckoutResponse,
+    LiberclawAgentVerificationStatusResponse,
     LiberclawApiKeyDeactivateResponse,
     LiberclawApiKeyRequest,
     LiberclawApiKeyResponse,
@@ -46,6 +49,7 @@ from src.services.auth import verify_liberclaw_token
 from src.services.invoice import SERIES_LCLW
 from src.services.invoice_pdf import get_or_render_pdf
 from src.services.liberclaw import LiberclawService
+from src.services.liberclaw_agent_verification import get_agent_verification_status
 from src.services.liberclaw_invoices import account_is_known
 from src.services.payments.base import CheckoutResult, UnsupportedCapability
 from src.services.payments.manager import PaymentManager, ProviderCancelFailed, SupersedeFailed
@@ -130,6 +134,39 @@ async def grant_extra_credits(request: LiberclawExtraCreditsGrant) -> LiberclawE
     except Exception as e:
         logger.error(f"Error in grant_extra_credits: {e!s}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/agent-verification/checkout", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def start_agent_verification_checkout(
+    body: LiberclawAgentVerificationCheckoutRequest,
+) -> LiberclawAgentVerificationCheckoutResponse:
+    """Open (or reuse) the fixed $1 order that verifies a free LiberClaw account.
+
+    Deliberately not behind ``require_billing_enabled``: verification is not a
+    subscription, and its settlement runs before the LiberClaw cutover gate in
+    ``handle_event``, so an order taken while the billing flag is off still settles.
+    """
+    async with AsyncSessionLocal() as db:
+        await _upsert_bridge(db, body.liberclaw_account_id, body.email)
+        manager = PaymentManager(payment_registry.get("revolut"), db)
+        try:
+            result = await manager.start_agent_verification(body.liberclaw_account_id, body.email, body.redirect_url)
+        except UnsupportedCapability as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except (RuntimeError, httpx.HTTPError) as e:
+            logger.error(f"Payment provider API error: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_PROVIDER_ERROR_DETAIL)
+        await db.commit()
+    if result is None:
+        return LiberclawAgentVerificationCheckoutResponse(url=None, already_verified=True)
+    return LiberclawAgentVerificationCheckoutResponse(url=result.checkout_url)
+
+
+@router.get("/agent-verification", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore
+async def get_agent_verification(liberclaw_account_id: uuid.UUID) -> LiberclawAgentVerificationStatusResponse:
+    """Report any paid verification, falling back to the latest order for detail."""
+    async with AsyncSessionLocal() as db:
+        return await get_agent_verification_status(db, liberclaw_account_id)
 
 
 @router.get("/user", dependencies=[Depends(verify_liberclaw_token)])  # type: ignore

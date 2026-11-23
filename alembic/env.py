@@ -17,6 +17,7 @@ from src.models.credit_transaction import CreditTransaction  # noqa
 from src.models.entitlement_window import EntitlementWindow  # noqa
 from src.models.inference_call import InferenceCall  # noqa
 from src.models.invoice import Invoice  # noqa
+from src.models.liberclaw_agent_verification import LiberclawAgentVerification  # noqa
 from src.models.liberclaw_billing_details import LiberclawBillingDetails  # noqa
 from src.models.liberclaw_credit_grant import LiberclawCreditGrant  # noqa
 from src.models.liberclaw_user import LiberclawUser  # noqa
