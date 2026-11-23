@@ -374,6 +374,9 @@ class PaymentManager:
         if paid is not None:
             return None
 
+        # Two concurrent checkouts can both miss this reuse query and open two orders.
+        # Benign (the unused order expires at the TTL, and paying both credits twice) and
+        # consistent with start_topup; serialize per account if that ever matters.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         pending = (
             await self.db.execute(
@@ -429,6 +432,10 @@ class PaymentManager:
         A later completion event for the same order still verifies the account
         and grants the credit; this only stops a stale checkout from being
         reused and keeps the status endpoint honest.
+
+        Known gap: a payment whose completion webhook is permanently lost is marked
+        failed here without consulting the provider, so the customer is not adopted —
+        unlike subscriptions, which have ``reconcile_pending``. Tracked in PR #110.
         """
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - AGENT_VERIFICATION_PENDING_TTL
         rows = (
@@ -457,12 +464,15 @@ class PaymentManager:
         """Settle a verification order. Returns True when the order is one of ours."""
         if not event.order_id:
             return False
-        # Order ids are provider-scoped and only one fiat provider is registered, so the
-        # lookup skips the provider; constrain it if a second provider is ever added.
+        # Order ids are unique per provider, not globally. The lookup is provider-scoped
+        # like top-ups are via their ``topup:<provider>:<order>`` reference.
         row = (
             await self.db.execute(
                 select(LiberclawAgentVerification)
-                .where(LiberclawAgentVerification.provider_order_id == event.order_id)
+                .where(
+                    LiberclawAgentVerification.provider == event.provider,
+                    LiberclawAgentVerification.provider_order_id == event.order_id,
+                )
                 .with_for_update()
             )
         ).scalar_one_or_none()

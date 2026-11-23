@@ -144,6 +144,13 @@ class LiberclawAgentVerificationCheckoutResponse(BaseModel):
 
 
 class LiberclawAgentVerificationStatusResponse(BaseModel):
+    """Latest verification state for a LiberClaw account.
+
+    ``status`` is one of ``pending`` | ``paid`` | ``failed`` | ``conflict``. ``paid``
+    means verified. ``conflict`` means the card already verified another account — the
+    $1 is kept as the anti-sybil cost, so it deserves its own user-facing message.
+    """
+
     verified: bool
     status: str | None = None
     order_id: str | None = None
