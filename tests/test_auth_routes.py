@@ -126,8 +126,7 @@ async def test_login_email_refuses_disposable_mx_before_sending(async_client, mo
         headers={"x-forwarded-for": "198.51.100.77"},
     )
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "domain_not_accepted"
+    assert resp.status_code == 204
     async with AsyncSessionLocal() as db:
         assert (
             await db.execute(select(MagicLink).where(MagicLink.email == "fresh@custom-free-subdomain.shop"))
@@ -172,8 +171,27 @@ async def test_login_email_refuses_new_signups_when_paused(async_client, monkeyp
         headers={"x-forwarded-for": "198.51.100.42"},
     )
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "signups_paused"
+    assert resp.status_code == 204
+    assert await _magic_link_count(["paused-signup@example.com"]) == 0
+
+
+async def test_login_email_signup_rate_limit_is_silent(async_client, monkeypatch):
+    monkeypatch.setattr(config, "MAGIC_LINK_BLOCK_PLUS_ALIASES", False)
+    monkeypatch.setattr(config, "MAGIC_LINK_COOLDOWN_SECONDS", 0)
+    monkeypatch.setattr(config, "MAGIC_LINK_EMAIL_DAILY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_IP_HOURLY_LIMIT", 100)
+    monkeypatch.setattr(config, "MAGIC_LINK_GLOBAL_DAILY_LIMIT", 1000)
+    monkeypatch.setattr(config, "SIGNUP_RATE_IP_LIMIT", 1)
+    monkeypatch.setattr(config, "SIGNUP_RATE_NETWORK_LIMIT", 100)
+    emails = [f"signup-rate-{uuid.uuid4().hex}@example.com" for _ in range(2)]
+
+    for email in emails:
+        resp = await async_client.post(
+            "/auth/login/email", json={"email": email}, headers={"x-forwarded-for": "198.18.3.7"}
+        )
+        assert resp.status_code == 204
+
+    assert await _magic_link_count(emails) == 1
 
 
 async def test_email_magic_link_verify_refuses_suspended_user(async_client, monkeypatch):
