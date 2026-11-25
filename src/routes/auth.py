@@ -232,17 +232,23 @@ async def update_me(request: UpdateProfileRequest, user: User = Depends(get_curr
 # --- Email magic link ---
 
 
-async def _enforce_signup_rate_limit(http_request: fastapi.Request) -> None:
-    """Reject a sign-in attempt when this IP or its network is over the daily allowance.
+async def _consume_signup_rate_limit(http_request: fastapi.Request) -> signup_rate_limit.SignupRateState | None:
+    """Count a sign-in attempt against this IP and its network's daily allowance.
 
     Keyed on the source address, so rotating custom email domains do not bypass it.
+    None when the client IP is unknown.
     """
     ip = signup_rate_limit.client_ip(http_request)
     if ip is None:
-        return
+        return None
     async with AsyncSessionLocal() as db:
-        state = await signup_rate_limit.consume(db, ip)
-    if state.allowed:
+        return await signup_rate_limit.consume(db, ip)
+
+
+async def _enforce_signup_rate_limit(http_request: fastapi.Request) -> None:
+    """Reject a sign-in attempt when this IP or its network is over the daily allowance."""
+    state = await _consume_signup_rate_limit(http_request)
+    if state is None or state.allowed:
         return
     retry_after = signup_rate_limit.retry_after_seconds(state)
     raise HTTPException(
@@ -316,6 +322,9 @@ async def login_email(
 ) -> None:
     """Send a magic-link email (token + 6-digit code).
 
+    Always 204, whether the address is registered or a check drops the send: any other
+    status for new addresses only would reveal which emails have an account.
+
     The email is dispatched in the background so send latency/failures never block the
     login request (the magic link is persisted before we return).
     """
@@ -332,22 +341,18 @@ async def login_email(
         existing = await get_user_by_email(db, email)
     if existing is None:
         # Existing users always get their link; only new-address attempts are throttled.
-        await _enforce_signup_rate_limit(http_request)
+        state = await _consume_signup_rate_limit(http_request)
+        if state is not None and not state.allowed:
+            logger.warning("Magic link dropped: signup rate limit")
+            return
         if not config.SIGNUPS_ENABLED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "signups_paused", "message": "New signups are temporarily paused."},
-            )
+            logger.info("Magic link dropped: signups paused")
+            return
         async with AsyncSessionLocal() as db:
             blocked = await is_blocked_signup_domain(db, email) or await is_disposable_mx_email(email)
         if blocked:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "domain_not_accepted",
-                    "message": "This email domain is not accepted. Use a different address.",
-                },
-            )
+            logger.info("Magic link dropped: blocked signup domain")
+            return
 
     if not await _consume_magic_link_limit(http_request, email):
         return
